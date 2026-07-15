@@ -7,6 +7,7 @@
     "tests"
   ],
   "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.exclude": ["**/node_modules", "**/__pycache__", "**/.*", ".codingame/**", ".cg_api/**"],
   "[python]": {
     "editor.defaultFormatter": "charliermarsh.ruff",
     "editor.rulers": [140],

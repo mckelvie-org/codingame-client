@@ -221,3 +221,5 @@ __marimo__/
 .template-vars.json
 /.claude/
 
+/.codingame/
+/.cg_api/

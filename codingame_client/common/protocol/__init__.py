@@ -1,0 +1,1 @@
+"""Codingame client protocol serializable dataclass definitions"""

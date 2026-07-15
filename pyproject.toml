@@ -27,7 +27,7 @@ classifiers = [
   "Topic :: Software Development :: Libraries :: Python Modules",
   "Typing :: Typed",
 ]
-dependencies = []
+dependencies = ["json-data-types>=0.2.0", "dataclass-wizard>=1.0.0", "playwright>=1.61.0", "private-files>=2.1.0"]
 
 [project.urls]
 Homepage = "https://github.com/sammck/codingame-client"
@@ -50,6 +50,7 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py310"
 line-length = 140
+extend-exclude = [".codingame", ".cg_api"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
@@ -62,6 +63,7 @@ known-first-party = ["codingame_client"]
 python_version = "3.10"
 strict = true
 packages = ["codingame_client"]
+exclude = ["^\\.codingame/", "^\\.cg_api/"]
 
 [tool.pdm]
 distribution = true
