@@ -1,0 +1,86 @@
+name: Bump dev version
+
+# Remote convenience for bumping the dev version on main without a local
+# checkout.  The preferred local equivalent is: bin/bump-dev [dev|patch|minor|major]
+#
+# cut-rc and cut-prod are handled by the local bin/ scripts, which push
+# directly to the rc and prod branches, triggering publish-test.yml and
+# publish.yml respectively.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: >
+          dev: increment counter (1.0.0-dev.1 → 1.0.0-dev.2);
+          patch/minor/major: bump x.y.z and reset to dev.1
+        required: true
+        type: choice
+        options:
+          - dev
+          - patch
+          - minor
+          - major
+        default: dev
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version
+        env:
+          BUMP_TYPE: ${{ github.event.inputs.bump_type }}
+        run: |
+          python - <<'PY'
+          import os, re, sys, tomllib
+
+          bump_type = os.environ["BUMP_TYPE"]
+
+          with open("pyproject.toml", "rb") as f:
+              current = tomllib.load(f)["project"]["version"]
+
+          m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)-dev\.(\d+)", current)
+          if not m:
+              sys.exit(f"expected X.Y.Z-dev.N on main, got: {current!r}")
+
+          x, y, z, n = (int(m.group(i)) for i in range(1, 5))
+          if   bump_type == "dev":   new = f"{x}.{y}.{z}-dev.{n + 1}"
+          elif bump_type == "patch": new = f"{x}.{y}.{z + 1}-dev.1"
+          elif bump_type == "minor": new = f"{x}.{y + 1}.0-dev.1"
+          elif bump_type == "major": new = f"{x + 1}.0.0-dev.1"
+
+          with open("pyproject.toml") as f:
+              text = f.read()
+          updated = re.sub(
+              r'^(version\s*=\s*")[^"]*(")',
+              rf'\g<1>{new}\2',
+              text,
+              flags=re.MULTILINE,
+          )
+          assert updated != text, "version= line not found in pyproject.toml"
+          with open("pyproject.toml", "w") as f:
+              f.write(updated)
+          print(f"bumped {current} → {new}")
+          PY
+
+      - name: Commit and push
+        run: |
+          NEW_VERSION=$(python -c "
+          import tomllib
+          print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])
+          ")
+          git add pyproject.toml
+          git commit -m "chore: bump version to ${NEW_VERSION}"
+          git push origin main

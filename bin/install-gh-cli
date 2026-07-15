@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Installs the gh CLI if it is not already present.
+# Safe to run when gh is already installed — exits immediately.
+set -euo pipefail
+
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+if command -v gh &>/dev/null; then
+    exit 0
+fi
+
+echo "gh CLI not found — attempting to install..."
+
+source "$SCRIPT_DIR/os-info.sh"
+
+case "$OS" in
+    macOS)
+        brew install gh
+        ;;
+    Linux)
+        case "$OS_LIKE" in
+            debian)
+                (type -p wget >/dev/null || (sudo apt update && sudo apt install wget -y)) \
+                    && sudo mkdir -p -m 755 /etc/apt/keyrings \
+                    && out=$(mktemp) \
+                    && wget -nv -O "$out" https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+                    && cat "$out" | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+                    && sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+                    && sudo mkdir -p -m 755 /etc/apt/sources.list.d \
+                    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+                        | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+                    && sudo apt update \
+                    && sudo apt install gh -y
+                ;;
+            fedora)
+                sudo "$OS_PM" install gh -y
+                ;;
+            arch)
+                sudo pacman -S --noconfirm github-cli
+                ;;
+            suse)
+                sudo zypper install -y gh
+                ;;
+            *)
+                echo "error: auto-install not supported for this distro — install manually: https://cli.github.com/" >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    Windows)
+        case "$OS_PM" in
+            winget)  winget install --id GitHub.cli ;;
+            choco)   choco install gh -y ;;
+            *)
+                echo "error: gh CLI not found — install it from https://cli.github.com/" >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    *)
+        echo "error: gh CLI not found, and installation not supported here — install it from https://cli.github.com/" >&2
+        exit 1
+        ;;
+esac
+
+if ! command -v gh &>/dev/null; then
+    echo "error: gh installation appeared to succeed but 'gh' is still not in PATH." >&2
+    echo "       Open a new shell and re-run this script." >&2
+    exit 1
+fi
+
+echo "gh $(gh --version | head -1) installed"

@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Creates the GitHub Actions environments required for OIDC trusted publishing.
+# Idempotent — safe to run more than once.
+#
+# Usage: install-github-environments [OPTIONS]
+#
+# Options:
+#   --install-gh    Install the gh CLI automatically if it is not present
+#   -h, --help      Show this help message and exit
+#
+# Environments created: pypi, testpypi
+set -euo pipefail
+
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+PROJECT_ROOT=$( cd -- "$SCRIPT_DIR/.." &> /dev/null && pwd )
+cd "$PROJECT_ROOT"
+
+# ── option parsing ────────────────────────────────────────────────────────────
+
+OPT_INSTALL_GH=0
+
+usage() {
+    awk '/^[^#]/{exit} /^#!/{next} {sub(/^# ?/,""); print}' "$0"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --install-gh)   OPT_INSTALL_GH=1 ; shift ;;
+        -h|--help)      usage; exit 0 ;;
+        *)              echo "error: unknown option: $1" >&2; usage >&2; exit 1 ;;
+    esac
+done
+
+# ── gh CLI ────────────────────────────────────────────────────────────────────
+
+if [[ "$OPT_INSTALL_GH" -eq 1 ]]; then
+    "$SCRIPT_DIR/install-gh-cli"
+elif ! command -v gh &>/dev/null; then
+    echo "error: gh CLI not found — re-run with --install-gh, or install manually: https://cli.github.com/" >&2
+    exit 1
+fi
+
+# ── auth ──────────────────────────────────────────────────────────────────────
+
+if ! gh auth status &>/dev/null; then
+    echo "error: not authenticated — run 'gh auth login' first" >&2
+    exit 1
+fi
+
+# ── environments ──────────────────────────────────────────────────────────────
+
+# let gh resolve the owner and project name from the current repo (it already
+# handles every remote URL format internally, so no need to parse it ourselves)
+read -r GITHUB_OWNER_NAME GITHUB_PROJECT_NAME < <(gh repo view --json owner,name -q '[.owner.login, .name] | @tsv')
+
+if [[ -z "$GITHUB_OWNER_NAME" || -z "$GITHUB_PROJECT_NAME" ]]; then
+    echo "error: could not determine owner/repo via 'gh repo view'" >&2
+    exit 1
+fi
+
+for ENV in testpypi pypi; do
+    gh api --method PUT "repos/{owner}/{repo}/environments/${ENV}" --silent
+    echo "environment '${ENV}' ready"
+done
+
+echo
+
+echo "Please add the GitHub testpypi environment as a trusted publisher on https://test.pypi.org/manage/account/publishing/ (GitHub tab):"
+echo "    PyPI project name: ${GITHUB_PROJECT_NAME}"
+echo "                Owner: ${GITHUB_OWNER_NAME}"
+echo "           Repository: ${GITHUB_PROJECT_NAME}"
+echo "             Workflow: publish-test.yml"
+echo "          Environment: testpypi"
+
+echo
+
+echo "Please add the GitHub pypi environment as a trusted publisher on https://pypi.org/manage/account/publishing/ (GitHub tab):"
+echo "    PyPI project name: ${GITHUB_PROJECT_NAME}"
+echo "                Owner: ${GITHUB_OWNER_NAME}"
+echo "           Repository: ${GITHUB_PROJECT_NAME}"
+echo "             Workflow: publish.yml"
+echo "          Environment: pypi"

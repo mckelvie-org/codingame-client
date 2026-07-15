@@ -1,0 +1,76 @@
+[build-system]
+requires = ["pdm-backend>=2.4.0"]
+build-backend = "pdm.backend"
+
+[project]
+name = "codingame-client"
+version = "0.0.0-dev.1"
+description = "Python package codingame-client"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [
+  { name = "Sam McKelvie", email = "dev@mckelvie.org" },
+]
+keywords = []
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/sammck/codingame-client"
+Source = "https://github.com/sammck/codingame-client"
+"Bug Tracker" = "https://github.com/sammck/codingame-client/issues"
+Changelog = "https://github.com/sammck/codingame-client/releases"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.11.0",
+    "pytest>=8.3.0",
+    "ruff>=0.6.0",
+    "pdm>=2.27.0",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 140
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
+ignore = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["codingame_client"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+packages = ["codingame_client"]
+
+[tool.pdm]
+distribution = true
+
+[tool.pdm.build]
+includes = ["codingame_client"]
+
+[tool.pdm.scripts]
+test = "pytest"
+lint = "ruff check ."
+typecheck = "mypy codingame_client"
+post_install = "./bin/post-install"

@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Sets up the development environment after a fresh clone.
+# Supports macOS and Linux.  Windows is not covered by this script.
+set -euo pipefail
+
+case "$(uname -s)" in
+    Darwin|Linux) ;;
+    *) echo "error: this script supports macOS and Linux only" >&2; exit 1 ;;
+esac
+
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+PROJECT_ROOT=$( cd -- "$SCRIPT_DIR/.." &> /dev/null && pwd )
+cd "$PROJECT_ROOT"
+
+"$SCRIPT_DIR/install-gh-cli"
+
+# ── PDM ──────────────────────────────────────────────────────────────────────
+
+if command -v pdm &>/dev/null; then
+    echo "pdm $(pdm --version) already installed"
+else
+    echo "pdm not found — installing..."
+
+    if command -v pipx &>/dev/null; then
+        pipx install pdm
+    elif command -v curl &>/dev/null && command -v python3 &>/dev/null; then
+        curl -sSL https://pdm-project.org/install-pdm.py | python3 -
+    elif command -v pip3 &>/dev/null; then
+        pip3 install --user pdm
+    elif command -v pip &>/dev/null; then
+        pip install --user pdm
+    else
+        cat >&2 <<'MSG'
+error: cannot auto-install pdm — no pipx, curl, or pip found.
+Install it manually and re-run this script:
+  pipx install pdm          # recommended
+  pip install --user pdm    # alternative
+  https://pdm-project.org/en/latest/
+MSG
+        exit 1
+    fi
+
+    # pip --user may install to ~/.local/bin which might not yet be in PATH.
+    if ! command -v pdm &>/dev/null; then
+        LOCAL_BIN="$HOME/.local/bin"
+        if [[ -x "$LOCAL_BIN/pdm" ]]; then
+            export PATH="$LOCAL_BIN:$PATH"
+            echo "note: add $LOCAL_BIN to your PATH to use pdm in future shells"
+        else
+            echo "warning: pdm was installed but is not in PATH; open a new shell and re-run" >&2
+            exit 1
+        fi
+    fi
+
+    echo "pdm $(pdm --version) installed"
+fi
+
+PDM_LOCK_EXISTS=
+if [ -f "$PROJECT_ROOT/pdm.lock" ]; then
+    PDM_LOCK_EXISTS=1
+fi
+
+echo "Installing Python dependencies..."
+if [ ! -f "$PROJECT_ROOT/.pdm-python" ]; then
+    echo "$PROJECT_ROOT/.venv/bin/python" > "$PROJECT_ROOT/.pdm-python"
+fi
+pdm install
+
+pdm fix
+
+# If pdm.lock was just created, commit it. this happens
+if [ -z "$PDM_LOCK_EXISTS" ] && [ -f "$PROJECT_ROOT/pdm.lock" ]; then
+    git add pdm.lock
+    git commit -m "Initial commit of pdm.lock after project creation"
+fi
+
+echo ""
+echo "Done.  Run 'pdm run test' to verify the setup."

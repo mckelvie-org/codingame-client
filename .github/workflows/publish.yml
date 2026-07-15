@@ -1,0 +1,185 @@
+name: Publish
+run-name: "Publish PyPI · ${{ github.ref_name }}"
+
+# Triggered by a push of a v<x.y.z> tag (done by cut-prod).
+#
+# After a successful PyPI publish, updates the prod-latest tag, then ensures
+# main carries a dev version strictly ahead of the one just published (bumping
+# to X.Y.(Z+1)-dev.1 if needed). Safe with other developers landing unrelated
+# commits on main, or a concurrent release racing to bump it too -- see the
+# "Ensure main is ahead of the published version" step for how.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+      - '!v*-rc.*'
+
+permissions:
+  id-token: write  # Required for OIDC trusted publishing.
+  contents: write  # Required to update prod-latest and bump main.
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # Full history needed to check out main after publish.
+
+      - name: Setup PDM
+        uses: pdm-project/setup-pdm@v4.5
+        with:
+          python-version: "3.12"
+          cache: true
+
+      - name: Install dependencies
+        run: pdm install -G dev
+
+      - name: Validate version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$VERSION" =~ [A-Za-z] ]]; then
+            echo "::error::PyPI publish requires a stable version, got: $VERSION"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Check not already on PyPI
+        run: |
+          PACKAGE=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['name'])")
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://pypi.org/pypi/${PACKAGE}/${VERSION}/json")
+          if [[ "$HTTP" == "200" ]]; then
+            echo "::error::Version ${VERSION} is already on PyPI"
+            exit 1
+          fi
+
+      - name: Run checks
+        run: |
+          pdm run lint
+          pdm run typecheck
+          pdm run test
+
+      - name: Build
+        run: pdm build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+
+      # The upload API call succeeding doesn't mean the index has caught up yet --
+      # PyPI has a brief eventual-consistency window where the just-published
+      # version can 404 for a bit. Poll until it's actually visible, so that this
+      # workflow succeeding is a reliable signal for anything waiting on it (e.g.
+      # the install smoke test, or a human running `pip install` right after).
+      - name: Wait for PyPI visibility
+        run: |
+          PACKAGE=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['name'])")
+          for attempt in $(seq 1 24); do
+            HTTP=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/${PACKAGE}/${VERSION}/json")
+            if [[ "$HTTP" == "200" ]]; then
+              echo "${PACKAGE} ${VERSION} is visible on PyPI (attempt ${attempt})."
+              exit 0
+            fi
+            echo "Not visible yet (HTTP $HTTP), attempt ${attempt}/24, retrying..."
+            sleep 5
+          done
+          echo "::error::${PACKAGE} ${VERSION} did not become visible on PyPI after waiting"
+          exit 1
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Update prod-latest tag
+        run: |
+          git tag -f prod-latest
+          git push --force origin prod-latest
+
+      # Runs only after a successful publish. Ensures main carries a dev version
+      # strictly ahead of the version just published, bumping it if necessary.
+      #
+      # main is a moving target in a multi-developer setting -- other commits
+      # (including bumps from a concurrent release) may land between our fetch
+      # and our push, or may already be sitting on main by the time this job
+      # even starts. So every attempt re-fetches live main and re-evaluates
+      # "is a bump still needed" from scratch, rather than trusting a snapshot.
+      # If our push loses a race, we just loop: re-fetch, re-check (the winner's
+      # bump may already satisfy the requirement, in which case we're done for
+      # free), and only re-commit if main is still behind. Gives up after a
+      # handful of attempts if the race never settles.
+      - name: Ensure main is ahead of the published version
+        run: |
+          cat > /tmp/compute_bump.py <<'PY'
+          import os, re, sys, tomllib
+
+          prod = os.environ["VERSION"]               # e.g. "1.0.0"
+
+          pm = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", prod)
+          if not pm:
+              sys.exit(f"Cannot parse prod version: {prod!r}")
+          px, py_, pz = int(pm.group(1)), int(pm.group(2)), int(pm.group(3))
+
+          with open("pyproject.toml", "rb") as f:
+              current = tomllib.load(f)["project"]["version"]
+
+          m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)-dev\.(\d+)", current)
+          if not m:
+              print(f"Main version {current!r} is not a -dev version — skipping auto-bump", file=sys.stderr)
+              print("skip")
+              sys.exit()
+
+          mx, my, mz = int(m.group(1)), int(m.group(2)), int(m.group(3))
+          if (mx, my, mz) > (px, py_, pz):
+              print(f"Main {current!r} is already ahead of {prod} — skipping auto-bump", file=sys.stderr)
+              print("skip")
+              sys.exit()
+
+          # Patch bump: minimum increment to make main numerically > prod.
+          new = f"{px}.{py_}.{pz + 1}-dev.1"
+          with open("pyproject.toml") as f:
+              text = f.read()
+          updated = re.sub(
+              r'^(version\s*=\s*")[^"]*(")',
+              rf'\g<1>{new}\2',
+              text,
+              flags=re.MULTILINE,
+          )
+          assert updated != text, "version= line not found in pyproject.toml"
+          with open("pyproject.toml", "w") as f:
+              f.write(updated)
+          print(f"Bumping main from {current} to {new}", file=sys.stderr)
+          print(new)
+          PY
+
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git checkout --quiet --detach origin/main
+
+            ACTION=$(python /tmp/compute_bump.py)
+
+            if [[ "$ACTION" == "skip" ]]; then
+              echo "No bump needed."
+              exit 0
+            fi
+
+            git add pyproject.toml
+            git commit -q -m "chore: bump main to ${ACTION} after v${VERSION} release"
+
+            if git push origin HEAD:main; then
+              echo "Bumped main to ${ACTION}"
+              exit 0
+            fi
+
+            echo "Push race on attempt ${attempt}, retrying..."
+            sleep $((attempt * 2))
+          done
+
+          echo "::error::could not bump main after several attempts (persistent push race) -- bump it manually"
+          exit 1

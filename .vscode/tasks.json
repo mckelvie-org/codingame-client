@@ -1,0 +1,74 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "pdm: install",
+      "type": "shell",
+      "command": "pdm",
+      "args": [
+        "install"
+      ],
+      "group": "build"
+    },
+    {
+      "label": "pdm: lint",
+      "type": "shell",
+      "command": "pdm",
+      "args": [
+        "run",
+        "lint"
+      ],
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "pdm: typecheck",
+      "type": "shell",
+      "command": "pdm",
+      "args": [
+        "run",
+        "typecheck"
+      ],
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "pdm: test",
+      "type": "shell",
+      "command": "pdm",
+      "args": [
+        "run",
+        "test"
+      ],
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "pdm: build",
+      "type": "shell",
+      "command": "pdm",
+      "args": [
+        "build"
+      ],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "pdm: check all",
+      "type": "shell",
+      "command": "pdm",
+      "args": [
+        "run",
+        "lint"
+      ],
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "pdm: lint",
+        "pdm: typecheck",
+        "pdm: test"
+      ],
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,0 +1,253 @@
+#!/usr/bin/env bash
+# Promote an rc commit to prod.
+# Strips the rc qualifier from pyproject.toml, commits in a worktree, and
+# pushes the tag — triggering publish.yml.
+# Uses a git worktree so the dev's working directory is never modified.
+#
+# Requires the rc being promoted to already be a real, published TestPyPI
+# release (i.e. cut-rc succeeded end to end) -- not just a local rc-looking
+# version string.
+#
+# After a successful prod tag push, waits for the triggered Publish workflow
+# and, on success, syncs local main with origin/main (which that workflow may
+# have just bumped) -- rebasing if main is your current branch, or
+# fast-forwarding the local main ref otherwise, without disturbing whatever
+# you're currently checked out on (normally a detached rc/prod commit).
+#
+# Usage: cut-prod [--force] [RC_REF]
+#   --force  overwrite an existing tag (allows retrying a failed publish)
+#   RC_REF   git ref to promote (tag, sha, branch). Bare version like
+#            "1.0.5-rc.1" is treated as tag "v1.0.5-rc.1".
+#            Defaults to HEAD if it is itself tagged with a v*-rc.* tag,
+#            otherwise the rc-latest tag.
+set -euo pipefail
+
+if ! command -v gh >/dev/null 2>&1; then
+    echo "error: gh CLI not found in PATH — run bin/install-gh-cli, or open a new terminal if you just installed it" >&2
+    exit 1
+fi
+
+FORCE=0
+if [[ "${1:-}" == "--force" ]]; then
+    FORCE=1
+    shift
+fi
+
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "error: working tree has uncommitted changes — commit or stash first" >&2
+    exit 1
+fi
+
+git fetch --force --tags origin
+
+# If on a named branch, it must be fully in sync with its upstream before
+# proceeding. A detached checkout (the normal case: sitting on an rc tag) has
+# nothing to sync -- the commit is already reachable from origin via its tag.
+CURRENT_BRANCH=$(git branch --show-current)
+if [[ -n "$CURRENT_BRANCH" ]]; then
+    UPSTREAM="origin/$CURRENT_BRANCH"
+    if git rev-parse --verify -q "$UPSTREAM" >/dev/null; then
+        LOCAL_SHA=$(git rev-parse HEAD)
+        UPSTREAM_SHA=$(git rev-parse "$UPSTREAM")
+        if [[ "$LOCAL_SHA" != "$UPSTREAM_SHA" ]]; then
+            echo "error: local $CURRENT_BRANCH ($LOCAL_SHA) is not in sync with $UPSTREAM ($UPSTREAM_SHA) — pull/rebase (and push, if you have local commits) first" >&2
+            exit 1
+        fi
+    fi
+fi
+
+# Resolve the RC ref to promote.
+if [[ $# -gt 0 ]]; then
+    RC_REF="$1"
+    # Bare version string → tag name
+    if [[ "$RC_REF" =~ ^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
+        RC_REF="v${RC_REF}"
+    fi
+else
+    HEAD_RC_TAG=$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' | head -n1 || true)
+    if [[ -n "$HEAD_RC_TAG" ]]; then
+        RC_REF="$HEAD_RC_TAG"
+    else
+        RC_REF="rc-latest"
+    fi
+fi
+
+RC_SHA=$(git rev-parse "$RC_REF")
+
+eval "$(pdm run python - "$RC_SHA" <<'PY'
+import re, subprocess, sys
+
+sha = sys.argv[1]
+text = subprocess.check_output(["git", "show", f"{sha}:pyproject.toml"]).decode()
+
+vm = re.search(r'^version\s*=\s*"([^"]*)"', text, re.MULTILINE)
+if not vm:
+    sys.exit("version= line not found in pyproject.toml")
+current = vm.group(1)
+
+m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)-rc\.(\d+)", current)
+if not m:
+    sys.exit(f"expected X.Y.Z-rc.N in pyproject.toml at {sha}, got: {current!r}")
+new = f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+
+nm = re.search(r'^name\s*=\s*"([^"]*)"', text, re.MULTILINE)
+if not nm:
+    sys.exit("name= line not found in pyproject.toml")
+package_name = nm.group(1)
+
+remote = subprocess.check_output(["git", "remote", "get-url", "origin"]).decode().strip()
+rm = re.search(r'github\.com[:/](.+?)(?:\.git)?$', remote)
+if not rm:
+    sys.exit(f"could not parse GitHub repo from remote: {remote!r}")
+github_repo = rm.group(1)
+
+print(f"promoting: {current} → {new}", file=sys.stderr)
+print(f"RC_VERSION={current}")
+print(f"PROD_VERSION={new}")
+print(f"PACKAGE_NAME={package_name}")
+print(f"GITHUB_REPO={github_repo}")
+PY
+)"
+
+# Require that this rc was actually published to TestPyPI -- not just tagged locally.
+# publish-test.yml itself waits for index visibility before it reports success, but
+# retry here too: an older rc published before that existed, or any residual lag.
+HTTP=404
+for attempt in 1 2 3 4 5 6; do
+    HTTP=$(curl -s -o /dev/null -w "%{http_code}" "https://test.pypi.org/pypi/${PACKAGE_NAME}/${RC_VERSION}/json")
+    if [[ "$HTTP" == "200" ]]; then
+        break
+    fi
+    sleep 5
+done
+if [[ "$HTTP" != "200" ]]; then
+    echo "error: $RC_VERSION does not appear to be published on TestPyPI (HTTP $HTTP) — cut-rc must succeed first" >&2
+    exit 1
+fi
+
+# Soft check: warn (don't block) if main has moved since this rc was cut.
+RC_BASE_SHA=$(git rev-parse "${RC_SHA}^")
+MAIN_SHA=$(git rev-parse origin/main)
+if [[ "$RC_BASE_SHA" != "$MAIN_SHA" ]]; then
+    echo "warning: this rc was cut from main commit $RC_BASE_SHA, but origin/main is now at $MAIN_SHA — main has moved since" >&2
+fi
+
+if git rev-parse "v$PROD_VERSION" >/dev/null 2>&1; then
+    if [[ "$FORCE" -eq 0 ]]; then
+        echo "error: tag v$PROD_VERSION already exists — use --force to overwrite" >&2
+        exit 1
+    fi
+    echo "warning: overwriting existing tag v$PROD_VERSION" >&2
+fi
+
+TMP=$(mktemp -d)
+trap 'git worktree remove --force "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
+
+git worktree add --detach "$TMP" "$RC_SHA"
+
+pdm run python - "$PROD_VERSION" "$PACKAGE_NAME" "$GITHUB_REPO" "$TMP/pyproject.toml" "$TMP/README.md" <<'PY'
+import re, sys
+new, package_name, github_repo, toml_path, readme_path = sys.argv[1:6]
+
+with open(toml_path) as f:
+    text = f.read()
+updated = re.sub(r'^(version\s*=\s*")[^"]*(")', rf'\g<1>{new}\2', text, flags=re.MULTILINE)
+assert updated != text, "version= line not found in pyproject.toml"
+source_url = f"https://github.com/{github_repo}/tree/v{new}"
+updated = re.sub(r'^(Source\s*=\s*")[^"]*(")', rf'\g<1>{source_url}\2', updated, flags=re.MULTILINE)
+updated = re.sub(
+    r'("Development Status :: )\d+ - \w+(")',
+    r'\g<1>5 - Production/Stable\2',
+    updated,
+)
+with open(toml_path, "w") as f:
+    f.write(updated)
+
+pypi_url = f"https://pypi.org/project/{package_name}/{new}/"
+badge_url = f"https://img.shields.io/badge/pypi-v{new}-blue.svg"
+python_badge = "https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12%20|%203.13%20|%203.14-blue.svg"
+ci_badge = "https://img.shields.io/badge/CI-passing-brightgreen.svg"
+with open(readme_path) as f:
+    readme = f.read()
+readme = re.sub(r'\[!\[PyPI version\]\([^)]*\)\]\([^)]*\)',
+                f'[![PyPI version]({badge_url})]({pypi_url})', readme)
+readme = re.sub(r'\[!\[Python versions\]\([^)]*\)\]\([^)]*\)',
+                f'[![Python versions]({python_badge})](https://pypi.org/project/{package_name}/)', readme)
+readme = re.sub(r'\[!\[CI\]\([^)]*\)\]\([^)]*\)',
+                f'[![CI]({ci_badge})](https://github.com/{github_repo}/actions/workflows/ci.yml)', readme)
+with open(readme_path, "w") as f:
+    f.write(readme)
+PY
+
+# Finalize the (unreleased) CHANGELOG entry for this version.
+pdm run python - "$PROD_VERSION" "$TMP/CHANGELOG.md" <<'PY'
+import datetime, re, sys
+version, path = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    text = f.read()
+date = datetime.date.today().isoformat()
+updated = text.replace(f"## {version} (unreleased)", f"## {version} ({date})")
+if updated == text:
+    print(f"warning: no '## {version} (unreleased)' entry found in CHANGELOG.md", file=sys.stderr)
+with open(path, "w") as f:
+    f.write(updated)
+PY
+
+git -C "$TMP" add pyproject.toml CHANGELOG.md README.md
+git -C "$TMP" commit -m "chore: release $PROD_VERSION"
+PROD_SHA=$(git -C "$TMP" rev-parse HEAD)
+
+if [[ "$FORCE" -eq 1 ]]; then
+    git -C "$TMP" tag -f "v$PROD_VERSION"
+    git push --force origin "v$PROD_VERSION"
+else
+    git -C "$TMP" tag "v$PROD_VERSION"
+    git push origin "v$PROD_VERSION"
+fi
+
+# Wait for the triggered Publish workflow, then sync local main on success. Identify
+# the run by its head commit SHA, not `gh run list --branch` -- that flag isn't
+# reliable for tag-triggered runs (it filters on branch refs, not tag refs). Errors
+# from `gh` are allowed to print (not silenced) so an auth/API problem is visible
+# instead of just "not found". If no run has matched by SHA halfway through, fall
+# back to the most recently created run for this workflow -- for a solo/small-team
+# repo, the newest run of a workflow we just triggered is almost certainly it.
+echo "Waiting for the Publish workflow to start..." >&2
+RUN_ID=""
+for attempt in $(seq 1 30); do
+    RUN_ID=$(gh run list --workflow=publish.yml --json databaseId,headSha --limit 20 \
+        --jq "[.[] | select(.headSha == \"$PROD_SHA\")] | .[0].databaseId // empty") || true
+    if [[ -n "$RUN_ID" ]]; then
+        echo "Found run $RUN_ID for commit $PROD_SHA." >&2
+        break
+    fi
+    if [[ "$attempt" -eq 15 ]]; then
+        FALLBACK_ID=$(gh run list --workflow=publish.yml --json databaseId --limit 1 --jq '.[0].databaseId // empty') || true
+        if [[ -n "$FALLBACK_ID" ]]; then
+            echo "No run matched commit $PROD_SHA after $attempt attempts — falling back to the most recently created run for this workflow: $FALLBACK_ID" >&2
+            RUN_ID="$FALLBACK_ID"
+            break
+        fi
+    fi
+    sleep 2
+done
+
+if [[ -z "$RUN_ID" ]]; then
+    echo "warning: could not find the triggered Publish workflow run — check GitHub Actions manually; local main was not synced" >&2
+    exit 0
+fi
+
+echo "Watching run $RUN_ID..." >&2
+if gh run watch "$RUN_ID" --exit-status; then
+    echo "Publish succeeded. Syncing local main..." >&2
+    if [[ "$(git branch --show-current)" == "main" ]]; then
+        git fetch origin main
+        git rebase origin/main
+    else
+        git fetch origin main:main
+    fi
+    echo "main is now in sync with origin/main." >&2
+else
+    echo "error: Publish workflow failed — see the run above for details" >&2
+    exit 1
+fi

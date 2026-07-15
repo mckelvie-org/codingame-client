@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Usage: bump-dev [dev|patch|minor|major]  (default: dev)
+#
+#   dev   — 1.0.0-dev.1 → 1.0.0-dev.2
+#   patch — 1.0.0-dev.2 → 1.0.1-dev.1
+#   minor — 1.0.0-dev.2 → 1.1.0-dev.1
+#   major — 1.0.0-dev.2 → 2.0.0-dev.1
+#
+# Edits pyproject.toml in place. Does not commit.
+set -euo pipefail
+
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+PROJECT_ROOT=$( cd -- "$SCRIPT_DIR/.." &> /dev/null && pwd )
+cd "$PROJECT_ROOT"
+
+
+BUMP_TYPE="${1:-dev}"
+
+pdm run python - "$BUMP_TYPE" <<'PY'
+import re, sys
+
+bump_type = sys.argv[1]
+if bump_type not in ("dev", "patch", "minor", "major"):
+    sys.exit(f"usage: bump-dev [dev|patch|minor|major]")
+
+with open("pyproject.toml") as f:
+    text = f.read()
+vm = re.search(r'^version\s*=\s*"([^"]*)"', text, re.MULTILINE)
+if not vm:
+    sys.exit("version= line not found in pyproject.toml")
+current = vm.group(1)
+
+m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)-dev\.(\d+)", current)
+if not m:
+    sys.exit(f"expected X.Y.Z-dev.N in pyproject.toml, got: {current!r}")
+
+x, y, z, n = (int(m.group(i)) for i in range(1, 5))
+if   bump_type == "dev":   new = f"{x}.{y}.{z}-dev.{n + 1}"
+elif bump_type == "patch": new = f"{x}.{y}.{z + 1}-dev.1"
+elif bump_type == "minor": new = f"{x}.{y + 1}.0-dev.1"
+elif bump_type == "major": new = f"{x + 1}.0.0-dev.1"
+
+updated = re.sub(
+    r'^(version\s*=\s*")[^"]*(")',
+    rf'\g<1>{new}\2',
+    text,
+    flags=re.MULTILINE,
+)
+assert updated != text, "version= line not found in pyproject.toml"
+with open("pyproject.toml", "w") as f:
+    f.write(updated)
+print(f"{current} → {new}")
+PY

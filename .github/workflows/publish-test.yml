@@ -1,0 +1,119 @@
+name: Publish TestPyPI
+run-name: "Publish TestPyPI · ${{ github.ref_name }}"
+
+# Triggered by a push of a v<x.y.z>-rc.<n> tag (done by cut-rc).
+# Validates that pyproject.toml carries an X.Y.Z-rc.N version, runs quality
+# checks, publishes to TestPyPI via OIDC trusted publishing, then updates
+# the rc-latest tag.
+
+on:
+  push:
+    tags:
+      - 'v*-rc.*'
+
+jobs:
+  test:
+    name: "Test · Python ${{ matrix.python-version }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup PDM
+        uses: pdm-project/setup-pdm@v4.5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: true
+
+      - name: Install dependencies
+        run: pdm install -G dev
+
+      - name: Lint
+        run: pdm run lint
+
+      - name: Type check
+        run: pdm run typecheck
+
+      - name: Test
+        run: pdm run test
+
+  publish:
+    name: Publish
+    needs: test
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write  # Required for OIDC trusted publishing.
+      contents: write  # Required to update the rc-latest tag after publish.
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup PDM
+        uses: pdm-project/setup-pdm@v4.5
+        with:
+          python-version: "3.12"
+          cache: true
+
+      - name: Install dependencies
+        run: pdm install -G dev
+
+      - name: Validate version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
+            echo "::error::TestPyPI publish requires X.Y.Z-rc.N version, got: $VERSION"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Check not already on TestPyPI
+        run: |
+          PACKAGE=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['name'])")
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://test.pypi.org/pypi/${PACKAGE}/${VERSION}/json")
+          if [[ "$HTTP" == "200" ]]; then
+            echo "::error::Version ${VERSION} is already on TestPyPI"
+            exit 1
+          fi
+
+      - name: Build
+        run: pdm build
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+      # The upload API call succeeding doesn't mean the index has caught up yet --
+      # TestPyPI has a brief eventual-consistency window where the just-published
+      # version can 404 for a bit. Poll until it's actually visible, so that this
+      # workflow succeeding is a reliable signal for anything waiting on it (e.g.
+      # cut-prod's own visibility check, run right after cut-rc finishes).
+      - name: Wait for TestPyPI visibility
+        run: |
+          PACKAGE=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['name'])")
+          for attempt in $(seq 1 24); do
+            HTTP=$(curl -s -o /dev/null -w "%{http_code}" "https://test.pypi.org/pypi/${PACKAGE}/${VERSION}/json")
+            if [[ "$HTTP" == "200" ]]; then
+              echo "${PACKAGE} ${VERSION} is visible on TestPyPI (attempt ${attempt})."
+              exit 0
+            fi
+            echo "Not visible yet (HTTP $HTTP), attempt ${attempt}/24, retrying..."
+            sleep 5
+          done
+          echo "::error::${PACKAGE} ${VERSION} did not become visible on TestPyPI after waiting"
+          exit 1
+
+      - name: Update rc-latest tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f rc-latest
+          git push --force origin rc-latest

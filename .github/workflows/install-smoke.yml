@@ -1,0 +1,110 @@
+name: Install Smoke Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Install source"
+        required: true
+        type: choice
+        options:
+          - github
+          - testpypi
+        default: github
+      git_ref:
+        description: "Git ref for github source (branch, tag, or sha)"
+        required: false
+        type: string
+        default: main
+      version:
+        description: "Package version for testpypi source"
+        required: false
+        type: string
+
+jobs:
+  smoke:
+    name: "Smoke · pip install"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.source == 'github' && github.event.inputs.git_ref || github.ref }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read package name
+        run: |
+          PACKAGE=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['name'])")
+          echo "PACKAGE=$PACKAGE" >> "$GITHUB_ENV"
+
+      - name: Install from GitHub
+        if: ${{ github.event.inputs.source == 'github' }}
+        env:
+          REF: ${{ github.event.inputs.git_ref }}
+        run: |
+          python -m pip install --no-cache-dir \
+            "$PACKAGE @ git+https://github.com/${{ github.repository }}.git@$REF"
+
+      - name: Install from TestPyPI
+        if: ${{ github.event.inputs.source == 'testpypi' }}
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [[ -z "$VERSION" ]]; then
+            echo "version input is required for testpypi source"
+            exit 1
+          fi
+          python -m pip install --no-cache-dir \
+            --index-url https://test.pypi.org/simple/ \
+            --extra-index-url https://pypi.org/simple/ \
+            "$PACKAGE==$VERSION"
+
+      - name: Smoke test import and validation
+        run: |
+          python - <<'PY'
+          from json_data_types import (
+              JsonData, JsonDict, JsonList,
+              validate_json_data, validate_json_dict, validate_json_list,
+              validate_json_data_like, validate_json_dict_like, validate_json_list_like,
+          )
+
+          # Basic validation
+          data = validate_json_data({"users": [{"id": 1, "active": True}], "count": 1})
+          assert isinstance(data, dict), f"expected dict, got {type(data)}"
+
+          d = validate_json_dict({"key": "value", "n": 42})
+          assert d["key"] == "value"
+
+          lst = validate_json_list([1, "two", None, False])
+          assert lst[0] == 1
+
+          # Duck-typed variants
+          from collections import OrderedDict
+          od = OrderedDict([("a", 1), ("b", [True, None])])
+          validate_json_data_like(od)
+          validate_json_dict_like(od)
+          validate_json_list_like((1, "x", None))
+
+          # Cycle detection
+          try:
+              bad: dict = {}
+              bad["self"] = bad
+              validate_json_data(bad)
+              raise AssertionError("expected ValueError for cyclic reference")
+          except ValueError:
+              pass
+
+          # Invalid type rejection
+          try:
+              validate_json_data(3.14)
+              raise AssertionError("expected ValueError for float")
+          except ValueError:
+              pass
+
+          print("smoke test passed!")
+          PY

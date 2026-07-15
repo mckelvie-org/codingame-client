@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Run automatically by PDM via the post_install hook. Installs project-local PDM plugins.
+# Supports macOS and Linux.  Windows is not covered by this script.
+set -euo pipefail
+
+case "$(uname -s)" in
+    Darwin|Linux) ;;
+    *) echo "error: this script supports macOS and Linux only" >&2; exit 1 ;;
+esac
+
+# ── PDM plugins ───────────────────────────────────────────────────────────────
+
+pdm self add pdm-bin-dir
