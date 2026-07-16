@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:991951d24aea4ea8be0a4934fff890aa618e0a549ac80266f55c34e5ec05de7b"
+content_hash = "sha256:ab9337a806ee104fb35621fbd4f33c391c1893bee9bf17f8834be193e3413d88"
 
 [[metadata.targets]]
 requires_python = ">=3.10"
@@ -984,7 +984,7 @@ files = [
 
 [[package]]
 name = "private-files"
-version = "2.1.0"
+version = "3.0.0"
 requires_python = ">=3.10"
 summary = "Manage secret/private files in an os-independent way"
 groups = ["default"]
@@ -993,8 +993,8 @@ dependencies = [
     "platformdirs>=4.0.0",
 ]
 files = [
-    {file = "private_files-2.1.0-py3-none-any.whl", hash = "sha256:895befb0d2df43a33fb4acf09bfa01e332daf35067b084832603d85bd1f70c10"},
-    {file = "private_files-2.1.0.tar.gz", hash = "sha256:a677881fd1f0b863da7b83d821a0f6616f5ddf381c367c1755d11c079eaeee91"},
+    {file = "private_files-3.0.0-py3-none-any.whl", hash = "sha256:8030959f90bee3d9646e0303b6dffd1fdaa271887c41e3efb4a8a59e5c8a5622"},
+    {file = "private_files-3.0.0.tar.gz", hash = "sha256:74f5145c3b6f7ffa4d1ac05af325f5542a725dd17b4ded32033c4ff821b50386"},
 ]
 
 [[package]]

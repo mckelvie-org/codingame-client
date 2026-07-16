@@ -9,7 +9,7 @@ import contextlib
 import sys
 import time
 
-from private_files import private_files
+from private_files import get_private_files
 
 from ...common import BROWSER_PROFILE_SUBDIR, CLIENT_APP_NAME, logger
 from ...common.credentials import CgCredentials, set_credentials
@@ -64,7 +64,7 @@ async def cg_browser_login(
     browser_profile_subdir = BROWSER_PROFILE_SUBDIR if browser_profile_subdir is None else browser_profile_subdir
     timeout = DEFAULT_TIMEOUT_SECS if timeout is None else timeout
     
-    pf = private_files(app_name=app_name)
+    pf = get_private_files(app_name=app_name)
     browser_profile_dir = pf.get_private_dir(browser_profile_subdir)
     if browser_profile_dir.is_dir():
         logger.debug(f"Found existing browser profile directory: {browser_profile_dir}")
