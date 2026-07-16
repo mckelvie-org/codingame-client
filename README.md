@@ -1,6 +1,6 @@
 # codingame-client
 
-[![CI](https://github.com/mckelvie-org/codingame-client/actions/workflows/ci.yml/badge.svg)](https://github.com/sammck/codingame-client/actions/workflows/ci.yml)
+[![CI](https://github.com/mckelvie-org/codingame-client/actions/workflows/ci.yml/badge.svg)](https://github.com/mckelvie-org/codingame-client/actions/workflows/ci.yml)
 [![PyPI version](https://img.shields.io/pypi/v/codingame-client.svg)](https://pypi.org/project/codingame-client/)
 [![Python versions](https://img.shields.io/pypi/pyversions/codingame-client.svg)](https://pypi.org/project/codingame-client/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
