@@ -1,0 +1,67 @@
+"""Shared pytest fixtures for the test suite.
+
+Provides a VCR-backed fixture for recording/replaying real HTTP interactions with the
+CodinGame API as "cassette" files under tests/cassettes/, so that most of the test suite
+can run in CI with no live network access and no credentials.
+
+Cassette recording strips all cookies--both the Cookie request header and any Set-Cookie
+response headers--before anything is written to disk. This is deliberate and unconditional:
+CodinGame's servers (and the AWS load balancer in front of them) set cookies, including
+session-identifying ones like AWSALB/AWSALBCORS, on virtually every response, and none of
+that should ever end up in a file that gets committed to the repo. See
+test_cassette_hygiene.py for an automated check that no cassette violates this.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import pytest
+import vcr
+
+CASSETTE_DIR = Path(__file__).parent / "cassettes"
+
+_SENSITIVE_RESPONSE_HEADERS = {"set-cookie", "set-cookie2"}
+
+
+def _scrub_response_cookies(response: dict[str, Any]) -> dict[str, Any]:
+    """VCR before_record_response hook: strips all Set-Cookie/Set-Cookie2 headers."""
+    headers = response.get("headers") or {}
+    for key in list(headers.keys()):
+        if key.lower() in _SENSITIVE_RESPONSE_HEADERS:
+            del headers[key]
+    return response
+
+
+cg_vcr = vcr.VCR(
+    cassette_library_dir=str(CASSETTE_DIR),
+    record_mode="once",
+    filter_headers=[("cookie", None), ("authorization", None)],
+    before_record_response=_scrub_response_cookies,
+    # Deliberately excludes "body": vcrpy's default body matcher chokes on request bodies that
+    # its own YAML cassette serializer already decoded into a list/dict (rather than a raw JSON
+    # string), raising TypeError on replay. Since each cassette here holds exactly one interaction
+    # (one test == one cassette file), matching on method/URL alone is unambiguous.
+    match_on=["method", "scheme", "host", "port", "path", "query"],
+)
+"""Shared VCR instance. record_mode="once" means: if a test's cassette file doesn't exist yet,
+   record it from a real (live) request; if it does exist, replay it strictly and never touch
+   the network. Delete a cassette file locally and re-run its test to re-record it from a
+   fresh real API response.
+"""
+
+
+@pytest.fixture
+def vcr_cassette(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Wraps a test in a cassette named after the test function.
+
+       Usage:
+           @pytest.mark.usefixtures("vcr_cassette")
+           async def test_something():
+               ...
+    """
+    cassette_name = f"{request.node.name}.yaml"
+    with cg_vcr.use_cassette(cassette_name):
+        yield

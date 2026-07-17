@@ -1,0 +1,45 @@
+interactions:
+- request:
+    body:
+    - 1486857
+    headers:
+      Accept:
+      - application/json, text/plain, */*
+      Content-Type:
+      - application/json
+      User-Agent:
+      - codingame-client/0.0.0.dev1 (+https://github.com/mckelvie-org/codingame-client)
+    method: POST
+    uri: https://www.codingame.com/services/CodinGamer/findCodinGamerPublicInformations
+  response:
+    body:
+      string: '{"userId":1486857,"pseudo":"sammck","countryId":"US","publicHandle":"2cdb2c48510cd9cfd702f1b2322a0b917586841","formValues":{"city":"Seattle","school":"University
+        of Arizona"},"schoolId":1730,"avatar":7320595789984,"cover":97178068275583,"tagline":"Software
+        engineer, architect, entrepreneur","company":"amigos.dev","city":"Seattle","level":36}'
+    headers:
+      CF-RAY:
+      - a1c77a9b1cc2d7dd-SEA
+      Cf-Cache-Status:
+      - DYNAMIC
+      Connection:
+      - keep-alive
+      Content-Encoding:
+      - gzip
+      Content-Length:
+      - '263'
+      Content-Type:
+      - application/json;charset=UTF-8
+      Date:
+      - Fri, 17 Jul 2026 07:19:32 GMT
+      Server:
+      - cloudflare
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      Vary:
+      - Accept-Encoding
+      X-Content-Type-Options:
+      - nosniff
+    status:
+      code: 200
+      message: OK
+version: 1

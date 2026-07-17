@@ -1,0 +1,41 @@
+interactions:
+- request:
+    body:
+      args:
+      - 1486857
+    headers:
+      Accept:
+      - application/json, text/plain, */*
+      Content-Type:
+      - application/json
+      User-Agent:
+      - codingame-client/0.0.0.dev1 (+https://github.com/mckelvie-org/codingame-client)
+    method: POST
+    uri: https://www.codingame.com/services/CodinGamer/findCodinGamerPublicInformations
+  response:
+    body:
+      string: '{"code":"BODY_MUST_BE_JSON_ARRAY","message":"The request body should
+        be a json array. Found: |{\"args\": [1486857]}|"}'
+    headers:
+      CF-RAY:
+      - a1c77a9c3b4fba4c-SEA
+      Cf-Cache-Status:
+      - DYNAMIC
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '118'
+      Content-Type:
+      - application/json;charset=UTF-8
+      Date:
+      - Fri, 17 Jul 2026 07:19:32 GMT
+      Server:
+      - cloudflare
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      X-Content-Type-Options:
+      - nosniff
+    status:
+      code: 400
+      message: Bad Request
+version: 1

@@ -118,12 +118,8 @@ async def cg_browser_login(
             with contextlib.suppress(Exception):
                 await context.close()
                 
-        assert remember_me is not None, "remember_me should not be None here"
-
-        if cg_session is None:
-            logger.warning(
-                    "CodingGame browser login completed without cgSession cookie--"
-                    "some functions (e.g., file upload) may not succeed.")
+        if remember_me is None or cg_session is None:
+            raise CgBrowserLoginError("Timed out waiting for CodinGame login to complete.")
         credentials = CgCredentials(
             remember_me_cookie=remember_me,
             cg_session_cookie=cg_session,
