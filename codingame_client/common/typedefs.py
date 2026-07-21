@@ -16,12 +16,22 @@ from json_data_types import JsonData, JsonDict, JsonList, JsonScalar
 CLIENT_APP_NAME: Final[str] = "codingame"
 """The default name of the application for the purpose of isolating app-specific files (cached credentials, etc.)."""
 
-BROWSER_PROFILE_SUBDIR: Final[str] = "browser-profile"
-"""Subdirectory under app's private storage directory in which browser persistent session state for login is stored."""
+DEFAULT_PROFILE_NAME: Final[str] = "default"
+"""The default profile name for managing independent sets of credentials and browser session state."""
+
+PROFILES_SUBDIR: Final[str] = "profiles"
+"""Subdirectory under an app's private storage directory under which all per-profile state
+   (credentials, browser session state, etc.) is stored, e.g., `profiles/<profile_name>/...`."""
+
+BROWSER_LOGIN_SUBDIR: Final[str] = "browser-login"
+"""Subdirectory under a profile's private storage directory in which browser persistent session
+   state for login is stored, e.g., `profiles/<profile_name>/browser-login`."""
 
 __all__ = [
-    "BROWSER_PROFILE_SUBDIR",
+    "BROWSER_LOGIN_SUBDIR",
     "CLIENT_APP_NAME",
+    "DEFAULT_PROFILE_NAME",
+    "PROFILES_SUBDIR",
     "JsonDict",
     "JsonList",
     "JsonScalar",

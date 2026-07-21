@@ -8,11 +8,12 @@ import asyncio
 import contextlib
 import sys
 import time
+from pathlib import Path
 
 from private_files import get_private_files
 
-from ...common import BROWSER_PROFILE_SUBDIR, CLIENT_APP_NAME, logger
-from ...common.credentials import CgCredentials, set_credentials
+from ...common import BROWSER_LOGIN_SUBDIR, CLIENT_APP_NAME, DEFAULT_PROFILE_NAME, PROFILES_SUBDIR, logger
+from ...common.credentials import CgCredentials, get_credentials_store, validate_profile_name
 
 
 class CgBrowserLoginError(Exception):
@@ -42,39 +43,50 @@ async def ensure_playwright_chromium_installed() -> None:
 async def cg_browser_login(
             *,
             app_name: str | None = None,
-            browser_profile_subdir: str | None = None,
+            profile_name: str | None = None,
+            browser_login_subdir: str | None = None,
             timeout: float | None = None,
             clean: bool = False,
             save: bool = True,
         ) -> CgCredentials:
     """Opens a Chromium browser window for the user to log in to CodinGame, and
        after successful login, returns the credentials, including
-       the rememberMe and cgSession cookies. The credentials are also cached in module credentials, and
-       optionally saved to the app's private storage directory where they are usable by the codingame client.
+       the rememberMe and cgSession cookies. The credentials are also cached in the given profile's
+       credentials store, and optionally saved to the app's private storage directory where they are
+       usable by the codingame client, at profiles/<profile_name>/credentials.json.
+
+       The browser's own persistent session state (cookies, local storage, etc., separate from the
+       resolved CgCredentials) is stored per-profile as well, at
+       profiles/<profile_name>/<browser_login_subdir>, so that logging in under different profiles
+       does not cause browser session state to bleed between them.
+
        Note that the returned credentials are not overriden by environment variables here; that case
        is handled in the codingame client itself.
     """
-    
+
     logger.debug("Ensuring Playwright Chromium is installed...")
     await ensure_playwright_chromium_installed()
-    
+
     from playwright.async_api import async_playwright
-    
+
     app_name = CLIENT_APP_NAME if app_name is None else app_name
-    browser_profile_subdir = BROWSER_PROFILE_SUBDIR if browser_profile_subdir is None else browser_profile_subdir
+    profile_name = DEFAULT_PROFILE_NAME if profile_name is None else profile_name
+    validate_profile_name(profile_name)
+    browser_login_subdir = BROWSER_LOGIN_SUBDIR if browser_login_subdir is None else browser_login_subdir
     timeout = DEFAULT_TIMEOUT_SECS if timeout is None else timeout
-    
+
     pf = get_private_files(app_name=app_name)
-    browser_profile_dir = pf.get_private_dir(browser_profile_subdir)
-    if browser_profile_dir.is_dir():
-        logger.debug(f"Found existing browser profile directory: {browser_profile_dir}")
+    browser_login_dir_subpath = Path(PROFILES_SUBDIR) / profile_name / browser_login_subdir
+    browser_login_dir = pf.get_private_dir(browser_login_dir_subpath)
+    if browser_login_dir.is_dir():
+        logger.debug(f"Found existing browser login directory: {browser_login_dir}")
     else:
-        logger.debug(f"No existing browser profile directory; login will be clean: {browser_profile_dir}")
-    
+        logger.debug(f"No existing browser login directory; login will be clean: {browser_login_dir}")
+
     if clean:
-        logger.debug("Forcing Clean browser profile...")
-        pf.delete_private_dir(browser_profile_subdir)
-    user_data_dir = pf.create_private_dir(browser_profile_subdir)
+        logger.debug("Forcing clean browser login directory...")
+        pf.delete_private_dir(browser_login_dir_subpath)
+    user_data_dir = pf.create_private_dir(browser_login_dir_subpath)
     logger.debug("Opening browser for Codingame login...")
     try:
         async with async_playwright() as pw:
@@ -125,7 +137,10 @@ async def cg_browser_login(
             cg_session_cookie=cg_session,
         )
         try:
-            set_credentials(credentials, save=save, app_name=app_name)
+            profile_store = get_credentials_store(app_name=app_name)
+            profile_store.set_credentials(profile_name, credentials)
+            if save:
+                profile_store.commit()
         except Exception as e:
             logger.warning(f"Failed to save credentials after browser login: {e}")
             raise CgBrowserLoginError("Failed to save credentials after browser login.") from e

@@ -21,7 +21,7 @@ new pending publisher** (use "pending" because the project won't exist there yet
 | Field | Value |
 |---|---|
 | PyPI project name | `codingame-client` *(or your fork's package name)* |
-| Owner | `sammck` *(or your fork's GitHub owner) |
+| Owner | `mckelvie-org` *(or your fork's GitHub owner) |
 | Repository | `codingame-client` |
 | Workflow | `publish-test.yml` |
 | Environment | `testpypi` |
@@ -34,7 +34,7 @@ pending publisher**:
 | Field | Value |
 |---|---|
 | PyPI project name | `codingame-client` *(or your fork's package name)* |
-| Owner | `sammck` *(or your fork's GitHub owner) |
+| Owner | `mckelvie-org` *(or your fork's GitHub owner) |
 | Repository | `codingame-client` |
 | Workflow | `publish.yml` |
 | Environment | `pypi` |
@@ -46,7 +46,7 @@ Once the above is in place:
 1. (optional) `bin/bump-dev [patch|minor|major]` — for a deliberate semantic version bump on `main`
 2. `bin/cut-rc` — pushes a `v*-rc.*` tag → triggers `publish-test.yml` → TestPyPI, then waits for that workflow and reports its outcome
 3. `git checkout v<x.y.z>-rc.<n>` — check out the rc that TestPyPI just accepted
-4. `bin/cut-prod` — pushes a `v*.*.*` tag → triggers `publish.yml` → PyPI + auto-bumps `main`, then waits for that workflow and syncs your local `main`
+4. `bin/cut-prod` — pushes a `v*.*.*` tag → triggers `publish.yml` → PyPI + syncs `main` (changelog + version bump), then waits for that workflow and syncs your local `main`
 
 ---
 
@@ -98,6 +98,46 @@ bin/bump-dev [dev|patch|minor|major]   # edits pyproject.toml, does not commit
 
 This will modify pyproject.toml to reflect the version change.
 Commit and push to `main` before cutting a release.
+
+### Update the changelog
+
+Add (or revise) a `CHANGELOG.md` entry for your in-progress work, using this exact heading:
+
+```markdown
+## {{UNRELEASED}}
+
+- Your release notes here.
+```
+
+`{{UNRELEASED}}` is a version-independent sentinel, not a version number you fill in yourself --
+`cut-prod` (and the post-release sync back to `main`) stamp in the actual version and date when the
+release actually happens, so there's no version string here that can ever drift out of sync with
+`pyproject.toml`'s. `cut-rc` and `cut-prod` parse this literally:
+
+- `cut-rc` checks whether `## {{UNRELEASED}}` already exists in `CHANGELOG.md`. If not, it inserts
+  a placeholder (`- _Add release notes here._`) so a release never goes out with zero changelog
+  entry -- but you should normally have already written the real one yourself before cutting.
+- `cut-prod` rewrites that heading to `## X.Y.Z (<date>)` (filling in both the version it's
+  promoting and today's date), finalizing it, when promoting an rc. This happens on the frozen
+  release commit only -- it's a historical record of exactly what shipped, so it doesn't add
+  anything beyond that.
+- The `Publish` workflow triggered by `cut-prod` mirrors that same finalization back onto `main`
+  itself as part of its post-release sync (see below), so `main`'s copy doesn't stay stuck reading
+  `{{UNRELEASED}}` forever once the release has actually shipped -- and, unlike `cut-prod`, it also
+  leaves a fresh, empty `## {{UNRELEASED}}` heading in place on `main`, ready for the next round of
+  notes, so you never have to remember to re-add it yourself.
+
+If you never replace `cut-rc`'s placeholder (`- _Add release notes here._`) with real notes,
+`cut-rc` warns but still lets the rc through (it's disposable and only reaches TestPyPI), while
+`cut-prod` **refuses to promote** -- that text should never end up in the permanent, published
+`CHANGELOG.md`.
+
+You're free to revise the entry and cut additional rc's as many times as you like -- each `cut-rc`
+re-snapshots whatever `main` currently looks like -- just make sure the changelog reflects what you
+actually want released *before* the rc you end up promoting with `cut-prod`. Editing `main`'s
+changelog *after* your last `cut-rc` and then running `cut-prod` directly will not pick up that
+edit: `cut-prod` only ever reads the frozen `CHANGELOG.md` content of the specific rc commit you're
+promoting, never live `main`.
 
 ### Cut a release candidate on TestPyPi
 
@@ -151,12 +191,16 @@ matters to you.
 
 Strips the rc qualifier, commits to a worktree, tags the commit `v<x.y.z>`, and pushes the tag —
 triggering `Publish`, which (like `Publish TestPyPI`) polls PyPI until the version is actually
-visible before reporting success, updates `prod-latest`, and then ensures `main` carries a dev version
-strictly ahead of the one just published, bumping to `X.Y.(Z+1)-dev.1` if needed. This is safe with
-other developers landing commits on `main`, or another release racing to bump it at the same time:
-every attempt re-fetches the live tip of `main` and re-evaluates whether a bump is still needed from
-scratch, rather than trusting a stale snapshot, and retries a few times if its push loses a race
-(the winner's bump may already satisfy the requirement, in which case there's nothing left to do).
+visible before reporting success, updates `prod-latest`, and then syncs `main`: finalizes
+`CHANGELOG.md`'s `## {{UNRELEASED}}` entry to `## X.Y.Z (<date>)` if `main` still has one (leaving a
+fresh `## {{UNRELEASED}}` heading in its place, ready for the next round of notes), and ensures
+`main` carries a dev version strictly ahead of the one just published, bumping
+to `X.Y.(Z+1)-dev.1` if needed. Either, both, or neither may apply on a given run -- e.g. `cut-rc`
+already bumped `main` itself, or a concurrent release already synced the changelog. This is safe
+with other developers landing commits on `main`, or another release racing to sync it at the same
+time: every attempt re-fetches the live tip of `main` and re-evaluates from scratch what's still
+needed, rather than trusting a stale snapshot, and retries a few times if its push loses a race
+(the winner's sync may already satisfy the requirement, in which case there's nothing left to do).
 
 After pushing the prod tag, `cut-prod` waits for the triggered `Publish` workflow to finish and
 shows its live status. On success, it syncs your local `main` with `origin/main` (which the

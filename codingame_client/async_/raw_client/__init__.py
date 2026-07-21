@@ -19,8 +19,9 @@ from typing import Final, NamedTuple, Never, Self, cast
 import aiohttp
 from json_data_types import JsonData, JsonDict, JsonList
 
-from ...common.credentials import CgCredentials, get_credentials_with_override, set_credentials
+from ...common.credentials import CgCredentials, get_credentials_store, get_credentials_with_override
 from ...common.dataclass_wizard_x import CatchAll, JSONWizardX
+from ...common.typedefs import DEFAULT_PROFILE_NAME
 
 __all__ = [
 ]
@@ -314,7 +315,11 @@ class CgRawClient:
             credentials = CgCredentials()
         cache = cache or save
         if cache:
-            credentials = set_credentials(credentials, app_name=self.app_name, save=save)
+            profile_store = get_credentials_store(app_name=self.app_name)
+            profile_store.set_credentials(DEFAULT_PROFILE_NAME, credentials)
+            if save:
+                profile_store.commit()
+            credentials = profile_store.get_credentials(DEFAULT_PROFILE_NAME) or CgCredentials()
         if credentials is None or credentials.remember_me_cookie is None or credentials.cg_session_cookie is None:
             # Both cookies are required for the client to be considered logged in--enough CodinGame
             # endpoints require cgSession specifically that a rememberMe-only session isn't useful.
@@ -377,12 +382,15 @@ class CgRawClient:
         if not force and self.credentials is not None:
             credentials = self.credentials
         else:
+            profile_store = get_credentials_store(app_name=self.app_name)
+            if force:
+                # Bypass the profile store's in-memory cache and re-read from persistent storage.
+                profile_store.get_profile_store(DEFAULT_PROFILE_NAME).fetch(force=True)
             credentials = get_credentials_with_override(
                 credentials=credentials,
                 remember_me_token=remember_me_token,
                 cg_session_token=cg_session_token,
-                app_name=self.app_name,
-                force=force
+                store=profile_store,
             )
         return credentials
     

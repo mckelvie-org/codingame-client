@@ -3,11 +3,14 @@ run-name: "Publish PyPI · ${{ github.ref_name }}"
 
 # Triggered by a push of a v<x.y.z> tag (done by cut-prod).
 #
-# After a successful PyPI publish, updates the prod-latest tag, then ensures
-# main carries a dev version strictly ahead of the one just published (bumping
-# to X.Y.(Z+1)-dev.1 if needed). Safe with other developers landing unrelated
-# commits on main, or a concurrent release racing to bump it too -- see the
-# "Ensure main is ahead of the published version" step for how.
+# After a successful PyPI publish, updates the prod-latest tag, then syncs main:
+# finalizes CHANGELOG.md's "## {{UNRELEASED}}" entry to "## <version> (<date>)"
+# (mirroring what cut-prod already did on the release branch, so main's own copy
+# doesn't stay stuck saying "unreleased" forever), and ensures main carries a dev
+# version strictly ahead of the one just published (bumping to X.Y.(Z+1)-dev.1 if
+# needed). Safe with other developers landing unrelated commits on main, or a
+# concurrent release racing to sync it too -- see the "Sync main after release"
+# step for how.
 
 on:
   push:
@@ -102,22 +105,27 @@ jobs:
           git tag -f prod-latest
           git push --force origin prod-latest
 
-      # Runs only after a successful publish. Ensures main carries a dev version
-      # strictly ahead of the version just published, bumping it if necessary.
+      # Runs only after a successful publish. Two independent things, one commit:
+      # finalizes CHANGELOG.md's "## {{UNRELEASED}}" entry to "## <version>
+      # (<date>)" if main still has one, and ensures main carries a dev version
+      # strictly ahead of the one just published (bumping to X.Y.(Z+1)-dev.1 if
+      # necessary). Either, both, or neither may apply on a given run -- e.g.
+      # cut-rc already bumped main itself, or a concurrent release already
+      # synced the changelog.
       #
       # main is a moving target in a multi-developer setting -- other commits
-      # (including bumps from a concurrent release) may land between our fetch
+      # (including a sync from a concurrent release) may land between our fetch
       # and our push, or may already be sitting on main by the time this job
-      # even starts. So every attempt re-fetches live main and re-evaluates
-      # "is a bump still needed" from scratch, rather than trusting a snapshot.
-      # If our push loses a race, we just loop: re-fetch, re-check (the winner's
-      # bump may already satisfy the requirement, in which case we're done for
-      # free), and only re-commit if main is still behind. Gives up after a
-      # handful of attempts if the race never settles.
-      - name: Ensure main is ahead of the published version
+      # even starts. So every attempt re-fetches live main and re-evaluates from
+      # scratch, rather than trusting a snapshot. If our push loses a race, we
+      # just loop: re-fetch, re-check (the winner's sync may already satisfy the
+      # requirement, in which case we're done for free), and only re-commit if
+      # main still needs something. Gives up after a handful of attempts if the
+      # race never settles.
+      - name: Sync main after release
         run: |
-          cat > /tmp/compute_bump.py <<'PY'
-          import os, re, sys, tomllib
+          cat > /tmp/sync_main.py <<'PY'
+          import datetime, os, re, sys, tomllib
 
           prod = os.environ["VERSION"]               # e.g. "1.0.0"
 
@@ -126,54 +134,73 @@ jobs:
               sys.exit(f"Cannot parse prod version: {prod!r}")
           px, py_, pz = int(pm.group(1)), int(pm.group(2)), int(pm.group(3))
 
+          # --- CHANGELOG.md: finalize the "{{UNRELEASED}}" entry, and leave a fresh sentinel in
+          # its place (with cut-rc's own placeholder body, not an empty one -- an empty body
+          # would silently defeat cut-rc/cut-prod's "still just the placeholder" guard, since
+          # that guard checks the body against the placeholder text exactly, and "nothing at
+          # all" doesn't match either) so main is always ready for the next round of notes.
+          # Inserting the dated heading right after the sentinel (rather than replacing it)
+          # finalizes and re-seeds in one step: whatever notes were already written under the
+          # sentinel end up under the new dated heading (since they were already positioned
+          # right below it), while the sentinel is left behind with a fresh placeholder body.
+          changelog_path = "CHANGELOG.md"
+          with open(changelog_path) as f:
+              changelog_text = f.read()
+          sentinel = "## {{UNRELEASED}}"
+          placeholder = "- _Add release notes here._"
+          if sentinel in changelog_text:
+              date = datetime.date.today().isoformat()
+              dated_heading = f"## {prod} ({date})"
+              fresh_section = f"{sentinel}\n\n{placeholder}\n\n{dated_heading}"
+              with open(changelog_path, "w") as f:
+                  f.write(changelog_text.replace(sentinel, fresh_section, 1))
+              print(f"Finalized CHANGELOG.md entry for {prod}, left a fresh {sentinel} in place", file=sys.stderr)
+          else:
+              print(f"No {sentinel!r} entry in CHANGELOG.md on main -- nothing to finalize there", file=sys.stderr)
+
+          # --- pyproject.toml: ensure main's dev version is strictly ahead of the published version ---
           with open("pyproject.toml", "rb") as f:
               current = tomllib.load(f)["project"]["version"]
 
           m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)-dev\.(\d+)", current)
           if not m:
-              print(f"Main version {current!r} is not a -dev version — skipping auto-bump", file=sys.stderr)
-              print("skip")
-              sys.exit()
-
-          mx, my, mz = int(m.group(1)), int(m.group(2)), int(m.group(3))
-          if (mx, my, mz) > (px, py_, pz):
-              print(f"Main {current!r} is already ahead of {prod} — skipping auto-bump", file=sys.stderr)
-              print("skip")
-              sys.exit()
-
-          # Patch bump: minimum increment to make main numerically > prod.
-          new = f"{px}.{py_}.{pz + 1}-dev.1"
-          with open("pyproject.toml") as f:
-              text = f.read()
-          updated = re.sub(
-              r'^(version\s*=\s*")[^"]*(")',
-              rf'\g<1>{new}\2',
-              text,
-              flags=re.MULTILINE,
-          )
-          assert updated != text, "version= line not found in pyproject.toml"
-          with open("pyproject.toml", "w") as f:
-              f.write(updated)
-          print(f"Bumping main from {current} to {new}", file=sys.stderr)
-          print(new)
+              print(f"Main version {current!r} is not a -dev version -- skipping version auto-bump", file=sys.stderr)
+          else:
+              mx, my, mz = int(m.group(1)), int(m.group(2)), int(m.group(3))
+              if (mx, my, mz) > (px, py_, pz):
+                  print(f"Main {current!r} is already ahead of {prod} -- skipping version auto-bump", file=sys.stderr)
+              else:
+                  new = f"{px}.{py_}.{pz + 1}-dev.1"
+                  with open("pyproject.toml") as f:
+                      text = f.read()
+                  updated = re.sub(
+                      r'^(version\s*=\s*")[^"]*(")',
+                      rf'\g<1>{new}\2',
+                      text,
+                      flags=re.MULTILINE,
+                  )
+                  assert updated != text, "version= line not found in pyproject.toml"
+                  with open("pyproject.toml", "w") as f:
+                      f.write(updated)
+                  print(f"Bumping main from {current} to {new}", file=sys.stderr)
           PY
 
           for attempt in 1 2 3 4 5; do
             git fetch origin main
             git checkout --quiet --detach origin/main
 
-            ACTION=$(python /tmp/compute_bump.py)
+            python /tmp/sync_main.py
 
-            if [[ "$ACTION" == "skip" ]]; then
-              echo "No bump needed."
+            if git diff --quiet; then
+              echo "Nothing to sync on main."
               exit 0
             fi
 
-            git add pyproject.toml
-            git commit -q -m "chore: bump main to ${ACTION} after v${VERSION} release"
+            git add pyproject.toml CHANGELOG.md
+            git commit -q -m "chore: sync main after v${VERSION} release"
 
             if git push origin HEAD:main; then
-              echo "Bumped main to ${ACTION}"
+              echo "Synced main after v${VERSION} release."
               exit 0
             fi
 
@@ -181,5 +208,5 @@ jobs:
             sleep $((attempt * 2))
           done
 
-          echo "::error::could not bump main after several attempts (persistent push race) -- bump it manually"
+          echo "::error::could not sync main after several attempts (persistent push race) -- sync it manually"
           exit 1

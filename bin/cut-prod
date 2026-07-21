@@ -179,16 +179,31 @@ with open(readme_path, "w") as f:
     f.write(readme)
 PY
 
-# Finalize the (unreleased) CHANGELOG entry for this version.
+# Finalize the CHANGELOG entry for this version: fill in the version and date where the
+# version-independent "{{UNRELEASED}}" sentinel was. Refuses to promote if the entry still has
+# cut-rc's own placeholder text -- that would mean no one ever wrote real release notes, and
+# unlike a TestPyPI-only rc, this is the permanent, published record.
 pdm run python - "$PROD_VERSION" "$TMP/CHANGELOG.md" <<'PY'
 import datetime, re, sys
 version, path = sys.argv[1], sys.argv[2]
 with open(path) as f:
     text = f.read()
+
+# Checks the unreleased section's own body specifically (is it *exactly* the placeholder?), not
+# a substring search over the whole file -- otherwise this would false-positive on prose
+# elsewhere (e.g. CHANGELOG.md text documenting the placeholder itself) that happens to quote
+# the placeholder string without actually being an unfilled entry.
+m = re.search(r"^## \{\{UNRELEASED\}\}\n(.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
+if m and m.group(1).strip() == "- _Add release notes here._":
+    sys.exit(
+        "error: CHANGELOG.md's unreleased entry is still just cut-rc's placeholder -- "
+        "write real release notes before cutting a production release."
+    )
+
 date = datetime.date.today().isoformat()
-updated = text.replace(f"## {version} (unreleased)", f"## {version} ({date})")
+updated = text.replace("## {{UNRELEASED}}", f"## {version} ({date})")
 if updated == text:
-    print(f"warning: no '## {version} (unreleased)' entry found in CHANGELOG.md", file=sys.stderr)
+    print("warning: no '## {{UNRELEASED}}' entry found in CHANGELOG.md", file=sys.stderr)
 with open(path, "w") as f:
     f.write(updated)
 PY

@@ -14,8 +14,10 @@ from .credentials import (
 )
 from .logging import logger
 from .typedefs import (
-    BROWSER_PROFILE_SUBDIR,
+    BROWSER_LOGIN_SUBDIR,
     CLIENT_APP_NAME,
+    DEFAULT_PROFILE_NAME,
+    PROFILES_SUBDIR,
     JsonData,
     JsonDict,
     JsonList,
@@ -24,13 +26,15 @@ from .typedefs import (
 )
 
 __all__ = [
-    "BROWSER_PROFILE_SUBDIR",
+    "BROWSER_LOGIN_SUBDIR",
     "CgCredentials",
     "get_credentials",
     "set_credentials",
     "get_credentials_with_override",
     "CG_SESSION_TOKEN_ENV_VAR",
     "CLIENT_APP_NAME",
+    "DEFAULT_PROFILE_NAME",
+    "PROFILES_SUBDIR",
     "REMEMBER_ME_TOKEN_ENV_VAR",
     "JsonDict",
     "JsonList",

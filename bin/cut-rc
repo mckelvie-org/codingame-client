@@ -123,19 +123,31 @@ with open(readme_path, "w") as f:
     f.write(readme)
 PY
 
-# Prepend an (unreleased) CHANGELOG entry if one doesn't already exist.
-pdm run python - "$RC_VERSION" "$TMP/CHANGELOG.md" <<'PY'
+# Prepend an unreleased CHANGELOG entry if one doesn't already exist. The heading is a
+# version-independent sentinel, not the rc/prod version -- cut-prod fills that in (along with
+# the date) when it promotes this rc, so there's no version string here that could ever drift
+# out of sync with pyproject.toml's.
+pdm run python - "$TMP/CHANGELOG.md" <<'PY'
 import re, sys
-xyz = re.fullmatch(r"(\d+\.\d+\.\d+)-rc\.\d+", sys.argv[1]).group(1)
-path = sys.argv[2]
+path = sys.argv[1]
 with open(path) as f:
     text = f.read()
-header = f"## {xyz} (unreleased)"
+header = "## {{UNRELEASED}}"
 if header not in text:
     entry = f"{header}\n\n- _Add release notes here._\n\n"
     text = re.sub(r"^(# CHANGELOG\n+)", rf"\1{entry}", text)
     with open(path, "w") as f:
         f.write(text)
+# Non-blocking: an rc is disposable/iterative and only reaches TestPyPI, not the permanent
+# record, so this is just an early heads-up -- cut-prod hard-blocks on the same thing later.
+# Checks the unreleased section's own body specifically (is it *exactly* the placeholder?),
+# not a substring search over the whole file -- otherwise this would false-positive on prose
+# elsewhere (e.g. this very comment, or CHANGELOG.md text documenting the placeholder itself)
+# that happens to quote the placeholder string without actually being an unfilled entry.
+m = re.search(r"^## \{\{UNRELEASED\}\}\n(.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
+if m and m.group(1).strip() == "- _Add release notes here._":
+    print("warning: CHANGELOG.md's unreleased entry is still just cut-rc's placeholder -- "
+          "write real release notes before cutting a production release.", file=sys.stderr)
 PY
 
 git -C "$TMP" add pyproject.toml CHANGELOG.md README.md
