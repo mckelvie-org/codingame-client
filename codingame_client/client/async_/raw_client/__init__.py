@@ -30,7 +30,6 @@ from ...common.raw_client import (
 __all__ = [
 ]
 
-
 class CgAsyncClientHttpError(CgClientHttpError):
     """Async-only client HTTP error. Adds the aiohttp response objeect to the exception for debugging purposes."""
     
@@ -85,6 +84,7 @@ class CgAsyncClientHttpError(CgClientHttpError):
                           and content if not provided.
         """
         return cls(e.message, response=response, content=content, status_code=e.status)
+
 
 class CgAsyncRawClient(CgRawClient):
     """Async-only low-level (JsonData) client."""

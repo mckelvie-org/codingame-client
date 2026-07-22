@@ -27,13 +27,16 @@ classifiers = [
   "Topic :: Software Development :: Libraries :: Python Modules",
   "Typing :: Typed",
 ]
-dependencies = ["json-data-types>=0.2.0", "dataclass-wizard>=1.0.0", "playwright>=1.61.0", "private-files>=3.0.0", "aiohttp>=3.14.1", "filelock>=3.30.3", "typing-extensions>=4.12.0"]
+dependencies = ["json-data-types>=0.2.0", "dataclass-wizard>=1.0.0", "playwright>=1.61.0", "private-files>=3.0.0", "aiohttp>=3.14.1", "filelock>=3.30.3", "typing-extensions>=4.12.0", "argparse-wizard>=2.0.0", "pytimeparse>=1.1.8", "rich>=15.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/mckelvie-org/codingame-client"
 Source = "https://github.com/mckelvie-org/codingame-client"
 "Bug Tracker" = "https://github.com/mckelvie-org/codingame-client/issues"
 Changelog = "https://github.com/mckelvie-org/codingame-client/releases"
+
+[project.scripts]
+cg = "codingame_client.cli.main:main"
 
 [dependency-groups]
 dev = [
