@@ -6,7 +6,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
-from ...dataclass_wizard_x import JSONWizardX, CatchAll, json_field
+
+from .....common.dataclass_wizard_x import Alias, CatchAll, JSONWizardX
 
 CgSolutionLanguage = str
 """The programming language used for the reference solution, e.g. "Python3", "Java", "C++", etc."""
@@ -313,7 +314,7 @@ class CgContribution(JSONWizardX):
     ready_for_moderation: bool
     """Whether the contribution is ready for moderation."""
     
-    contribution_type: CgPuzzleType = json_field("type", all=True)   # e.g. "PUZZLE_INOUT"
+    contribution_type: CgPuzzleType = Alias("type")   # e.g. "PUZZLE_INOUT"
     """The type of the contribution, e.g. "PUZZLE_INOUT" for a standard noninteractive solo puzzle."""
     
     status_history: list[Any] = field(default_factory=list)

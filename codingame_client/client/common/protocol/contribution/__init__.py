@@ -1,7 +1,16 @@
 from .schema import (
-    CgContribution, CgContributionData, CgContributionVersion, CgTestCase,
-    CgMarkdown, CgHtml, CgStubGenerator, CgTopic, CgContributionId,
-    CgPuzzleType, CgSolutionLanguage, cg_extension_to_solution_language
+    CgContribution,
+    CgContributionData,
+    CgContributionId,
+    CgContributionVersion,
+    CgHtml,
+    CgMarkdown,
+    CgPuzzleType,
+    CgSolutionLanguage,
+    CgStubGenerator,
+    CgTestCase,
+    CgTopic,
+    cg_extension_to_solution_language,
 )
 
 __all__ = [

@@ -7,7 +7,12 @@ import sys
 if sys.version_info >= (3, 12):
     from typing import override
 else:
-    from typing_extensions import override  # type: ignore[no-redef]
+    from typing_extensions import override
+
+if sys.version_info >= (3, 11):
+    from typing import Never, Self
+else:
+    from typing_extensions import Never, Self
 
 from typing import Final
 
@@ -36,5 +41,7 @@ __all__ = [
     "JsonList",
     "JsonScalar",
     "JsonData",
+    "Never",
+    "Self",
     "override",
 ]

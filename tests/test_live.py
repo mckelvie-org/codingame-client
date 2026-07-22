@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import pytest
 
-from codingame_client.async_.raw_client import CgAsyncClientHttpError, CgAsyncRawClient
-from codingame_client.common.credentials import get_credentials
+from codingame_client.client.async_.raw_client import CgAsyncClientHttpError, CgAsyncRawClient
+from codingame_client.client.common.credentials import get_credentials
 
 
 def _require_real_credentials() -> None:

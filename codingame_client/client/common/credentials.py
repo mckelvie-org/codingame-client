@@ -13,8 +13,8 @@ from typing import Final
 from private_files import PrivateDirManager, PrivateFilesManager, get_private_files
 from typing_extensions import override
 
-from .dataclass_wizard_x import CatchAll, JSONWizardX
-from .typedefs import CLIENT_APP_NAME, DEFAULT_PROFILE_NAME, PROFILES_SUBDIR
+from ...common.dataclass_wizard_x import CatchAll, JSONWizardX
+from ...common.typedefs import CLIENT_APP_NAME, DEFAULT_PROFILE_NAME, PROFILES_SUBDIR
 
 __all__ = [
     # Constants

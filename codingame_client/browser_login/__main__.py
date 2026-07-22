@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import logging
 
-from codingame_client.async_.browser_login import cg_browser_login
+from codingame_client.browser_login.async_ import async_cg_browser_login
 
 logger = logging.getLogger(__name__)
 
@@ -22,10 +22,10 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-async def main():
+async def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.DEBUG)
-    credentials = await cg_browser_login(profile_name=args.profile, clean=args.force)
+    credentials = await async_cg_browser_login(profile_name=args.profile, clean=args.force)
     print("Login successful!")
     print(f"Remember Me Cookie: [{credentials.remember_me_cookie}]")
     if credentials.cg_session_cookie is not None:
