@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:e1640b27ea5c35f2b916536b4e3e428ab43d019608e50f8ba7e60df3521bf3ee"
+content_hash = "sha256:85d217200823c6260c669b1fc49a94528fff6e65542055107e8f2e768dbcf5d3"
 
 [[metadata.targets]]
 requires_python = ">=3.10"
@@ -1715,13 +1715,14 @@ files = [
 ]
 
 [[package]]
-name = "pytimeparse"
-version = "1.1.8"
-summary = "Time expression parser"
+name = "pytimeparse2"
+version = "1.7.1"
+requires_python = ">=3.6"
+summary = "Time expression parser."
 groups = ["default"]
 files = [
-    {file = "pytimeparse-1.1.8-py2.py3-none-any.whl", hash = "sha256:04b7be6cc8bd9f5647a6325444926c3ac34ee6bc7e69da4367ba282f076036bd"},
-    {file = "pytimeparse-1.1.8.tar.gz", hash = "sha256:e86136477be924d7e670646a98561957e8ca7308d44841e21f5ddea757556a0a"},
+    {file = "pytimeparse2-1.7.1-py3-none-any.whl", hash = "sha256:a162ea6a7707fd0bb82dd99556efb783935f51885c8bdced0fce3fffe85ab002"},
+    {file = "pytimeparse2-1.7.1.tar.gz", hash = "sha256:98668cdcba4890e1789e432e8ea0059ccf72402f13f5d52be15bdfaeb3a8b253"},
 ]
 
 [[package]]

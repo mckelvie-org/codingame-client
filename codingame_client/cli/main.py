@@ -3,23 +3,25 @@
 from __future__ import annotations
 
 import difflib
+import json
 import logging
 import sys
 import textwrap
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from types import TracebackType
-from typing import Self
+from typing import cast
 
 import aiohttp
-import pytimeparse
 from argparse_wizard import CliBase, CliCommand, OptCmdFunc, cli_command
+from json_data_types import JsonData, JsonList
 from rich.console import Console
 
-from codingame_client.browser_login.async_ import async_cg_browser_login
-
 from ..client.async_.raw_client import CgAsyncRawClient
-from ..client.common.raw_client import CgDownloadFileResult, compute_content_hash
-from ..common.typedefs import override
+from ..client.common.raw_client import CgAuthenticationError, CgDownloadFileResult, compute_content_hash
+from ..common.timestamps import parse_timestamp
+from ..common.typedefs import Self, override
+from ..credentials.browser_login import async_cg_browser_login, cg_browser_delete_session
+from ..credentials.cg_credentials import CgCredentials, get_credentials_with_override, set_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +29,8 @@ class CgCli(CliBase):
     """Command-line interface for the contribution manager."""
 
     _client: CgAsyncRawClient | None = None
-    _remember_me_token: str | None = None
-    _cg_session_token: str | None = None
+    _client_authenticated: bool = False
+    _client_validated: bool = False
     _console: Console | None = None
     
     @property
@@ -51,58 +53,6 @@ class CgCli(CliBase):
             self._console = Console(highlight=False)
         return self._console
         
-    def parse_timestamp(self, duration_str: str) -> datetime:
-        """Parse a string into a Codingame compatible UTC timestamp. The
-           return value is always in UTC timezone.
-           
-           Codingame uses timestamps in milliseconds since the epoch (1970-01-01T00:00:00Z).
-           
-           The following are accepted:
-              - A simple bare number (e.g., "1680000000000") is interpreted as milliseconds since the epoch UTC. Note that
-                this is different from the standard pytimeparse handling or Unix timestamp, which is in seconds since the epoch.
-              - A pytimeparse-compatible duration string with explicit units (e.g., "1h30m")
-                is interpreted as a duration from the epoch UTC.
-                To provide a Unix-style "seconds since epoch" timestamp, you can add an "s" suffix (e.g., "1680000000s").
-              - A relative duration from now (e.g., "-1h30m" or "+0") is interpreted as a pytimeparse-compatible duration
-                subtracted from or added to the current time.
-              - An ISO 8601 datetime string (e.g., "2023-03-15T12:34:56Z"). If the string does not contain timezone information,
-                it is assumed to be in the local timezone.
-        """
-        try:
-            if duration_str.startswith(("+", "-")):
-                # Relative duration from now
-                sign_ch = duration_str[0]
-                remainder = duration_str[1:]
-                try:
-                    seconds = pytimeparse.parse(remainder, granularity="ms")
-                    if seconds is None:
-                        raise ValueError(f"Bad pytimeparsestring: {remainder!r}")
-                    if sign_ch == "-":
-                        seconds = -seconds
-                    now = datetime.now(timezone.utc)
-                    dt = now + timedelta(seconds=seconds)
-                    return dt
-                except ValueError as e:
-                    raise ValueError(f"Invalid relative duration string: {duration_str!r}: {e}") from e
-            try:
-                ms = float(duration_str)
-                seconds = ms / 1000.0
-            except ValueError:
-                seconds = pytimeparse.parse(duration_str, granularity="ms")
-                if seconds is None:
-                    # Try parsing as an ISO 8601 datetime string
-                    try:
-                        dt = datetime.fromisoformat(duration_str)
-                        dt = dt.astimezone(timezone.utc)
-                        return dt
-                    except ValueError:
-                        raise ValueError(f"Invalid timestamp or duration string: {duration_str!r}") from None
-            result = datetime.fromtimestamp(seconds, tz=timezone.utc)
-            return result
-        except Exception as e:
-            print(f"Error parsing timestamp string {duration_str!r}: {e}", file=sys.stderr)
-            raise
-
     def _make_trace_config(self) -> aiohttp.TraceConfig:
         tc = aiohttp.TraceConfig()
 
@@ -151,13 +101,43 @@ class CgCli(CliBase):
         trace_http: bool = self.args.trace_http
         return [self._make_trace_config()] if trace_http else []
     
-    async def get_client(self) -> CgAsyncRawClient:
-        """Return the CgAsyncRawClient instance, initializing it if necessary."""
+    async def get_client(self, *, require_credentials: bool = False, validate: bool = False) -> CgAsyncRawClient:
+        """Return the CgAsyncRawClient instance, initializing it if necessary.
+
+           Credentials are always resolved and applied to the session on first use, best-effort
+           (never raises if none are available)--this is "level 2" of four auth-strictness levels:
+
+               1. No authentication at all: don't call this method for auth purposes; pass
+                  `require_login=False` directly to `service_request`/etc.
+               2. Authenticated API, best-effort (the default: require_credentials=False,
+                  validate=False): credentials are applied if available, but nothing errors if
+                  they aren't.
+               3. Login required (require_credentials=True, validate=False): raises
+                  CgAuthenticationError if no credentials are available. Does not check they're
+                  still valid/unexpired.
+               4. Validated login required (require_credentials=True, validate=True): raises if
+                  no credentials are available, and separately raises if they don't pass a live
+                  validation check against the server.
+        """
         if self._client is None:
+            profile: str | None = self.args.profile
             self._client = CgAsyncRawClient(
-                    trace_configs=self.get_trace_configs()
-                )
-        return self._client
+                profile_name=profile,
+                trace_configs=self.get_trace_configs()
+            )
+        client = self._client
+        if not self._client_authenticated:
+            await client.authenticate()
+            self._client_authenticated = True
+
+        if require_credentials and client.credentials is None:
+            raise CgAuthenticationError()
+
+        if validate and not self._client_validated:
+            await client.validate_credentials()
+            self._client_validated = True
+
+        return client
     
     @override
     async def ctx_exit(
@@ -200,36 +180,290 @@ class CgCli(CliBase):
             hash_value = compute_content_hash(content)
             print(hash_value)
         return handler
-
-    @cli_command("Log in via browser and save the credentials.")
-    async def cmd_login(self, cmd: CliCommand[Self]) -> OptCmdFunc:
-        async def handler() -> None:
-
-
-            timeout: float = self.args.timeout
-            clean: bool = self.args.clean
-            profile_name: str | None = self.args.profile
+    
+    async def login_helper(
+                self,
+                *,
+                profile_name: str | None = None,
+                manual: bool = False,
+                timeout: float | None = None,
+                clean: bool = False,
+                force: bool = False,
+                remember_me: str | None = None,
+                cg_session: str | None = None,
+                no_validate: bool = False,
+            ) -> CgCredentials:
+        """Performs the login process, either via browser or manual credentials, and returns the CgCredentials.
+        
+        Args:
+            profile_name:       The name of the profile to use for storing credentials and browser session state.
+                                Allows for multiple independent session profiles; e.g., if multiple CodinGame
+                                accounts are used. If None, defaults to the default profile.
+            manual:             If True, perform manual login instead of browser login.
+                                Implied by presence of --remember-me or --cg-session.
+            timeout:            For browser login, maximum time in seconds to wait for the user to log in.
+                                If None, defaults to DEFAULT_TIMEOUT_SECS.
+            clean:              For browser login, if True, erases browser session state and forces a fresh login flow
+                                even if valid credentials are already cached in the browser. Defaults to False.
+            force:              If True, force a login even if persistent credentials already exist. By default, login is skipped if
+                                credentials already exist for the profile. Note that freshness of credentials is not checked in any case;
+                                if they are expired, the client will fail to use them. Defaults to False.
+            remember_me:        The rememberMe cookie value, for manual (non-browser) login. Must be provided together with --cg-session.
+            cg_session:         The cgSession cookie value, for manual (non-browser) login. Must be provided together with --remember-me.
+            no_validate:        If True, skip validation of the credentials after login. Defaults to False.
+        
+        """
+        credentials: CgCredentials | None = None
+        if not force:
+            # Try to get existing credentials; if they exist, just return without doing a browser or manual login.
+            # Note that we consider the presence of environment variable credentials to suffice for being logged in, even
+            # though they are not saved to the profile store. This is because the environment variable credentials
+            # are used implicitly by the client regardless of profile--they are not persisted to the profile store.
+            # If no_validate is False, we will validate the credentials after login, which will fail if they are expired, in
+            # which case we will fall through to the browser or manual login flow.
+            credentials = get_credentials_with_override(profile_name=profile_name)
+            if credentials is not None and (
+                            credentials.remember_me_cookie is None or
+                            credentials.cg_session_cookie is None
+                    ):
+                # Incomplete credentials; treat as not logged in.
+                credentials = None
+            if credentials is not None and not no_validate:
+                # verify that the credentials are valid by attempting to authenticate with them in a temporary
+                # client session.  If they are invalid, fall through to the login flow.
+                async with CgAsyncRawClient(
+                            profile_name=profile_name,
+                            trace_configs=self.get_trace_configs()
+                        ) as client:
+                    try:
+                        await client.authenticate(
+                                profile_name=profile_name, credentials=credentials,
+                                require_credentials=True, validate=True,
+                            )
+                    except CgAuthenticationError:
+                        self.logger.warning(
+                                "Existing credentials for profile %r are invalid or expired; forcing login.", profile_name)
+                        credentials = None
+            if credentials is not None:
+                self.logger.debug("Credentials already exist for this profile; skipping login.")
+                return credentials
             
-            _ = await async_cg_browser_login(
+        if manual or remember_me is not None or cg_session is not None:
+            # manual login
+            if remember_me is None or cg_session is None:
+                raise ValueError("Both --remember-me and --cg-session must be provided for manual login.")
+            credentials = CgCredentials(
+                remember_me_cookie=remember_me,
+                cg_session_cookie=cg_session,
+            )
+            set_credentials(credentials, profile_name=profile_name)
+            self.logger.info("Manual login credentials set successfully.")
+            return credentials
+        else:
+            # browser login
+            self.eprint("Starting browser login. Please finish logging in in browser window that pops up...")
+            credentials = await async_cg_browser_login(
                     profile_name=profile_name,
                     clean=clean,
                     timeout=timeout,
                     save=True,
                 )
+            self.eprint("Logged in successfully via browser. Credentials saved.")
+            return credentials
+
+    @cli_command("Log in and save the credentials. By default, opens a browser window for the user to log in interactively.")
+    async def cmd_login(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            timeout: float = self.args.timeout
+            manual: bool = self.args.manual
+            clean: bool = self.args.clean
+            profile_name: str | None = self.args.profile
+            force: bool = self.args.force
+            no_validate: bool = self.args.no_validate
+            remember_me: str | None = self.args.remember_me
+            cg_session: str | None = self.args.cg_session
             
-            self.eprint("Logged in successfully. Credentials saved.")
+            _ = await self.login_helper(
+                    manual=manual,
+                    timeout=timeout,
+                    clean=clean,
+                    profile_name=profile_name,
+                    force=force,
+                    remember_me=remember_me,
+                    cg_session=cg_session,
+                )
+            
+            if not no_validate:
+                # level 4: validated login required--confirm the just-saved credentials actually work
+                await self.get_client(require_credentials=True, validate=True)
+            
+            # For debugging, might log credentials here, but omitting here to keep creds out of logs.
+            self.logger.debug(f"Login completed successfully for profile {profile_name or 'default'!r}")
 
         p = cmd.get_parser()
         p.add_argument(
-                "--timeout", "-t", type=float, default=300.0, metavar="SECONDS",
-                help="Maximum seconds to wait for login completion (default: 300).",
+                "--force", "-f", default=False, action="store_true",
+                help="Force a login even if persistent credentials already exist. By default, login is skipped if "
+                     "credentials already exist for the profile. Note that freshness of credentials is not checked in any case; "
+                     "if they are expired, the client will fail to use them.",
+            )
+        p.add_argument(
+                "--no-validate", "-q", default=False, action="store_true",
+                help="Skip validation of the credentials after login.",
+            )
+        p.add_argument(
+                "--manual", "-m", default=False, action="store_true",
+                help="Perform manual login instead of browser login. Implied by presence of --remember-me or --cg-session.",
+            )
+        p.add_argument(
+                "--remember-me", "-r", default=None,
+                help="Remember me cookie value, for manual (non-browser) login.",
+            )
+        p.add_argument(
+                "--cg-session", "-s", default=None,
+                help="cgSession cookie value, for manual (non-browser) login.",
             )
         p.add_argument(
                 "--clean", "-c", default=False, action="store_true",
-                help="Force a clean browser profile.",
+                help="If a browser is created, force a clean browser profile and a fresh login flow. By default, the existing browser "
+                     "session state is used if it exists, so that repeated logins for the same profile are generally automatic.",
+            )
+        p.add_argument(
+                "--timeout", "-t", type=float, default=300.0, metavar="SECONDS",
+                help="Maximum seconds to wait for browser login completion (default: 300).",
+            )
+        return handler
+    
+    async def logout_helper(
+                self,
+                *,
+                profile_name: str | None = None,
+                keep_browser_session: bool = False,
+            ) -> None:
+        """Performs the logout process, clearing the credentials and optionally the browser session state.
+        
+        Args:
+            profile_name:       The name of the profile to use for storing credentials and browser session state.
+                                Allows for multiple independent session profiles; e.g., if multiple CodinGame
+                                accounts are used. If None, defaults to the default profile.
+            keep_browser_session: If True, keep the existing browser session even when logging out of the profile.
+                                  If the browser session is logged in, it will remain logged in and will auto-login
+                                  without user authentication at the next profile login. By default, the browser
+                                  session is deleted on logout, which will require a full login flow in the browser.
+        """
+        
+        if not keep_browser_session:
+            # Clear browser session state for this profile
+            cg_browser_delete_session(profile_name=profile_name, delete_credentials=False)
+            self.eprint("Browser session state cleared for this profile.")
+
+        # Clear credentials from persistent store
+        set_credentials(None, profile_name=profile_name)
+        self.eprint("Credentials cleared from persistent store.")
+
+    @cli_command("Log out of a given profile's session.")
+    async def cmd_logout(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            profile_name: str | None = self.args.profile
+            keep_browser_session: bool = self.args.keep_browser_session
+            
+            await self.logout_helper(
+                    profile_name=profile_name,
+                    keep_browser_session=keep_browser_session,
+                )
+
+            self.logger.debug(f"Logout completed successfully for profile {profile_name or 'default'!r}")
+
+        p = cmd.get_parser()
+        p.add_argument(
+                "--keep-browser-session", "-k", default=False, action="store_true",
+                help="Keep the existing browser session even when logging out of the profile. "
+                     "If the browser session is logged in, it will remain logged in and will auto-login without user authentication "
+                     "at the next profile login. By default, the browser session is deleted on logout, which will require "
+                     "a full login flow in the browser.",
             )
         return handler
 
+    @cli_command("Show the current logged-in user and other session info for the given profile.")
+    async def cmd_whoami(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            use_json: bool = self.args.json
+            # level 2: best-effort--report what's there rather than erroring if nothing is
+            client = await self.get_client()
+            profile = client.profile_name
+            credentials = client.credentials
+            has_credentials = credentials is not None
+            codingamer_id: int | None = client.codingamer_id
+            remember_me: str | None = None
+            cg_session: str | None = None
+            credentials_valid: bool | None = None
+            if credentials is not None:
+                remember_me = credentials.remember_me_cookie
+                cg_session = credentials.cg_session_cookie
+                try:
+                    await client.validate_credentials()
+                    credentials_valid = True
+                except CgAuthenticationError:
+                    credentials_valid = False
+            if use_json:
+                output = {
+                    "profile": profile,
+                    "hasCredentials": has_credentials,
+                    "codingamerId": codingamer_id,
+                    "credentialsValid": credentials_valid,
+                    "rememberMe": remember_me,
+                    "cgSession": cg_session,
+                }
+                print(json.dumps(output, indent=4, sort_keys=True))
+            else:
+                print(f"Profile: {profile}")
+                print(f"Has credentials: {has_credentials}")
+                print(f"Codingamer ID: {codingamer_id}")
+                if has_credentials:
+                    print(f"Credentials valid: {credentials_valid}")
+                    print(f"rememberMe cookie: {remember_me}")
+                    print(f"cgSession cookie: {cg_session}")
+
+
+        return handler
+
+    @cli_command("Raw (unstructured JSON) API commands.")
+    async def cmd_raw_api(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Invoke a raw API request on a service endpoint. stdin must be a json-encoded list of args.")
+    async def cmd_raw_api__service_request(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            service_name: str = self.args.service_name
+            func_name: str = self.args.func_name
+            data: str | None = self.args.req_args
+            # level 2: attach credentials if available, but don't require them--this is a raw/low-level
+            # tool that should also work against genuinely public endpoints without being logged in.
+            client = await self.get_client()
+            if data is None:
+               data = cast(str, sys.stdin.read())
+            json_list: JsonList = cast(JsonList,json.loads(data))
+            if not isinstance(json_list, list):
+                raise ValueError("Input JSON must be a list of arguments.")
+            response: JsonData = await client.service_request(
+                    service_name=service_name,
+                    func_name=func_name,
+                    args=json_list,
+                    require_login=False,
+                )
+            print(json.dumps(response, indent=2, sort_keys=True))
+
+        p = cmd.get_parser()
+        p.add_argument("service_name", type=str, metavar="SERVICE-NAME",
+                       help="Service name; e.g., 'CodingamerService'.")
+        p.add_argument("func_name", type=str, metavar="FUNC-NAME",
+                       help="Endpoint name; e.g., 'getCodingamer'.")
+        p.add_argument("--req-args", "-a", type=str, default=None, metavar="JSON-ARGS",
+                       help="Optional JSON-encoded list to send as the request arg. If not provided, stdin is read for the "
+                            "JSON-encoded list of args.")
+        return handler
+
+    
     @cli_command("Low-level API commands.")
     async def cmd_api(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         return None  # No handler for the parent command; subcommands will be handled by their own handlers.
@@ -241,12 +475,15 @@ class CgCli(CliBase):
             timestamp: datetime | None = self.args.timestamp
             format: str | None = self.args.format
             self.eprint(f"Downloading file with ID: {file_id}")
+            # level 2: not every file requires a login--attach credentials if available and let
+            # the server decide (401/403) whether this particular file actually needs them.
             client = await self.get_client()
             file_info: CgDownloadFileResult = await client.download_file(
                     file_id,
                     format=format,
-                    timestamp=timestamp
-                ) # type: ignore
+                    timestamp=timestamp,
+                    require_login=False,
+                )
             self.eprint(
                     f"Fetched file: {file_info.filename!r}; content-type={file_info.content_type!r}, "
                     f"size={len(file_info.content)} bytes, hash={file_info.hash!r}"
@@ -260,7 +497,7 @@ class CgCli(CliBase):
                        help="Server file ID number.")
         p.add_argument("--format", type=str, default=None,
                        help="Optional format string to append to the URL as a query parameter; e.g., 'puzzle_tile'.")
-        p.add_argument("--timestamp", type=self.parse_timestamp, default=None, metavar="TIMESTAMP",
+        p.add_argument("--timestamp", type=parse_timestamp, default=None, metavar="TIMESTAMP",
                        help="Optional timestamp. Can be milliseconds since epoch (e.g., '1680000000000'),"
                             " a duration string (e.g., '1h30m'), a relative duration from now (e.g., '-1h30m'),"
                             " or an ISO 8601 datetime string.")
@@ -273,7 +510,7 @@ class CgCli(CliBase):
             content_type: str = self.args.content_type
             prev_id: int | None = self.args.prev_id
             prev_content_hash: str | None = self.args.prev_content_hash
-            client = await self.get_client()
+            client = await self.get_client(require_credentials=True)
             content = self.get_binary_stdin().read()
             content_hash = compute_content_hash(content)
             self.eprint(
@@ -314,6 +551,10 @@ class CgCli(CliBase):
         p.add_argument(
                 "--profile", "-p", default=None,
                 help="Profile name to store credentials and browser session state under. Defaults to the client's default profile.",
+            )
+        p.add_argument(
+                "--json", "-j", default=False, action="store_true",
+                help="Where supported, output information in JSON format.",
             )
 
         # No handler for the main command; bare command is not allowed

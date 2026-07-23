@@ -7,6 +7,8 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import logging
+from abc import ABC, abstractmethod
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from http import HTTPStatus
@@ -16,9 +18,9 @@ from typing import Final, NamedTuple
 from json_data_types import JsonData
 
 from ...common.dataclass_wizard_x import CatchAll, JSONWizardX
-from ...common.typedefs import DEFAULT_PROFILE_NAME, Self
+from ...common.typedefs import Self
+from ...credentials.cg_credentials import CgCredentials, get_credentials_with_override
 from ...version import __version__
-from .credentials import CgCredentials, get_credentials_store, get_credentials_with_override
 
 __all__ = [
     "compute_content_hash",
@@ -89,7 +91,6 @@ DEFAULT_HEADERS: dict[str, str] = {
             f"codingame-client/{__version__} (+https://github.com/mckelvie-org/codingame-client)"
         ),
         "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/json",
     }
 
 class _Missing(Enum):
@@ -177,7 +178,7 @@ class CgClientHttpError(Exception):
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.status_code}, {self.raw_message!r})"
 
-class CgRawClient:
+class CgRawClient(ABC):
     """Base class common to both sync and async clients."""
 
     CODINGAME_BASE_URL: Final[str] = "https://www.codingame.com"
@@ -194,6 +195,11 @@ class CgRawClient:
 
     CODINGAME_STATIC_SERVLET_URL: Final[str] = CODINGAME_STATIC_BASE_URL + "/servlet"
     """Base URL for the CodinGame static servlet endpoint. Used for file downloads."""
+    
+    profile_name: str | None = None
+    """The name of the profile to use for persistent credentials. Allows for multiple independent session profiles;
+       e.g., if multiple CodinGame accounts are used. If None, defaults to the default profile. May
+       be provided at construction or at authenticate() time."""
 
     credentials: CgCredentials | None = None
     """If the client is logged in, this will hold the credentials used for authentication."""
@@ -219,24 +225,42 @@ class CgRawClient:
     def __init__(
                 self,
                 *,
+                profile_name: str | None = None,
                 default_http_headers: dict[str, str] | None = None,
                 app_name: str | None = None,
             ):
         """Create a CgRawClient.
 
         Args:
+            profile_name: Optional name of the profile to use for persistent credentials. Allows
+                          for multiple independent session profiles; e.g., if multiple CodinGame accounts are used.
+                          If None, defaults to the default profile. This parameter may be overridden at authenticate() time.
             app_name: Optional name of the application using the client. Used to allow different applications to have different
                       cached credentials in the same environment. If None, a default application name is used.
         """
+        self.profile_name = profile_name
         self.app_name = app_name
         self.default_http_headers = default_http_headers or DEFAULT_HEADERS
+        
+    @abstractmethod
+    def set_cookie(
+                self,
+                name: str,
+                value: str | None = None,
+                *,
+                domain: str = "www.codingame.com",
+            ) -> None:
+        """Set a cookie for the client session.
+           If value is None, the cookie will be deleted.
+           
+           This method must be implemented by subclasses, since the sync and async clients use different HTTP libraries.
+        """
+        ...
+        
 
     def set_credentials(
                 self,
                 credentials: CgCredentials | None,
-                *,
-                cache: bool = True,
-                save: bool = True
             ) -> CgCredentials:
         """Set the credentials for the client session.
 
@@ -247,55 +271,52 @@ class CgRawClient:
            credentials with only one (or neither) are treated the same as no credentials at all. This is
            because enough CodinGame endpoints require cgSession specifically (not just rememberMe) that a
            partial session isn't useful in practice.
-
-           If cache is True (the default), the credentials will be cached process-widefor the app_name associated with the
-           client session. Ignored and trated as True if save is True.
-
-           If save is True, the credentials will be written to the per-app private credentials file.
+           
+           The rememberMe and cgSession cookies are updated to match the credentials.
+           
+           Persistent credentials are not affected.
 
            Returns:
-                The (deep-copied) credentials that are now cached.
+                The (deep-copied) credentials that are now cached. If there are no credentials, returns an empty CgCredentials() object.
         """
+        if credentials is not None and (credentials.remember_me_cookie is None or credentials.cg_session_cookie is None):
+            credentials = None
         if credentials is None:
             credentials = CgCredentials()
-        cache = cache or save
-        if cache:
-            profile_store = get_credentials_store(app_name=self.app_name)
-            profile_store.set_credentials(DEFAULT_PROFILE_NAME, credentials)
-            if save:
-                profile_store.commit()
-            credentials = profile_store.get_credentials(DEFAULT_PROFILE_NAME) or CgCredentials()
-        if credentials is None or credentials.remember_me_cookie is None or credentials.cg_session_cookie is None:
             # Both cookies are required for the client to be considered logged in--enough CodinGame
             # endpoints require cgSession specifically that a rememberMe-only session isn't useful.
             self.credentials = None
             self.login_attempted = False
             self.codingamer_id = None
+            self.set_cookie("rememberMe", None)
+            self.set_cookie("cgSession", None)
         else:
             # The codingamer ID is derived from the first 7 characters of the rememberMe cookie
+            remember_me_cookie = credentials.remember_me_cookie
+            cg_session_cookie = credentials.cg_session_cookie
+            assert remember_me_cookie is not None and cg_session_cookie is not None
             try:
-                self.codingamer_id = int(credentials.remember_me_cookie[:7])
+                self.codingamer_id = int(remember_me_cookie[:7])
             except (ValueError, TypeError) as e:
                 raise ValueError("Invalid rememberMe cookie format; cannot derive codingamer ID.") from e
             self.credentials = credentials
+            self.set_cookie("rememberMe", remember_me_cookie)
+            self.set_cookie("cgSession", cg_session_cookie)
             self.login_attempted = True
+            
         return credentials
 
-    def clear_credentials(self, *, cache: bool = True, save: bool = True) -> None:
+    def clear_credentials(self) -> None:
         """Clear the credentials for the client session, effectively logging out the client session.
 
-           If cache is True (the default), the cached credentials will be cleared process-wide for the app_name associated with the
-           client session. Ignored and treated as True if save is True.
-
-           If save is True, the credentials will be cleared from the per-app private credentials file.
-
+           Persistent credentials are not affected.
         """
-        self.set_credentials(None, cache=cache, save=save)
-        self.login_attempted = False
+        self.set_credentials(None)
 
     def resolve_credentials(
                 self,
                 *,
+                profile_name: str | _Missing | None = MISSING,
                 remember_me_token: str | None = None,
                 cg_session_token: str | None = None,
                 credentials: CgCredentials | None = None,
@@ -316,6 +337,10 @@ class CgRawClient:
         if they want to cache the result.
 
         Args:
+            profile_name: Optional name of the profile to use for persistent credentials. Allows
+                          for multiple independent session profiles; e.g., if multiple CodinGame accounts are used.
+                          If not provided or MISSING, defaults to the profile_name provided at client construction time.
+                          If None, defaults to the default profile.
             remember_me_token: Optional override for the `rememberMe` cookie value.
             cg_session_token: Optional override for the `cgSession` cookie value.
             credentials: Optional `CgCredentials` object to use as the base for resolution.
@@ -323,19 +348,18 @@ class CgRawClient:
 
         Returns:
             Resolved `CgCredentials` object, with parameter and environment variable overrides applied.
+            If there are no valid credentials, returns an empty `CgCredentials()` object.
         """
         if not force and self.credentials is not None:
-            credentials = self.credentials
+            credentials = deepcopy(self.credentials)
         else:
-            profile_store = get_credentials_store(app_name=self.app_name)
-            if force:
-                # Bypass the profile store's in-memory cache and re-read from persistent storage.
-                profile_store.get_profile_store(DEFAULT_PROFILE_NAME).fetch(force=True)
+            if profile_name is MISSING:
+                profile_name = self.profile_name
             credentials = get_credentials_with_override(
+                profile_name=profile_name,
                 credentials=credentials,
                 remember_me_token=remember_me_token,
                 cg_session_token=cg_session_token,
-                store=profile_store,
             )
         return credentials
 

@@ -16,7 +16,7 @@ from ...common.typedefs import (
     JsonScalar,
     override,
 )
-from .credentials import (
+from ...credentials.cg_credentials import (
     CG_SESSION_TOKEN_ENV_VAR,
     REMEMBER_ME_TOKEN_ENV_VAR,
     CgCredentials,

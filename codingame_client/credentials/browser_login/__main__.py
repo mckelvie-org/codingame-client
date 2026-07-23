@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import logging
 
-from codingame_client.browser_login.async_ import async_cg_browser_login
+from codingame_client.credentials.browser_login.async_ import async_cg_browser_login
 
 logger = logging.getLogger(__name__)
 

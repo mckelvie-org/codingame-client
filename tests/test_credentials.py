@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from private_files import PrivateDirManager
 
-from codingame_client.client.common.credentials import (
+from codingame_client.credentials.cg_credentials import (
     CG_SESSION_TOKEN_ENV_VAR,
     REMEMBER_ME_TOKEN_ENV_VAR,
     CgCredentials,

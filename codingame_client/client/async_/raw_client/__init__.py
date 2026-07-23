@@ -16,8 +16,8 @@ from typing import cast
 import aiohttp
 from json_data_types import JsonData, JsonDict, JsonList
 
-from ....common.typedefs import Never, Self
-from ...common.credentials import CgCredentials
+from ....common.typedefs import Never, Self, override
+from ....credentials.cg_credentials import CgCredentials
 from ...common.raw_client import (
     MISSING,
     CgAuthenticationError,
@@ -98,6 +98,7 @@ class CgAsyncRawClient(CgRawClient):
     def __init__(
                 self,
                 *,
+                profile_name: str | None = None,
                 default_http_headers: dict[str, str] | None = None,
                 trace_configs: list[aiohttp.TraceConfig] | None = None,
                 app_name: str | None = None,
@@ -105,12 +106,16 @@ class CgAsyncRawClient(CgRawClient):
         """Create a CgAsyncRawClient.
 
         Args:
-            default_http_headers: Optional default HTTP headers for requests. If None, default headers are used.
+            profile_name: Optional name of the profile to use for persistent credentials. Allows
+                          for multiple independent session profiles; e.g., if multiple CodinGame accounts are used.
+                          If None, defaults to the default profile. This parameter may be overridden at authenticate() time.
+            default_http_headers:
+                          Optional default HTTP headers for requests. If None, default headers are used.
             trace_configs: Optional list of aiohttp.TraceConfig for the session. If None, an empty list is used.
             app_name: Optional name of the application using the client. Used to allow different applications to have different
                       cached credentials in the same environment. If None, a default application name is used.
         """
-        super().__init__(default_http_headers=default_http_headers, app_name=app_name)
+        super().__init__(profile_name=profile_name, default_http_headers=default_http_headers, app_name=app_name)
         if trace_configs is None:
             trace_configs = []
         self._trace_configs = list(trace_configs)
@@ -147,7 +152,8 @@ class CgAsyncRawClient(CgRawClient):
     async def close(self) -> None:
         """Close the client session."""
         await self.session.close()
-        
+    
+    @override
     def set_cookie(
                 self,
                 name: str,
@@ -172,18 +178,6 @@ class CgAsyncRawClient(CgRawClient):
             morsel["path"] = "/"
             self.session.cookie_jar.update_cookies(cookie)
 
-    async def logout(self, cache: bool = True, save: bool = True) -> None:
-        """Log out the client session by clearing the credentials and cookies.
-        
-           If cache is True (the default), the cached credentials will be cleared process-wide for the app_name associated with the
-           client session. Ignored and treated as True if save is True.
-           
-           If save is True, the credentials will be cleared from the per-app private credentials file.
-        """
-        self.set_cookie("rememberMe", None)
-        self.set_cookie("cgSession", None)
-        self.clear_credentials(cache=cache, save=save)
-        
     async def validate_credentials(self) -> None:
         """Verifies that current client credentials are valid by making a test request to the CodinGame API.
            Raises CgAuthenticationError if the credentials are invalid or if the request fails for any reason.
@@ -209,19 +203,35 @@ class CgAsyncRawClient(CgRawClient):
         except CgAsyncClientHttpError as e:
             raise CgAuthenticationError("Invalid client credentials.") from e
             
-    async def login(
+    async def authenticate(
                 self,
                 *,
+                profile_name: str | _Missing | None = MISSING,
                 remember_me_token: str | None = None,
                 cg_session_token: str | None = None,
                 credentials: CgCredentials | None = None,
                 force: bool = False,
-                cache: bool = True,
-                save: bool = True,
-                validate: bool = True
+                require_credentials: bool = False,
+                validate: bool = False
             ) -> None:
-        """Authenticate the client session.
-        
+        """Authenticate the client session, at one of three independent strictness levels
+           (`require_credentials` x `validate`; a fourth level, no authentication at all, is
+           available by simply not calling this method--see `service_request`'s `require_login`):
+
+               require_credentials=False, validate=False (the default): best-effort. Resolves
+                   credentials and applies them to the session if available, but does not raise
+                   if none are available--the session is simply left unauthenticated.
+               require_credentials=True,  validate=False: login required. Raises
+                   CgAuthenticationError if no credentials are available. Does not check that
+                   they are still valid/unexpired.
+               require_credentials=True,  validate=True:  validated login required. Raises if no
+                   credentials are available, and separately raises if they fail a live
+                   validation check against the server (e.g. expired/revoked).
+
+           (`require_credentials=False, validate=True` is also accepted: best-effort resolution,
+           and if that happens to find credentials, they are validated too; if it doesn't, this
+           is still not an error.)
+
         Resolution order:
             1. If force is False and credentials are already cached in the client, do nothing.
             2. If non-null `remember_me_token` / `cg_session_token` are provided, use those values.
@@ -230,48 +240,56 @@ class CgAsyncRawClient(CgRawClient):
             5. If neither is provided and force is False, check the in-process cache for the app's credentials.
             6. If not in the cache, check the per-app private credentials file (which populates the cache on success).
             7. If none of the above are available, return an empty `CgCredentials()`
-        
+
         Args:
+            profile_name: Optional name of the profile to use for persistent credentials. Allows
+                          for multiple independent session profiles; e.g., if multiple CodinGame accounts are used.
+                          If not provided or MISSING, the profile provided at client construction time is used.
+                          If None, defaults to the default profile.
             remember_me_token: Optional override for the `rememberMe` cookie value.
             cg_session_token: Optional override for the `cgSession` cookie value.
             credentials: Optional `CgCredentials` object to use as the base for resolution.
             force: If True, ignore the client session and in-process cache and reload from the credentials file.
-            cache: If True, clear the process-wide cached credentials for the app.
-            save: If True, clear the credentials from the per-app private credentials file.
+            require_credentials: If True, raise CgAuthenticationError if no usable credentials could
+                          be resolved. If False (the default), silently leave the session unauthenticated.
             validate: If True, verify that the resolved credentials are valid by making a test request.
+                          Has no effect if no credentials were resolved and `require_credentials` is False.
         """
         try:
             self.login_attempted = True
             if not force and self.credentials is not None:
                 return
             resolved_credentials = self.resolve_credentials(
+                profile_name=profile_name,
                 remember_me_token=remember_me_token,
                 cg_session_token=cg_session_token,
                 credentials=credentials,
                 force=force
             )
-            if resolved_credentials.remember_me_cookie is None or resolved_credentials.cg_session_cookie is None:
-                raise CgAuthenticationError(
-                        "Both a rememberMe and a cgSession cookie are required to log in; "
-                        "only one (or neither) was available."
-                    )
-            self.set_credentials(resolved_credentials, cache=cache, save=save)
-            self.set_cookie("rememberMe", resolved_credentials.remember_me_cookie)
-            self.set_cookie("cgSession", resolved_credentials.cg_session_cookie)
+            have_credentials = (
+                resolved_credentials.remember_me_cookie is not None
+                and resolved_credentials.cg_session_cookie is not None
+            )
+            if not have_credentials:
+                if require_credentials:
+                    raise CgAuthenticationError(
+                            "Both a rememberMe and a cgSession cookie are required to log in; "
+                            "only one (or neither) was available."
+                        )
+                return
+            self.set_credentials(resolved_credentials)
             if validate:
                 await self.validate_credentials()
         except Exception:
-            self.set_cookie("rememberMe", None)
-            self.set_cookie("cgSession", None)
-            self.clear_credentials(cache=cache, save=save)
+            self.clear_credentials()
             raise
             
-    async def require_login(self) -> None:
+    async def require_authenticate(self) -> None:
         """Ensure that the client session is logged in (i.e., has both a rememberMe and a cgSession
            cookie--see `set_credentials` for why both are required). Implicitly log in if possible.
            If not, raise CgAuthenticationError."""
         if self.credentials is None and not self.login_attempted:
-            await self.login()
+            await self.authenticate(require_credentials=True)
         if self.credentials is None:
             raise CgAuthenticationError()
 
@@ -293,7 +311,6 @@ class CgAsyncRawClient(CgRawClient):
                    If a transport error occurs, if the response content could not be decoded at all,
                    or if the status code is not 2xx.
         """
-
 
         # Note here that we attempt to decode the response as JSON even if the status code is not 2xx,
         # because some endpoints return JSON error messages with non-2xx status codes. The content will be included in the
@@ -409,7 +426,7 @@ class CgAsyncRawClient(CgRawClient):
             args = []
         endpoint_url = f"{self.CODINGAME_SERVICES_URL}{service_name}/{func_name}"
         if require_login:
-            await self.require_login()
+            await self.require_authenticate()
         return endpoint_url, args
 
     async def service_request(
@@ -579,7 +596,7 @@ class CgAsyncRawClient(CgRawClient):
         form.add_field("file", content, filename=filename, content_type=content_type)
         form.add_field("data", params_text, content_type="application/json")
 
-        await self.require_login()
+        await self.require_authenticate()
         async with self.session.post(endpoint_url, data=form) as response:
             result = await self.get_json_dict_response(response)
         return result
@@ -588,24 +605,31 @@ class CgAsyncRawClient(CgRawClient):
             self,
             id: int,
             format: str | None = None,
-            timestamp: datetime |None = None
+            timestamp: datetime |None = None,
+            *,
+            require_login: bool = True,
         ) -> CgDownloadFileResult:
         """Downloads a file from the CodinGame servers, returning a tuple of (file_bytes, content_type).
-        
+
         Generates a GET request to the URL https://static.codingame.com/servlet/fileservlet?id={id}&format={format}&timestamp={timestamp}
-        
+
         Args:
             id:        The globally unique ID of the file to download, as provided by the server at upload time.
             format:    Optional format string to request a specific format of the file. If not provided, the server
                        will return the file in its original format.
             timestamp: Optional timestamp to request a specific version of the file. If not provided, the server will
                        return the latest version of the file.
-                       
+            require_login:
+                       If True (the default), the session must be logged in. If False, the request is made
+                       with whatever credentials (if any) are already attached to the session--some files
+                       are publicly downloadable and don't need a login at all, so this allows the server to
+                       be the one to decide (via a 401/403) rather than always requiring it up front.
+
         Returns:
             A CgDownloadFileResult object containing the file bytes, content type, and filename (if provided by the server).
         Raises:
             CgAuthenticationError:
-                If the session is not authenticated and cannot implicitly login.
+                If require_login is True and the session is not authenticated and cannot implicitly login.
             CgAsyncClientHttpError:
                 If a transport error occurs
         """
@@ -616,7 +640,8 @@ class CgAsyncRawClient(CgRawClient):
             # The timestamp in the URL is interpreted as milliseconds since the epoch.
             ms_timestamp = int(timestamp.timestamp() * 1000)
             url += f"&timestamp={ms_timestamp}"
-        await self.require_login()
+        if require_login:
+            await self.require_authenticate()
         async with self.session.get(url) as response:
             try:
                 response.raise_for_status()
