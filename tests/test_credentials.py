@@ -72,11 +72,11 @@ def test_credentials_saves_loads_round_trip() -> None:
 
 
 def test_credentials_catch_all_preserves_unknown_fields() -> None:
-    restored = CgCredentials.loads('{"remember_me_cookie": "rm", "future_field": 42}')
+    restored = CgCredentials.loads('{"rememberMeCookie": "rm", "futureField": 42}')
     assert restored.remember_me_cookie == "rm"
-    assert restored.extra_data == {"future_field": 42}
+    assert restored.extra_data == {"futureField": 42}
     # Round-tripping again should not silently drop the unknown field.
-    assert CgCredentials.loads(restored.saves()).extra_data == {"future_field": 42}
+    assert CgCredentials.loads(restored.saves()).extra_data == {"futureField": 42}
 
 
 # --- CgInMemoryCredentialsStorer -----------------------------------------------------------

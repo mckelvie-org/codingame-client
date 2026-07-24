@@ -79,17 +79,20 @@ class CgCredentials(JSONWizardX):
        only the `rememberMe` cookie before the `cgSession` cookie becomes available.
     """
 
+    # `extra_data` is deliberately the first field with a default: dataclass_wizard 1.0.0 mis-binds
+    # any defaulted field positioned immediately before it (silently, no error) to the CatchAll's
+    # own value. Keeping it first among the defaulted fields makes that impossible. There are no
+    # required fields in this class, so it ends up first overall.
+    extra_data: CatchAll = field(default_factory=dict)
+    """Unrecognized fields encountered when loading a credentials file, preserved so that
+       round-tripping through `saves()`/`loads()` does not silently drop data."""
+
     remember_me_cookie: str | None = None
     """Value of the CodinGame `rememberMe` cookie, used to establish a new session."""
 
     cg_session_cookie: str | None = None
     """Value of the CodinGame `cgSession` cookie for an active session. Required for some
        operations (e.g., file upload) that are not supported via `rememberMe` alone."""
-
-    # kw_only=True is mandatory if this field follows a field with defaults
-    extra_data: CatchAll = field(default_factory=dict, kw_only=True)
-    """Unrecognized fields encountered when loading a credentials file, preserved so that
-       round-tripping through `saves()`/`loads()` does not silently drop data."""
        
 class CgCredentialsStorer(ABC):
     """Abstract base class for a storer of a single CgCredentials instance."""

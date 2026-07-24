@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Collection
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -16,8 +17,31 @@ __all__ = [
     "JsonDictEncoder", "JsonDict", "validate_json_dict",
     "DEFAULT_JSON_DECODER",
     "DEFAULT_JSON_ENCODER",
-    "Alias",
+    "Alias", "CgEpochMillis",
 ]
+
+
+class CgEpochMillis(datetime):
+    """A `datetime` subclass used only as the declared type of the private storage field behind a
+       millisecond-epoch-int timestamp property (see e.g. `CgNotification.date`). Never exposed
+       publicly--the property getter/setter pair around it deals in plain `datetime` values, calling
+       `upcast()` in the setter so the stored value always (de)serializes correctly."""
+
+    @classmethod
+    def upcast(cls, value: datetime) -> Self:
+        """Return `value` unchanged if it's already a `CgEpochMillis`; otherwise return a copy with
+           UTC timezone properly inferred. Naive values are assumed to be in the local timezone;
+           aware values are converted, preserving the same instant. Property setters should call
+           this rather than re-implementing the conversion."""
+        return value if isinstance(value, cls) else cls.fromtimestamp(value.timestamp(), tz=timezone.utc)
+
+
+def _load_cg_epoch_millis(value: int) -> CgEpochMillis:
+    return CgEpochMillis.fromtimestamp(value / 1000, tz=timezone.utc)
+
+
+def _dump_cg_epoch_millis(value: datetime) -> int:
+    return int(value.timestamp() * 1000)
 
 class JsonDictDecoder(Protocol):
     """A callable that takes a JSON string and returns a JsonDict. Compatible with json.loads."""
@@ -43,8 +67,20 @@ DEFAULT_JSON_DECODER: JsonDictDecoder = json.loads
 DEFAULT_JSON_ENCODER: JsonDictEncoder = json.dumps
 
 class JSONWizardX(JSONWizard):
-    """Refinement of dataclass_wizard.JSONWizard to use stronger JSONDict type hints"""
-    
+    """Refinement of dataclass_wizard.JSONWizard to use stronger JSONDict type hints.
+
+       All JSON keys are camelCase by convention--this maps them to/from snake_case field
+       names by default. Fields left at their default value are omitted when dumping, by
+       default. Subclasses that need to customize `Meta` further should inherit from
+       `JSONWizardX.Meta` (e.g. `class _(JSONWizardX.Meta): ...`) rather than
+       `JSONWizard.Meta` directly, so these defaults aren't lost."""
+
+    class Meta(JSONWizard.Meta):
+        case = "CAMEL"
+        skip_defaults = True
+        type_to_load_hook = {CgEpochMillis: ("runtime", _load_cg_epoch_millis)}
+        type_to_dump_hook = {CgEpochMillis: ("runtime", _dump_cg_epoch_millis)}
+
     def to_dict(
                 self,
                 *,

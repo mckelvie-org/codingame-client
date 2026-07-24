@@ -16,7 +16,7 @@ from argparse_wizard import CliBase, CliCommand, OptCmdFunc, cli_command
 from json_data_types import JsonData, JsonList
 from rich.console import Console
 
-from ..client.async_.raw_client import CgAsyncRawClient
+from ..client.async_.client import CgAsyncClient
 from ..client.common.raw_client import CgAuthenticationError, CgDownloadFileResult, compute_content_hash
 from ..common.timestamps import parse_timestamp
 from ..common.typedefs import Self, override
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 class CgCli(CliBase):
     """Command-line interface for the contribution manager."""
 
-    _client: CgAsyncRawClient | None = None
+    _client: CgAsyncClient | None = None
     _client_authenticated: bool = False
     _client_validated: bool = False
     _console: Console | None = None
@@ -101,8 +101,8 @@ class CgCli(CliBase):
         trace_http: bool = self.args.trace_http
         return [self._make_trace_config()] if trace_http else []
     
-    async def get_client(self, *, require_credentials: bool = False, validate: bool = False) -> CgAsyncRawClient:
-        """Return the CgAsyncRawClient instance, initializing it if necessary.
+    async def get_client(self, *, require_credentials: bool = False, validate: bool = False) -> CgAsyncClient:
+        """Return the CgAsyncClient instance, initializing it if necessary.
 
            Credentials are always resolved and applied to the session on first use, best-effort
            (never raises if none are available)--this is "level 2" of four auth-strictness levels:
@@ -121,7 +121,7 @@ class CgCli(CliBase):
         """
         if self._client is None:
             profile: str | None = self.args.profile
-            self._client = CgAsyncRawClient(
+            self._client = CgAsyncClient(
                 profile_name=profile,
                 trace_configs=self.get_trace_configs()
             )
@@ -231,7 +231,7 @@ class CgCli(CliBase):
             if credentials is not None and not no_validate:
                 # verify that the credentials are valid by attempting to authenticate with them in a temporary
                 # client session.  If they are invalid, fall through to the login flow.
-                async with CgAsyncRawClient(
+                async with CgAsyncClient(
                             profile_name=profile_name,
                             trace_configs=self.get_trace_configs()
                         ) as client:
@@ -537,6 +537,25 @@ class CgCli(CliBase):
                        help="Optional previous file ID for the uploaded file; e.g., 12345.")
         p.add_argument("--prev-content-hash", type=str, default=None,
                        help="Optional previous content hash for the uploaded file.")
+        return handler
+
+    @cli_command("Notification service commands.")
+    async def cmd_api__notification(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Find unread notifications for a codingamer.")
+    async def cmd_api__notification__find_unread_notifications(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            # level 2 here is enough: notification_find_unread_notifications() enforces its own
+            # login requirement (the endpoint always needs a valid session) and resolves the
+            # default codingamer_id itself.
+            client = await self.get_client()
+            notifications = await client.notification_find_unread_notifications(codingamer_id)
+            print(json.dumps([n.to_dict() for n in notifications], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer ID to find unread notifications for. Defaults to the logged-in codingamer's ID.")
         return handler
 
     @cli_command("Codingame client command-line interface.")

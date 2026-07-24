@@ -5,9 +5,10 @@ JSON-serializable dataclasses for the findContribution and updateContribution Co
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
-from .....common.dataclass_wizard_x import Alias, CatchAll, JSONWizardX
+from .....common.dataclass_wizard_x import Alias, CatchAll, CgEpochMillis, JSONWizardX
 
 CgSolutionLanguage = str
 """The programming language used for the reference solution, e.g. "Python3", "Java", "C++", etc."""
@@ -98,18 +99,20 @@ CgContributionId = str
 class CgTopic(JSONWizardX):
     """A topic associated with a contribution, e.g. "Parsing", "Sorting", etc. Most of
        the fields are fetched from the server in a search for topics."""
-    class _(JSONWizardX.Meta):
-        skip_defaults = True
     id: int
     handle: str
     category: str              # e.g. "FUNDAMENTALS", "ADVANCED", "INTERMEDIATE"
     label_map: dict[str, str]  # language-code → label, e.g. {"1": "Parsing", "2": "Parsing"}
     puzzle_count: int
     parent_topic_id: int
+
+    # `extra_data` is deliberately the first field with a default: dataclass_wizard 1.0.0 mis-binds
+    # any defaulted field positioned immediately before it (silently, no error) to the CatchAll's
+    # own value. Keeping it first among the defaulted fields makes that impossible.
+    extra_data: CatchAll = field(default_factory=dict)
+
     page_title: str | None = None
     content_details_id: int | None = None
-    
-    extra_data: CatchAll = field(default_factory=dict)
 
 
 @dataclass
@@ -118,9 +121,6 @@ class CgTestCase(JSONWizardX):
        output for the test. May represent either a local test case or a server-sideq validator test case.
        Tests are numbers in the order given, separately for local tests and validator tests.
        The server-side validator test cases are not shared with the puzzler, and used to validate the solution and score the submission."""
-    class _(JSONWizardX.Meta):
-        skip_defaults = True
-
     title: str
     """Friendly title for the test case, e.g. "Large grid test case"""
 
@@ -147,12 +147,13 @@ class CgContributionData(JSONWizardX):
     """The actual contribution content, including the problem statement,
        input/output descriptions, constraints, difficulty, solution language,
        stub generator, topics, and test cases."""
-    class _(JSONWizardX.Meta):
-        skip_defaults = True
-        
+
     title: str
     """The title of the puzzle, e.g. "Grid Pathfinding" or "Sorting Challenge"."""
-    
+
+    # See the note in CgTopic: `extra_data` is deliberately the first field with a default.
+    extra_data: CatchAll = field(default_factory=dict)
+
     statement: CgMarkdown | None = None
     """The problem statement, in simplified Markdown format, including the description
        of the problem, input/output formats, and examples."""
@@ -207,17 +208,13 @@ class CgContributionData(JSONWizardX):
        and the server returns a binary ID for the image, which can be included here to associate
        the image with the contribution."""
 
-    extra_data: CatchAll = field(default_factory=dict)
-
 @dataclass
 class CgContributionVersion(JSONWizardX):
     """
     The wrapper for a specific version of a contribution, including
     the contribution data and metadata such as version number.
     """
-    class _(JSONWizardX.Meta):
-        skip_defaults = True
-        
+
     version: int
     """A sequentially incrementing version number for the contribution, starting at 1 for the first version.
        When submitting an edit, the previous version number must be provided as a parameter to
@@ -227,10 +224,13 @@ class CgContributionVersion(JSONWizardX):
     """The actual contribution content, including the problem statement, input/output descriptions,
        constraints, difficulty, solution language,"""
 
-    autoclose_time: int | None = None   # millisecond epoch timestamp
-    """The time at which the contribution will be automatically closed for voting and comments, in millisecond epoch timestamp.
+    # See the note in CgTopic: `extra_data` is deliberately the first field with a default.
+    extra_data: CatchAll = field(default_factory=dict)
+
+    _autoclose_time: CgEpochMillis | None = Alias("autocloseTime", default=None)
+    """The time at which the contribution will be automatically closed for voting and comments.
        This may be None if the contribution does not have an autoclose time set."""
-       
+
     draft: bool | None = None
     """Whether this version of the contribution is a draft. Draft versions are private to
        the contributor and are not shared for comment/approval. This field is only present in the response from findContribution,
@@ -245,15 +245,20 @@ class CgContributionVersion(JSONWizardX):
     """server-derived HTML rendering of the statement, input/output descriptions, and constraints.
        This field is only present in the response from findContribution, and is not included when submitting an update.
     """
-    
-    extra_data: CatchAll = field(default_factory=dict)
-    
+
+    @property
+    def autoclose_time(self) -> datetime | None:
+        """The time at which the contribution will be automatically closed for voting and comments,
+           always UTC. None if the contribution does not have an autoclose time set."""
+        return self._autoclose_time
+
+    @autoclose_time.setter
+    def autoclose_time(self, value: datetime | None) -> None:
+        self._autoclose_time = None if value is None else CgEpochMillis.upcast(value)
+
 @dataclass
 class CgContribution(JSONWizardX):
     """The complete response to findContribution"""
-    class _(JSONWizardX.Meta):
-        skip_defaults = True
-
     id: int
     """The unique identifier for the contribution, assigned by the server."""
     
@@ -316,12 +321,13 @@ class CgContribution(JSONWizardX):
     
     contribution_type: CgPuzzleType = Alias("type")   # e.g. "PUZZLE_INOUT"
     """The type of the contribution, e.g. "PUZZLE_INOUT" for a standard noninteractive solo puzzle."""
-    
+
+    # See the note in CgTopic: `extra_data` is deliberately the first field with a default.
+    extra_data: CatchAll = field(default_factory=dict)
+
     status_history: list[Any] = field(default_factory=list)
     """The history of status changes for the contribution."""
 
-    extra_data: CatchAll = field(default_factory=dict)
-    
 __all__ = [
     "CgContribution", "CgContributionData", "CgContributionVersion", "CgTestCase",
     "CgMarkdown", "CgHtml", "CgStubGenerator", "CgTopic", "CgContributionId", "CgPuzzleType",

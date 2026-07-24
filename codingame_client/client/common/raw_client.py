@@ -115,12 +115,14 @@ class CgClientErrorResponse(JSONWizardX):
        This property is always present in a well-formed error response, and must not be present
        in any non-error response."""
 
+    # `extra_data` is deliberately the first field with a default: dataclass_wizard 1.0.0 mis-binds
+    # any defaulted field positioned immediately before it (silently, no error) to the CatchAll's
+    # own value. Keeping it first among the defaulted fields makes that impossible.
+    extra_data: CatchAll = field(default_factory=dict)
+    """Unrecognized fields encountered when loading the error response, preserved."""
+
     message: str | None = None
     """The error message returned by the API."""
-
-    # kw_only=True is mandatory if this field follows a field with defaults
-    extra_data: CatchAll = field(default_factory=dict, kw_only=True)
-    """Unrecognized fields encountered when loading the error response, preserved."""
 
 
 class CgClientHttpError(Exception):
