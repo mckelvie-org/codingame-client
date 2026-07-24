@@ -8,6 +8,8 @@ from typing import cast
 
 from json_data_types import JsonDict
 
+from ....client.common.protocol.codingamer import CgCodingamePointsStats
+from ....client.common.protocol.contribution import CgContribution
 from ....client.common.protocol.notification import CgNotification
 from ....client.common.raw_client import CgAuthenticationError
 from ..raw_client import CgAsyncRawClient
@@ -53,3 +55,52 @@ class CgAsyncClient(CgAsyncRawClient):
         raw_notifications = await self.service_request_to_list(
                 "Notification", "findUnreadNotifications", [codingamer_id])
         return CgNotification.from_list(cast(list[JsonDict], raw_notifications))
+
+    async def contribution_find_contribution(
+                self,
+                contribution_id: str,
+                arg2: bool = True,
+            ) -> CgContribution:
+        """Find a contribution by its opaque contribution ID.
+
+        Args:
+            contribution_id: The opaque contribution ID string (see `CgContributionId`).
+            arg2:            Second positional argument to the underlying findContribution API
+                              call. Purpose unknown; defaults to True.
+
+        Returns:
+            A CgContribution object.
+
+        Raises:
+            CgAuthenticationError:
+                If the session is not authenticated and cannot implicitly login.
+            CgAsyncClientHttpError:
+                If a transport error occurs, if the response content could not be decoded at all,
+                if the status code is not 2xx, or if the decoded content is not a dict.
+        """
+        raw_contribution = await self.service_request_to_dict(
+                "Contribution", "findContribution", [contribution_id, arg2])
+        return CgContribution.from_dict(raw_contribution)
+
+    async def codingamer_find_codingame_points_stats_by_handle(
+                self,
+                handle: str,
+            ) -> CgCodingamePointsStats:
+        """Find a codingamer's points/ranking stats by their opaque public handle.
+
+        Args:
+            handle: The codingamer's opaque public handle string (not their numeric ID).
+
+        Returns:
+            A CgCodingamePointsStats object.
+
+        Raises:
+            CgAuthenticationError:
+                If the session is not authenticated and cannot implicitly login.
+            CgAsyncClientHttpError:
+                If a transport error occurs, if the response content could not be decoded at all,
+                if the status code is not 2xx, or if the decoded content is not a dict.
+        """
+        raw_stats = await self.service_request_to_dict(
+                "CodinGamer", "findCodingamePointsStatsByHandle", [handle])
+        return CgCodingamePointsStats.from_dict(raw_stats)

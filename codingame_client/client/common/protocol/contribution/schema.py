@@ -100,11 +100,22 @@ class CgTopic(JSONWizardX):
     """A topic associated with a contribution, e.g. "Parsing", "Sorting", etc. Most of
        the fields are fetched from the server in a search for topics."""
     id: int
+    """The topic's unique identifier."""
+
     handle: str
-    category: str              # e.g. "FUNDAMENTALS", "ADVANCED", "INTERMEDIATE"
-    label_map: dict[str, str]  # language-code → label, e.g. {"1": "Parsing", "2": "Parsing"}
+    """Opaque short identifier for the topic, e.g. "parsing"."""
+
+    category: str
+    """e.g. "FUNDAMENTALS", "ADVANCED", "INTERMEDIATE"."""
+
+    label_map: dict[str, str]
+    """Localized display label for the topic (language code -> label), e.g. {"1": "Parsing", "2": "Parsing"}."""
+
     puzzle_count: int
+    """The number of puzzles tagged with this topic."""
+
     parent_topic_id: int
+    """The ID of this topic's parent topic in the topic hierarchy."""
 
     # `extra_data` is deliberately the first field with a default: dataclass_wizard 1.0.0 mis-binds
     # any defaulted field positioned immediately before it (silently, no error) to the CatchAll's
@@ -112,7 +123,10 @@ class CgTopic(JSONWizardX):
     extra_data: CatchAll = field(default_factory=dict)
 
     page_title: str | None = None
+    """Title of the topic's help-center page, if it has one."""
+
     content_details_id: int | None = None
+    """ID of the topic's help-center content, if it has one."""
 
 
 @dataclass
@@ -167,7 +181,7 @@ class CgContributionData(JSONWizardX):
     constraints: CgMarkdown | None = None
     """The constraints for the problem, in simplified Markdown format, e.g. "1 ≤ N ≤ 1000" or "1 ≤ A[i] ≤ 10^9"."""
     
-    difficulty: str | None = None            # e.g. "easy", "medium", "hard"
+    difficulty: str | None = None
     """The difficulty category for the puzzle, e.g. "easy", "medium", or "hard"."""
     
     stub_generator: CgStubGenerator | None = None
@@ -190,7 +204,7 @@ class CgContributionData(JSONWizardX):
        pairs of tests, with local test first and validator test second.
        """
     
-    solution_language: CgSolutionLanguage | None = None     # e.g. "Python3"
+    solution_language: CgSolutionLanguage | None = None
     """The programming language used for the reference solution, e.g. "Python3", "Java", "C++", etc.
        May be missing if the reference solution is not yet provided.
        See `cg_extension_to_solution_language` for mapping from file extension
@@ -231,6 +245,11 @@ class CgContributionVersion(JSONWizardX):
     """The time at which the contribution will be automatically closed for voting and comments.
        This may be None if the contribution does not have an autoclose time set."""
 
+    _freeze_time: CgEpochMillis | None = Alias("freezeTime", default=None)
+    """Unclear precise semantics (not documented)--observed alongside `autoclose_time` with a value
+       a couple of days earlier, so possibly when the contribution's content becomes locked from
+       further edits, ahead of the later autoclose. May be None if not set."""
+
     draft: bool | None = None
     """Whether this version of the contribution is a draft. Draft versions are private to
        the contributor and are not shared for comment/approval. This field is only present in the response from findContribution,
@@ -241,9 +260,12 @@ class CgContributionVersion(JSONWizardX):
        This field is only present in the response from findContribution, and is not included when submitting an update.
     """
     
-    statement_html: CgHtml | None = None
+    statement_html: CgHtml | None = Alias("statementHTML", default=None)
     """server-derived HTML rendering of the statement, input/output descriptions, and constraints.
        This field is only present in the response from findContribution, and is not included when submitting an update.
+
+       Explicitly aliased: the server sends "statementHTML" (all-caps acronym), which the automatic
+       camelCase transform doesn't produce from `statement_html` (it produces "statementHtml").
     """
 
     @property
@@ -255,6 +277,33 @@ class CgContributionVersion(JSONWizardX):
     @autoclose_time.setter
     def autoclose_time(self, value: datetime | None) -> None:
         self._autoclose_time = None if value is None else CgEpochMillis.upcast(value)
+
+    @property
+    def freeze_time(self) -> datetime | None:
+        """See the field docstring for `_freeze_time`. Always UTC. None if not set."""
+        return self._freeze_time
+
+    @freeze_time.setter
+    def freeze_time(self, value: datetime | None) -> None:
+        self._freeze_time = None if value is None else CgEpochMillis.upcast(value)
+
+@dataclass
+class CgValidateAction(JSONWizardX):
+    """The status of an asynchronous server-side validation action for a contribution (e.g.
+       triggered by editing/submitting a puzzle). Only a single example has been observed so far,
+       so field optionality is not yet well established--all three fields are currently required."""
+
+    action_id: int
+    """Opaque identifier for the validation action."""
+
+    progress: float
+    """Fractional progress of the validation action, from 0.0 to 1.0."""
+
+    already_done: bool
+    """Whether the validation action has already completed."""
+
+    extra_data: CatchAll = field(default_factory=dict)
+
 
 @dataclass
 class CgContribution(JSONWizardX):
@@ -319,7 +368,7 @@ class CgContribution(JSONWizardX):
     ready_for_moderation: bool
     """Whether the contribution is ready for moderation."""
     
-    contribution_type: CgPuzzleType = Alias("type")   # e.g. "PUZZLE_INOUT"
+    contribution_type: CgPuzzleType = Alias("type")
     """The type of the contribution, e.g. "PUZZLE_INOUT" for a standard noninteractive solo puzzle."""
 
     # See the note in CgTopic: `extra_data` is deliberately the first field with a default.
@@ -328,8 +377,12 @@ class CgContribution(JSONWizardX):
     status_history: list[Any] = field(default_factory=list)
     """The history of status changes for the contribution."""
 
+    validate_action: CgValidateAction | None = None
+    """The status of an in-progress server-side validation action for the contribution, if any."""
+
 __all__ = [
     "CgContribution", "CgContributionData", "CgContributionVersion", "CgTestCase",
     "CgMarkdown", "CgHtml", "CgStubGenerator", "CgTopic", "CgContributionId", "CgPuzzleType",
-     "CgSolutionLanguage", "cg_extension_to_solution_language", "cg_solution_language_to_extension",
+    "CgSolutionLanguage", "CgValidateAction",
+    "cg_extension_to_solution_language", "cg_solution_language_to_extension",
 ]

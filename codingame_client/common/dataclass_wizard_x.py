@@ -1,6 +1,7 @@
 """Refinement of dataclass_wizard.JSONWizard to use stronger JSONDict type hints"""
 
 import json
+import logging
 from collections.abc import Collection
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,8 @@ from dataclass_wizard.models import Alias, CatchAll
 from json_data_types import JsonDict, validate_json_dict
 
 from .typedefs import Self
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "JSONWizardX", "CatchAll", "JsonDictDecoder",
@@ -80,6 +83,19 @@ class JSONWizardX(JSONWizard):
         skip_defaults = True
         type_to_load_hook = {CgEpochMillis: ("runtime", _load_cg_epoch_millis)}
         type_to_dump_hook = {CgEpochMillis: ("runtime", _dump_cg_epoch_millis)}
+
+    def __post_init__(self) -> None:
+        """Logs a debug message if the instance has a non-empty `extra_data` (CatchAll) field--i.e.
+           the server response included fields not recognized by this dataclass's schema. Runs on
+           every construction path (`from_dict`, `from_list`, and direct construction), since
+           `dataclasses.__init__` calls `__post_init__` regardless of how it was invoked. Subclasses
+           that define their own `__post_init__` should call `super().__post_init__()`."""
+        extra_data = getattr(self, "extra_data", None)
+        if extra_data:
+            logger.debug(
+                    "%s: response contained %d unrecognized field(s): %r",
+                    type(self).__name__, len(extra_data), extra_data,
+                )
 
     def to_dict(
                 self,

@@ -27,8 +27,13 @@ CgNotificationTypeGroup = str
 class CgNotificationCodingamer(JSONWizardX):
     """The codingamer associated with a notification, e.g. the commenter or new follower who triggered it."""
     user_id: int
+    """The codingamer's numeric ID."""
+
     country_id: str
+    """ISO country code, e.g. "US", "GB"."""
+
     public_handle: str
+    """The codingamer's opaque public handle string."""
 
     # `extra_data` is deliberately the first field with a default: dataclass_wizard 1.0.0 mis-binds
     # any defaulted field positioned immediately before it (silently, no error) to the CatchAll's
@@ -77,11 +82,18 @@ class CgNotification(JSONWizardX):
        `data` is left as a raw dict pending examples of more notification types.
     """
     id: int
+    """The notification's unique identifier."""
+
     type_group: CgNotificationTypeGroup
+
     priority: int
+    """Unclear precise semantics (not documented); always observed as 0 so far."""
+
     urgent: bool
+    """Whether the notification is flagged urgent, e.g. for a time-sensitive clash invite."""
 
     _date: CgEpochMillis = Alias("date")
+    """The date/time of the event that triggered the notification."""
 
     notification_type: CgNotificationType = Alias("type")
 
@@ -93,6 +105,10 @@ class CgNotification(JSONWizardX):
     codingamer: CgNotificationCodingamer | None = None
     """The codingamer who triggered the notification. Not present for all notification types--e.g.
        absent for a "custom" notification, which is a broadcast rather than tied to a specific user."""
+
+    _seen_date: CgEpochMillis | None = Alias("seenDate", default=None)
+    """When the codingamer saw/read the notification. Absent for notifications that haven't been
+       seen yet (e.g. the ones returned by findUnseenNotifications)."""
 
     # Typed as a plain dict[str, Any] rather than the recursive JsonDict alias: dataclass_wizard
     # 1.0.0 corrupts nested dict values (e.g. {"en": "x", "fr": "y"} becomes ["en", "fr"]) when
@@ -108,6 +124,15 @@ class CgNotification(JSONWizardX):
     @date.setter
     def date(self, value: datetime) -> None:
         self._date = CgEpochMillis.upcast(value)
+
+    @property
+    def seen_date(self) -> datetime | None:
+        """See the field docstring for `_seen_date`. Always UTC. None if not yet seen."""
+        return self._seen_date
+
+    @seen_date.setter
+    def seen_date(self, value: datetime | None) -> None:
+        self._seen_date = None if value is None else CgEpochMillis.upcast(value)
 
 
 __all__ = [

@@ -558,6 +558,41 @@ class CgCli(CliBase):
                        help="Codingamer ID to find unread notifications for. Defaults to the logged-in codingamer's ID.")
         return handler
 
+    @cli_command("Contribution service commands.")
+    async def cmd_api__contribution(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Find a contribution by its opaque contribution ID.")
+    async def cmd_api__contribution__find_contribution(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_id: str = self.args.contribution_id
+            arg2: bool = not self.args.arg2_false
+            client = await self.get_client()
+            contribution = await client.contribution_find_contribution(contribution_id, arg2)
+            print(json.dumps(contribution.to_dict(), indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("contribution_id", type=str, metavar="CONTRIBUTION-ID",
+                       help="Opaque contribution ID string.")
+        p.add_argument("--arg2-false", default=False, action="store_true",
+                       help="Set the API's second (purpose unknown) argument to False instead of the default True.")
+        return handler
+
+    @cli_command("CodinGamer service commands.")
+    async def cmd_api__codingamer(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Find a codingamer's points/ranking stats by their opaque public handle.")
+    async def cmd_api__codingamer__find_codingame_points_stats_by_handle(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            handle: str = self.args.handle
+            client = await self.get_client()
+            stats = await client.codingamer_find_codingame_points_stats_by_handle(handle)
+            print(json.dumps(stats.to_dict(), indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("handle", type=str, metavar="HANDLE",
+                       help="Opaque codingamer public handle string (not the numeric codingamer ID).")
+        return handler
+
     @cli_command("Codingame client command-line interface.")
     async def main(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         """Main command handler for the CLI."""
