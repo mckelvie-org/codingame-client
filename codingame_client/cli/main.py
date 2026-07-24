@@ -551,7 +551,7 @@ class CgCli(CliBase):
             # login requirement (the endpoint always needs a valid session) and resolves the
             # default codingamer_id itself.
             client = await self.get_client()
-            notifications = await client.notification_find_unread_notifications(codingamer_id)
+            notifications = await client.services.notification.find_unread_notifications(codingamer_id)
             print(json.dumps([n.to_dict() for n in notifications], indent=2, sort_keys=True))
         p = cmd.get_parser()
         p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
@@ -568,7 +568,7 @@ class CgCli(CliBase):
             contribution_id: str = self.args.contribution_id
             arg2: bool = not self.args.arg2_false
             client = await self.get_client()
-            contribution = await client.contribution_find_contribution(contribution_id, arg2)
+            contribution = await client.services.contribution.find_contribution(contribution_id, arg2)
             print(json.dumps(contribution.to_dict(), indent=2, sort_keys=True))
         p = cmd.get_parser()
         p.add_argument("contribution_id", type=str, metavar="CONTRIBUTION-ID",
@@ -586,11 +586,46 @@ class CgCli(CliBase):
         async def handler() -> None:
             handle: str = self.args.handle
             client = await self.get_client()
-            stats = await client.codingamer_find_codingame_points_stats_by_handle(handle)
+            stats = await client.services.codingamer.find_codingame_points_stats_by_handle(handle)
             print(json.dumps(stats.to_dict(), indent=2, sort_keys=True))
         p = cmd.get_parser()
         p.add_argument("handle", type=str, metavar="HANDLE",
                        help="Opaque codingamer public handle string (not the numeric codingamer ID).")
+        return handler
+
+    @cli_command("Search service commands.")
+    async def cmd_api__search(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Search for codingamers, puzzles, and other objects by name.")
+    async def cmd_api__search__search(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            query: str = self.args.query
+            locale: str = self.args.locale
+            type_filter: str | None = self.args.type
+            client = await self.get_client()
+            results = await client.services.search.search(query, locale, type_filter)
+            print(json.dumps([r.to_dict() for r in results], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("query", type=str, metavar="QUERY",
+                       help="Search query text, e.g. a codingamer's pseudo or part of a puzzle title.")
+        p.add_argument("--locale", "-l", type=str, default="en", metavar="LOCALE",
+                       help="Locale code for localized result names, e.g. 'en', 'fr'. Defaults to 'en'.")
+        p.add_argument("--type", "-t", type=str, default=None, metavar="TYPE",
+                       help="Restrict results to a single result type, e.g. 'USER', 'PUZZLE'. "
+                            "Defaults to no filter (all types).")
+        return handler
+
+    @cli_command("ProgrammingLanguage service commands.")
+    async def cmd_api__programming_language(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Find the IDs of all programming languages supported for contribution reference solutions.")
+    async def cmd_api__programming_language__find_all_ids(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            client = await self.get_client()
+            language_ids = await client.services.programming_language.find_all_ids()
+            print(json.dumps(language_ids, indent=2, sort_keys=True))
         return handler
 
     @cli_command("Codingame client command-line interface.")
