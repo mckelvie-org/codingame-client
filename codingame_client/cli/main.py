@@ -17,6 +17,7 @@ from json_data_types import JsonData, JsonList
 from rich.console import Console
 
 from ..client.async_.client import CgAsyncClient
+from ..client.common.protocol.user import CgUserProperties
 from ..client.common.raw_client import CgAuthenticationError, CgDownloadFileResult, compute_content_hash
 from ..common.timestamps import parse_timestamp
 from ..common.typedefs import Self, override
@@ -577,6 +578,354 @@ class CgCli(CliBase):
                        help="Set the API's second (purpose unknown) argument to False instead of the default True.")
         return handler
 
+    @cli_command("Count new contributions published since a given point in time.")
+    async def cmd_api__contribution__find_new_contribution_count(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            since: datetime | None = self.args.since
+            client = await self.get_client()
+            count = await client.services.contribution.find_new_contribution_count(codingamer_id, since)
+            print(json.dumps(count))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer to count new contributions for. Defaults to the logged-in codingamer's ID.")
+        p.add_argument("--since", type=parse_timestamp, default=None, metavar="TIMESTAMP",
+                       help="Count contributions published after this point in time. Can be milliseconds "
+                            "since epoch (e.g., '1680000000000'), a duration string (e.g., '1h30m'), a relative "
+                            "duration from now (e.g., '-1h30m'), or an ISO 8601 datetime string. Defaults to now.")
+        return handler
+
+    @cli_command("Get pending (community-review-queue) contributions.")
+    async def cmd_api__contribution__get_all_pending_contributions(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_type_filter: str = self.args.type_filter
+            codingamer_id: int | None = self.args.codingamer_id
+            page: int = self.args.page
+            client = await self.get_client()
+            contributions = await client.services.contribution.get_all_pending_contributions(
+                    contribution_type_filter, codingamer_id, page)
+            print(json.dumps([c.to_dict() for c in contributions], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--type-filter", "-t", type=str, default="ALL", metavar="FILTER",
+                       help="Category filter: 'ALL', 'CLASHOFCODE', or 'PUZZLE'. Defaults to 'ALL'.")
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Must equal the logged-in codingamer's own ID (server-enforced). "
+                            "Defaults to the logged-in codingamer's ID.")
+        p.add_argument("--page", "-n", type=int, default=1, metavar="PAGE",
+                       help="Assumed 1-indexed page number; unconfirmed. Defaults to 1.")
+        return handler
+
+    @cli_command("ClashOfCode service commands.")
+    async def cmd_api__clash_of_code(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Get a codingamer's global Clash of Code ranking.")
+    async def cmd_api__clash_of_code__get_clash_rank_by_codingamer_id(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            clash_rank = await client.services.clash_of_code.get_clash_rank_by_codingamer_id(codingamer_id)
+            print(json.dumps(clash_rank.to_dict() if clash_rank is not None else None, indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer numeric ID. Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("Find a Clash of Code session by its handle.")
+    async def cmd_api__clash_of_code__find_clash_by_handle(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            handle: str = self.args.handle
+            client = await self.get_client()
+            clash = await client.services.clash_of_code.find_clash_by_handle(handle)
+            print(json.dumps(clash.to_dict(), indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("handle", type=str, metavar="HANDLE",
+                       help="Opaque clash-instance handle string (a per-slot handle from "
+                            "'api featured-event find-clash-slots'; not a codingamer handle or the "
+                            "parent featured event's own handle--both are rejected by the server).")
+        return handler
+
+    @cli_command("ClashOfCodeDescription service commands.")
+    async def cmd_api__clash_of_code_description(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Get localized help/explainer content for Clash of Code.")
+    async def cmd_api__clash_of_code_description__get_clash_description(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            client = await self.get_client()
+            description = await client.services.clash_of_code_description.get_clash_description()
+            print(json.dumps(description.to_dict(), indent=2, sort_keys=True))
+        return handler
+
+    @cli_command("FeaturedEvent service commands.")
+    async def cmd_api__featured_event(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Find upcoming and ongoing site-wide featured events.")
+    async def cmd_api__featured_event__find_upcoming_and_ongoing_featured_events(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            events = await client.services.featured_event.find_upcoming_and_ongoing_featured_events(codingamer_id)
+            print(json.dumps([e.to_dict() for e in events], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer to check registration status for. Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("Check whether a codingamer is auto-registered for featured events.")
+    async def cmd_api__featured_event__is_codingamer_auto_registered(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            auto_registered = await client.services.featured_event.is_codingamer_auto_registered(codingamer_id)
+            print(json.dumps(auto_registered))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer to check. Must be the logged-in codingamer's own ID "
+                            "(server-enforced). Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("Count featured events published since a given point in time.")
+    async def cmd_api__featured_event__find_new_featured_event_count(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            since: datetime | None = self.args.since
+            client = await self.get_client()
+            count = await client.services.featured_event.find_new_featured_event_count(since)
+            print(json.dumps(count))
+        p = cmd.get_parser()
+        p.add_argument("--since", type=parse_timestamp, default=None, metavar="TIMESTAMP",
+                       help="Count featured events published after this point in time. Can be milliseconds "
+                            "since epoch (e.g., '1680000000000'), a duration string (e.g., '1h30m'), a relative "
+                            "duration from now (e.g., '-1h30m'), or an ISO 8601 datetime string. Defaults to now.")
+        return handler
+
+    @cli_command("Find the individual scheduled Clash of Code slots belonging to a featured event.")
+    async def cmd_api__featured_event__find_clash_slots(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            featured_event_id: int = self.args.featured_event_id
+            client = await self.get_client()
+            slots = await client.services.featured_event.find_clash_slots(featured_event_id)
+            print(json.dumps([s.to_dict() for s in slots], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("featured_event_id", type=int, metavar="FEATURED-EVENT-ID",
+                       help="The numeric 'id' of a CLASH_OF_CODE-type featured event (not its 'handle').")
+        return handler
+
+    @cli_command("Find a featured event by its opaque handle.")
+    async def cmd_api__featured_event__find_by_handle(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            handle: str = self.args.handle
+            client = await self.get_client()
+            event = await client.services.featured_event.find_by_handle(handle)
+            print(json.dumps(event.to_dict(), indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("handle", type=str, metavar="HANDLE",
+                       help="Opaque featured event handle string.")
+        return handler
+
+    @cli_command("CodingamerPuzzleTopic service commands.")
+    async def cmd_api__codingamer_puzzle_topic(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Find the puzzle topics a codingamer has made progress on.")
+    async def cmd_api__codingamer_puzzle_topic__find_topics_by_codingamer_id(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            topics = await client.services.codingamer_puzzle_topic.find_topics_by_codingamer_id(codingamer_id)
+            print(json.dumps([t.to_dict() for t in topics], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer whose puzzle topic progress to list. Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("Puzzle service commands.")
+    async def cmd_api__puzzle(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Count a codingamer's solved puzzles, broken down by programming language.")
+    async def cmd_api__puzzle__count_solved_puzzles_by_programming_language(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            counts = await client.services.puzzle.count_solved_puzzles_by_programming_language(codingamer_id)
+            print(json.dumps([c.to_dict() for c in counts], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer whose solved-puzzle counts to list. Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("Find the current puzzle of the week.")
+    async def cmd_api__puzzle__find_puzzle_of_the_week(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            client = await self.get_client()
+            puzzle = await client.services.puzzle.find_puzzle_of_the_week()
+            print(json.dumps(puzzle.to_dict(), indent=2, sort_keys=True))
+        return handler
+
+    @cli_command("Find a codingamer's minimal progress summary for every puzzle they have some relationship to.")
+    async def cmd_api__puzzle__find_all_minimal_progress(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            progress = await client.services.puzzle.find_all_minimal_progress(codingamer_id)
+            print(json.dumps([p.to_dict() for p in progress], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer whose puzzle progress to list. Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("Find a codingamer's progress summary for a specific set of puzzles, by puzzle ID.")
+    async def cmd_api__puzzle__find_progress_by_ids(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            puzzle_ids: list[int] = self.args.puzzle_ids
+            codingamer_id: int | None = self.args.codingamer_id
+            arg3: int = self.args.arg3
+            client = await self.get_client()
+            progress = await client.services.puzzle.find_progress_by_ids(puzzle_ids, codingamer_id, arg3)
+            print(json.dumps([p.to_dict() for p in progress], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("puzzle_ids", type=int, nargs="+", metavar="PUZZLE-ID",
+                       help="One or more numeric puzzle IDs to look up.")
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer whose progress to look up. Defaults to the logged-in codingamer's ID.")
+        p.add_argument("--arg3", type=int, default=2, metavar="N",
+                       help="Third (purpose unclear) argument to the underlying API call. Defaults to 2.")
+        return handler
+
+    @cli_command("Find the best progress on a given puzzle among the codingamers a codingamer follows.")
+    async def cmd_api__puzzle__find_best_following_progress(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            puzzle_id: int = self.args.puzzle_id
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            progress = await client.services.puzzle.find_best_following_progress(puzzle_id, codingamer_id)
+            print(json.dumps([p.to_dict() for p in progress], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("puzzle_id", type=int, metavar="PUZZLE-ID",
+                       help="Numeric ID of the puzzle to check.")
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer whose followees to check. Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("LastActivities service commands.")
+    async def cmd_api__last_activities(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Get a codingamer's most recent activity feed entries.")
+    async def cmd_api__last_activities__get_last_activities(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            limit: int = self.args.limit
+            client = await self.get_client()
+            activities = await client.services.last_activities.get_last_activities(codingamer_id, limit)
+            print(json.dumps([a.to_dict() for a in activities], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer whose recent activity to list. Defaults to the logged-in codingamer's ID.")
+        p.add_argument("--limit", "-n", type=int, default=4, metavar="N",
+                       help="Maximum number of activity entries to return. Defaults to 4.")
+        return handler
+
+    @cli_command("Quest service commands.")
+    async def cmd_api__quest(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Find a codingamer's quest map.")
+    async def cmd_api__quest__find_quest_map(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            quest_map = await client.services.quest.find_quest_map(codingamer_id)
+            print(json.dumps(quest_map.to_dict(), indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer whose quest map to fetch. Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("Count a codingamer's completed-but-unclaimed (lootable) quests.")
+    async def cmd_api__quest__count_lootable_quests(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            count = await client.services.quest.count_lootable_quests(codingamer_id)
+            print(json.dumps(count))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer to count lootable quests for. Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("Intercom service commands.")
+    async def cmd_api__intercom(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Generate an Intercom identity-verification JWT for the logged-in codingamer.")
+    async def cmd_api__intercom__generate_token(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            client = await self.get_client()
+            token = await client.services.intercom.generate_token()
+            print(json.dumps(token))
+        return handler
+
+    @cli_command("Survey service commands.")
+    async def cmd_api__survey(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Find a survey to potentially show a codingamer (UNVERIFIED--response shape unconfirmed).")
+    async def cmd_api__survey__find_survey(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            limit: int = self.args.limit
+            client = await self.get_client()
+            survey = await client.services.survey.find_survey(codingamer_id, limit)
+            print(json.dumps(survey.to_dict() if survey is not None else None, indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer to find a survey for. Defaults to the logged-in codingamer's ID.")
+        p.add_argument("--limit", "-n", type=int, default=2, metavar="N",
+                       help="Assumed maximum number of results; unconfirmed. Defaults to 2.")
+        return handler
+
+    @cli_command("Achievement service commands.")
+    async def cmd_api__achievement(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Find the achievements a codingamer has unlocked.")
+    async def cmd_api__achievement__find_by_codingamer_id(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            achievements = await client.services.achievement.find_by_codingamer_id(codingamer_id)
+            print(json.dumps([a.to_dict() for a in achievements], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer whose achievements to list. Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("User service commands.")
+    async def cmd_api__user(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Update a subset of a codingamer's account properties.")
+    async def cmd_api__user__update_user_properties(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            contributions_list_last_visit: datetime | None = self.args.contributions_list_last_visit
+            properties = CgUserProperties()
+            if contributions_list_last_visit is not None:
+                properties.contributions_list_last_visit = contributions_list_last_visit
+            client = await self.get_client()
+            await client.services.user.update_user_properties(properties, codingamer_id)
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer to update. Defaults to the logged-in codingamer's ID.")
+        p.add_argument("--contributions-list-last-visit", type=parse_timestamp, default=None, metavar="TIMESTAMP",
+                       help="Set the codingamer's last-visit time for their contributions list. Can be "
+                            "milliseconds since epoch, a duration string (e.g., '1h30m'), a relative duration "
+                            "from now (e.g., '-1h30m'), or an ISO 8601 datetime string.")
+        return handler
+
     @cli_command("CodinGamer service commands.")
     async def cmd_api__codingamer(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         return None  # No handler for the parent command; subcommands will be handled by their own handlers.
@@ -591,6 +940,74 @@ class CgCli(CliBase):
         p = cmd.get_parser()
         p.add_argument("handle", type=str, metavar="HANDLE",
                        help="Opaque codingamer public handle string (not the numeric codingamer ID).")
+        return handler
+
+    @cli_command("Find a codingamer's public profile information by their numeric ID.")
+    async def cmd_api__codingamer__find_codingamer_public_informations(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            codingamer = await client.services.codingamer.find_codingamer_public_informations(codingamer_id)
+            print(json.dumps(codingamer.to_dict(), indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer numeric ID. Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("Find the followers of a codingamer.")
+    async def cmd_api__codingamer__find_followers(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            current_codingamer_id: int | None = self.args.current_codingamer_id
+            client = await self.get_client()
+            followers = await client.services.codingamer.find_followers(codingamer_id, current_codingamer_id)
+            print(json.dumps([f.to_dict() for f in followers], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer whose followers to list. Defaults to the logged-in codingamer's ID.")
+        p.add_argument("--current-codingamer-id", "-c", type=int, default=None, metavar="ID",
+                       help="Must equal the logged-in codingamer's ID (server-enforced). "
+                            "Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("Find the codingamers that a codingamer is following.")
+    async def cmd_api__codingamer__find_following(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            current_codingamer_id: int | None = self.args.current_codingamer_id
+            client = await self.get_client()
+            following = await client.services.codingamer.find_following(codingamer_id, current_codingamer_id)
+            print(json.dumps([f.to_dict() for f in following], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer whose followees to list. Defaults to the logged-in codingamer's ID.")
+        p.add_argument("--current-codingamer-id", "-c", type=int, default=None, metavar="ID",
+                       help="Must equal the logged-in codingamer's ID (server-enforced). "
+                            "Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("Find the numeric IDs of a codingamer's followers.")
+    async def cmd_api__codingamer__find_follower_ids(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            follower_ids = await client.services.codingamer.find_follower_ids(codingamer_id)
+            print(json.dumps(follower_ids, indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer whose follower IDs to list. Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("Find the numeric IDs of the codingamers that a codingamer is following.")
+    async def cmd_api__codingamer__find_following_ids(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            following_ids = await client.services.codingamer.find_following_ids(codingamer_id)
+            print(json.dumps(following_ids, indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer whose followee IDs to list. Defaults to the logged-in codingamer's ID.")
         return handler
 
     @cli_command("Search service commands.")

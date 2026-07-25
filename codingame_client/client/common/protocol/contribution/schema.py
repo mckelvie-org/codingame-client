@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
 
 from .....common.dataclass_wizard_x import Alias, CatchAll, CgEpochMillis, JSONWizardX
 from ..schema import CgSolutionLanguage, cg_extension_to_solution_language, cg_solution_language_to_extension
@@ -240,6 +239,48 @@ class CgContributionVersion(JSONWizardX):
         self._freeze_time = None if value is None else CgEpochMillis.upcast(value)
 
 @dataclass
+class CgContributionStatusChange(JSONWizardX):
+    """Details of a single status transition, embedded in
+       `CgContributionStatusHistoryEntry.data`."""
+
+    author: str
+    """Who/what triggered the transition, e.g. "SYSTEM" (an automatic transition) or "ACTION"
+       (triggered by the contributor's own action, e.g. editing the contribution)."""
+
+    reason: str
+    """Why the transition happened, e.g. "INACTIVITY" (automatically refused after a period of
+       no activity) or "EDIT" (moved back to pending after the contributor edited it)."""
+
+    extra_data: CatchAll = field(default_factory=dict)
+
+
+@dataclass
+class CgContributionStatusHistoryEntry(JSONWizardX):
+    """A single entry in a contribution's status history (`CgContribution.status_history` /
+       `CgPendingContribution.status_history`)."""
+
+    status: str
+    """The status transitioned to, e.g. "PENDING", "REFUSED"."""
+
+    data: CgContributionStatusChange
+    """Details of what triggered this transition."""
+
+    _date: CgEpochMillis = Alias("date")
+    """When this status transition occurred."""
+
+    extra_data: CatchAll = field(default_factory=dict)
+
+    @property
+    def date(self) -> datetime:
+        """See the field docstring for `_date`. Always UTC."""
+        return self._date
+
+    @date.setter
+    def date(self, value: datetime) -> None:
+        self._date = CgEpochMillis.upcast(value)
+
+
+@dataclass
 class CgValidateAction(JSONWizardX):
     """The status of an asynchronous server-side validation action for a contribution (e.g.
        triggered by editing/submitting a puzzle). Only a single example has been observed so far,
@@ -326,15 +367,124 @@ class CgContribution(JSONWizardX):
     # See the note in CgTopic: `extra_data` is deliberately the first field with a default.
     extra_data: CatchAll = field(default_factory=dict)
 
-    status_history: list[Any] = field(default_factory=list)
+    status_history: list[CgContributionStatusHistoryEntry] = field(default_factory=list)
     """The history of status changes for the contribution."""
 
     validate_action: CgValidateAction | None = None
     """The status of an in-progress server-side validation action for the contribution, if any."""
 
+
+@dataclass
+class CgPendingContribution(JSONWizardX):
+    """A single contribution summary, as returned (in a bare JSON array) by
+       getAllPendingContributions. A lighter-weight summary than `CgContribution`--notably,
+       it has no `last_version` (full content), but adds `publication_date`/`autoclose_time`
+       and `user_moderation_status` not present on `CgContribution`."""
+
+    id: int
+    """The unique identifier for the contribution."""
+
+    votable_id: int
+    """The unique identifier for the votable entity associated with the contribution."""
+
+    commentable_id: int
+    """The unique identifier for the commentable entity associated with the contribution."""
+
+    title: str
+    """The title of the contribution."""
+
+    status: str
+    """The status of the contribution. Always "PENDING" when listed by
+       getAllPendingContributions; other values (e.g. "REFUSED") observed only in
+       `status_history`."""
+
+    user_moderation_status: str
+    """The requesting codingamer's moderation standing for this contribution, e.g. "PENDING"
+       (can moderate) or "FORBIDDEN" (cannot, e.g. having already voted/commented)."""
+
+    codingamer_id: int
+    """The unique identifier for the codingamer (contributor) who created the contribution."""
+
+    codingamer_handle: str
+    """The long, opaque string identifier for the contributor."""
+
+    nickname: str
+    """The nickname of the contributor."""
+
+    public_handle: str
+    """The public handle of the contribution."""
+
+    active_version: int
+    """The version number of the currently active version of the contribution."""
+
+    draft: bool
+    """Whether the contribution is currently a draft."""
+
+    editable: bool
+    """Whether the contribution is currently editable by the contributor."""
+
+    ready_for_moderation: bool
+    """Whether the contribution is ready for moderation."""
+
+    score: int
+    """The score of the contribution."""
+
+    up_votes: int
+    """The number of up votes on the contribution."""
+
+    down_votes: int
+    """The number of down votes on the contribution."""
+
+    comment_count: int
+    """The number of comments on the contribution."""
+
+    views: int
+    """The number of views the contribution has received."""
+
+    status_history: list[CgContributionStatusHistoryEntry]
+    """The history of status changes for the contribution."""
+
+    contribution_type: CgPuzzleType = Alias("type")
+    """The type of the contribution, e.g. "PUZZLE_INOUT", "CLASHOFCODE"."""
+
+    _publication_date: CgEpochMillis = Alias("publicationDate")
+    """When the contribution was first published/submitted."""
+
+    _autoclose_time: CgEpochMillis = Alias("autocloseTime")
+    """When the contribution will be automatically closed for voting and comments."""
+
+    extra_data: CatchAll = field(default_factory=dict)
+
+    avatar: int | None = None
+    """The binary image ID of the contributor's avatar image. Not always present--observed
+       absent for a few contributors."""
+
+    validate_action: CgValidateAction | None = None
+    """The status of an in-progress server-side validation action for the contribution, if any."""
+
+    @property
+    def publication_date(self) -> datetime:
+        """See the field docstring for `_publication_date`. Always UTC."""
+        return self._publication_date
+
+    @publication_date.setter
+    def publication_date(self, value: datetime) -> None:
+        self._publication_date = CgEpochMillis.upcast(value)
+
+    @property
+    def autoclose_time(self) -> datetime:
+        """See the field docstring for `_autoclose_time`. Always UTC."""
+        return self._autoclose_time
+
+    @autoclose_time.setter
+    def autoclose_time(self, value: datetime) -> None:
+        self._autoclose_time = CgEpochMillis.upcast(value)
+
+
 __all__ = [
-    "CgContribution", "CgContributionData", "CgContributionVersion", "CgTestCase",
+    "CgContribution", "CgContributionData", "CgContributionStatusChange",
+    "CgContributionStatusHistoryEntry", "CgContributionVersion", "CgTestCase",
     "CgMarkdown", "CgHtml", "CgStubGenerator", "CgTopic", "CgContributionId", "CgPuzzleType",
-    "CgSolutionLanguage", "CgValidateAction",
+    "CgPendingContribution", "CgSolutionLanguage", "CgValidateAction",
     "cg_extension_to_solution_language", "cg_solution_language_to_extension",
 ]

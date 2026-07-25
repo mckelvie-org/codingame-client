@@ -298,10 +298,14 @@ class CgAsyncRawClient(CgRawClient):
            response could not be decoded at all or if the status code is not 2xx.
 
            Unlike a strict JSON-RPC-style API, CodinGame's services may return any JSON-serializable
-           value at the top level, not just an object--e.g., a bare array, or a bare `null` for some
-           endpoints when unauthenticated. This method does not attempt to distinguish a JSON string
-           value from equivalent raw (non-JSON) text content, nor a JSON `null` from an empty/missing
-           body--both are represented the same way in the returned value.
+           value at the top level, not just an object--e.g., a bare array, or a bare `null` (some
+           endpoints return `null` when unauthenticated; others return it as a legitimate "no result"
+           value even when authenticated, e.g. ClashOfCode/getClashRankByCodinGamerId for a codingamer
+           who has never played). A successfully-decoded JSON `null` is returned as Python `None`--a
+           valid `JsonData` value. Every code path that fails to obtain/decode any content at all
+           raises before returning, so a returned `None` unambiguously means "the body was the JSON
+           literal `null`", never "nothing could be read". This method does not attempt to
+           distinguish a JSON string value from equivalent raw (non-JSON) text content, though.
 
            Returns:
                The JSON-decoded data: a dict, list, str, int, float, bool, or None.
@@ -336,18 +340,17 @@ class CgAsyncRawClient(CgRawClient):
                     try:
                         content = await response.read()
                     except Exception:
-                        # Could not fetch content, so we leave it as None and raise an error.
-                        content = None
-                        # before raising our own error, we try to raise the original error to get the correct status code and message.
+                        # Could not fetch content at all. Before raising our own error, we try to
+                        # raise the original error to get the correct status code and message.
                         response.raise_for_status()
                         ctype = response.headers.get(aiohttp.hdrs.CONTENT_TYPE, "<unspecified>").lower()
                         raise CgAsyncClientHttpError(
                                 f"Unable to read response content in response (Content-Type: {ctype!r})",
                                 response=response,
-                                content=content
                             ) from not_json_error
-            # at this point, content is decoded as best we can--either JSON-decoded data, a string, bytes, or None. It will
-            # be included in the raised CgAsyncClientHttpError if we raise one.
+            # at this point, content has been assigned a real decoded value--JSON data (possibly the
+            # JSON `null` literal, decoded as Python None), a string, or bytes. Every path that failed
+            # to assign one has already raised above.
             response.raise_for_status()
         except aiohttp.ClientResponseError as e:
             raise CgAsyncClientHttpError.normalize(e, content=content, response=response) from e
@@ -355,13 +358,6 @@ class CgAsyncRawClient(CgRawClient):
             # Raw bytes are not valid JsonData; this means we couldn't decode the content as JSON or text.
             raise CgAsyncClientHttpError(
                     f"Unable to decode response content as JSON or text (Content-Type: {response.content_type!r})",
-                    response=response,
-                    content=content
-                )
-        if content is None:
-            # None is not valid JsonData; this means we couldn't decode the content as JSON or text.
-            raise CgAsyncClientHttpError(
-                    f"Unable to decode response content (Content-Type: {response.content_type!r})",
                     response=response,
                     content=content
                 )

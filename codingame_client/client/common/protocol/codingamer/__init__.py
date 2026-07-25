@@ -8,11 +8,12 @@ from .schema import (
     CgCodingamePointsRankingDto,
     CgCodingamePointsStats,
     CgCodingamer,
+    CgCodingamerFollower,
     CgRankHistoryEntry,
     CgXpThreshold,
 )
 
 __all__ = [
-    "CgCodingamer", "CgRankHistoryEntry", "CgCodingamePointsRankingDto",
-    "CgXpThreshold", "CgCodingamePointsStats",
+    "CgCodingamer", "CgCodingamerFollower", "CgRankHistoryEntry",
+    "CgCodingamePointsRankingDto", "CgXpThreshold", "CgCodingamePointsStats",
 ]

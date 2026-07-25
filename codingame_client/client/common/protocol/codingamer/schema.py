@@ -1,6 +1,6 @@
 """
-JSON-serializable dataclasses for the CodinGamer service's findCodingamePointsStatsByHandle
-Codingame API method.
+JSON-serializable dataclasses for the CodinGamer service's findCodingamePointsStatsByHandle,
+findCodinGamerPublicInformations, findFollowers, and findFollowing Codingame API methods.
 """
 
 from __future__ import annotations
@@ -213,7 +213,77 @@ class CgCodingamePointsStats(JSONWizardX):
     """The per-level XP threshold/progression table, up to (at least) the codingamer's current level."""
 
 
+@dataclass
+class CgCodingamerFollower(JSONWizardX):
+    """A single codingamer in a followers/following list, as returned by findFollowers and
+       findFollowing. Distinct from
+       `CgCodingamer`: adds follow-relationship flags (`is_follower`/`is_following`) and a few
+       differently-named/differently-shaped profile fields, and omits fields not returned by
+       this endpoint (`form_values`, `school_id`, `xp`, `category`, `online_since`, `biography`).
+       `pseudo`/`country_id` are Optional--observed absent for a few apparently never-configured
+       accounts (rank ~1080871, 0 points)."""
+
+    user_id: int
+    """The codingamer's numeric ID."""
+
+    public_handle: str
+    """The codingamer's opaque public handle string."""
+
+    is_follower: bool
+    """Whether this codingamer follows the `current_codingamer_id` passed to `findFollowers`
+       (normally the logged-in codingamer)."""
+
+    is_following: bool
+    """Whether the `current_codingamer_id` passed to `findFollowers` (normally the logged-in
+       codingamer) follows this codingamer."""
+
+    level: int
+    """The codingamer's current level."""
+
+    points: int
+    """The codingamer's total points."""
+
+    rank: int
+    """The codingamer's global points rank."""
+
+    extra_data: CatchAll = field(default_factory=dict)
+
+    pseudo: str | None = None
+    """The codingamer's display name. Not always present; see class docstring."""
+
+    country_id: str | None = None
+    """ISO country code, e.g. "US", "GB". Not always present; see class docstring."""
+
+    avatar: int | None = None
+    """The binary image ID of the codingamer's avatar image."""
+
+    cover: int | None = None
+    """The binary image ID of the codingamer's cover image."""
+
+    city: str | None = None
+    """Freeform city, as entered in the codingamer's profile."""
+
+    company_field: str | None = None
+    """Freeform current employer, as entered in the codingamer's profile. Named differently
+       from `CgCodingamer.company`, for reasons unknown."""
+
+    school_field: str | None = None
+    """Freeform school, as entered in the codingamer's profile. Named differently from
+       `CgCodingamer.school_id` (an internal school ID rather than freeform text), for reasons
+       unknown."""
+
+    tagline: str | None = None
+    """Short freeform tagline shown on the codingamer's profile."""
+
+    languages: str | None = None
+    """A JSON-encoded array of programming language names the codingamer uses, e.g.
+       '["JavaScript","Python"]'. Left as a raw (unparsed) string rather than a list: the server
+       has been observed to double-encode this value for some codingamers--e.g. the literal
+       2-character string '"[]"' (an already-JSON-encoded empty array, itself JSON-encoded as a
+       string a second time)."""
+
+
 __all__ = [
-    "CgCodingamer", "CgRankHistoryEntry", "CgCodingamePointsRankingDto",
-    "CgXpThreshold", "CgCodingamePointsStats",
+    "CgCodingamer", "CgCodingamerFollower", "CgRankHistoryEntry",
+    "CgCodingamePointsRankingDto", "CgXpThreshold", "CgCodingamePointsStats",
 ]
