@@ -8,10 +8,14 @@ from typing import TYPE_CHECKING, cast
 
 from ....common.protocol.quest import CgQuestMap
 from ....common.raw_client import CgAuthenticationError
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncQuestServiceHelper(CgAsyncServiceHelper["CgAsyncQuestService"]):
+    """Helper methods for CgAsyncQuestService. Currently empty."""
 
 
 class CgAsyncQuestService(CgAsyncService):
@@ -19,6 +23,7 @@ class CgAsyncQuestService(CgAsyncService):
 
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "Quest")
+        self.helper = CgAsyncQuestServiceHelper(self)
 
     async def find_quest_map(
                 self,

@@ -10,10 +10,14 @@ from json_data_types import JsonDict
 
 from ....common.protocol.last_activities import CgLastActivity
 from ....common.raw_client import CgAuthenticationError
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncLastActivitiesServiceHelper(CgAsyncServiceHelper["CgAsyncLastActivitiesService"]):
+    """Helper methods for CgAsyncLastActivitiesService. Currently empty."""
 
 
 class CgAsyncLastActivitiesService(CgAsyncService):
@@ -21,6 +25,7 @@ class CgAsyncLastActivitiesService(CgAsyncService):
 
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "LastActivities")
+        self.helper = CgAsyncLastActivitiesServiceHelper(self)
 
     async def get_last_activities(
                 self,

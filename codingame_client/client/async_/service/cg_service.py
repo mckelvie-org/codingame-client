@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from json_data_types import JsonData
 
@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CgAsyncService",
+    "CgAsyncServiceHelper",
 ]
 
 class CgAsyncService:
@@ -90,3 +91,40 @@ class CgAsyncService:
     async def require_authenticate(self) -> None:
         """Ensure that the client is authenticated, logging in if necessary."""
         await self.client.require_authenticate()
+
+
+TService = TypeVar("TService", bound=CgAsyncService)
+
+
+class CgAsyncServiceHelper(Generic[TService]):
+    """Base class for a service endpoint's helper object.
+
+       Helper objects provide higher-level convenience methods for a service--e.g. retry/polling
+       logic or normalized wrappers built on top of one or more of the service's own calls--without
+       needing a whole parallel module hierarchy alongside the service classes. Helper methods must
+       never do anything a caller could not already do with the service's own public methods; there
+       is no special access or hidden behavior here, just more convenient combinations of already-
+       public building blocks.
+
+       Every service exposes a `.helper` attribute of its own dedicated helper subclass, even one
+       that (like this base class) currently has no extra methods--so the attribute's presence and
+       static type never change later just because functionality is added to it.
+
+       Generic over `TService` (bound to `CgAsyncService`) so that each service's helper subclass
+       need only parameterize this base class with its own service type--e.g.
+       `class CgAsyncContributionServiceHelper(CgAsyncServiceHelper["CgAsyncContributionService"])`--
+       to get a correctly, statically narrowed `self.service` with no `__init__` override and no
+       unchecked attribute redeclaration. Any methods added here on the base class are themselves
+       generic over `TService` and thus usable from every helper subclass unchanged.
+    """
+
+    service: TService
+    """The service endpoint instance this helper is attached to."""
+
+    def __init__(self, service: TService) -> None:
+        self.service = service
+
+    @property
+    def client(self) -> CgAsyncClient:
+        """The client through which the owning service makes endpoint requests."""
+        return self.service.client

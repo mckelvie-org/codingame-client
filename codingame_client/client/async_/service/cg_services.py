@@ -4,69 +4,98 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .cg_service import CgAsyncService
-from .services.achievement import CgAsyncAchievementService
-from .services.clash_of_code import CgAsyncClashOfCodeService
-from .services.clash_of_code_description import CgAsyncClashOfCodeDescriptionService
-from .services.codingamer import CgAsyncCodingamerService
-from .services.codingamer_puzzle_topic import CgAsyncCodingamerPuzzleTopicService
-from .services.contribution import CgAsyncContributionService
-from .services.featured_event import CgAsyncFeaturedEventService
-from .services.intercom import CgAsyncIntercomService
-from .services.last_activities import CgAsyncLastActivitiesService
-from .services.notification import CgAsyncNotificationService
-from .services.programming_language import CgAsyncProgrammingLanguageService
-from .services.puzzle import CgAsyncPuzzleService
-from .services.quest import CgAsyncQuestService
-from .services.report import CgAsyncReportService
-from .services.search import CgAsyncSearchService
-from .services.survey import CgAsyncSurveyService
-from .services.test_session import CgAsyncTestSessionService
-from .services.test_session_question_submission import CgAsyncTestSessionQuestionSubmissionService
-from .services.user import CgAsyncUserService
+from .cg_service import CgAsyncService, CgAsyncServiceHelper
+from .services.achievement import CgAsyncAchievementService, CgAsyncAchievementServiceHelper
+from .services.clash_of_code import CgAsyncClashOfCodeService, CgAsyncClashOfCodeServiceHelper
+from .services.clash_of_code_description import (
+    CgAsyncClashOfCodeDescriptionService,
+    CgAsyncClashOfCodeDescriptionServiceHelper,
+)
+from .services.codingamer import CgAsyncCodingamerService, CgAsyncCodingamerServiceHelper
+from .services.codingamer_puzzle_topic import (
+    CgAsyncCodingamerPuzzleTopicService,
+    CgAsyncCodingamerPuzzleTopicServiceHelper,
+)
+from .services.contribution import CgAsyncContributionService, CgAsyncContributionServiceHelper
+from .services.featured_event import CgAsyncFeaturedEventService, CgAsyncFeaturedEventServiceHelper
+from .services.intercom import CgAsyncIntercomService, CgAsyncIntercomServiceHelper
+from .services.last_activities import CgAsyncLastActivitiesService, CgAsyncLastActivitiesServiceHelper
+from .services.notification import CgAsyncNotificationService, CgAsyncNotificationServiceHelper
+from .services.programming_language import CgAsyncProgrammingLanguageService, CgAsyncProgrammingLanguageServiceHelper
+from .services.puzzle import CgAsyncPuzzleService, CgAsyncPuzzleServiceHelper
+from .services.quest import CgAsyncQuestService, CgAsyncQuestServiceHelper
+from .services.report import CgAsyncReportService, CgAsyncReportServiceHelper
+from .services.search import CgAsyncSearchService, CgAsyncSearchServiceHelper
+from .services.survey import CgAsyncSurveyService, CgAsyncSurveyServiceHelper
+from .services.test_session import CgAsyncTestSessionService, CgAsyncTestSessionServiceHelper
+from .services.test_session_question_submission import (
+    CgAsyncTestSessionQuestionSubmissionService,
+    CgAsyncTestSessionQuestionSubmissionServiceHelper,
+)
+from .services.user import CgAsyncUserService, CgAsyncUserServiceHelper
 
 if TYPE_CHECKING:
     from ..client import CgAsyncClient
 
 __all__ = [
     "CgAsyncService",
+    "CgAsyncServiceHelper",
     "CgAsyncClient",
     "CgAsyncServices",
     "CgAsyncAchievementService",
+    "CgAsyncAchievementServiceHelper",
     "CgAsyncClashOfCodeService",
+    "CgAsyncClashOfCodeServiceHelper",
     "CgAsyncClashOfCodeDescriptionService",
+    "CgAsyncClashOfCodeDescriptionServiceHelper",
     "CgAsyncCodingamerService",
+    "CgAsyncCodingamerServiceHelper",
     "CgAsyncCodingamerPuzzleTopicService",
+    "CgAsyncCodingamerPuzzleTopicServiceHelper",
     "CgAsyncContributionService",
+    "CgAsyncContributionServiceHelper",
     "CgAsyncFeaturedEventService",
+    "CgAsyncFeaturedEventServiceHelper",
     "CgAsyncIntercomService",
+    "CgAsyncIntercomServiceHelper",
     "CgAsyncLastActivitiesService",
+    "CgAsyncLastActivitiesServiceHelper",
     "CgAsyncNotificationService",
+    "CgAsyncNotificationServiceHelper",
     "CgAsyncProgrammingLanguageService",
+    "CgAsyncProgrammingLanguageServiceHelper",
     "CgAsyncPuzzleService",
+    "CgAsyncPuzzleServiceHelper",
     "CgAsyncQuestService",
+    "CgAsyncQuestServiceHelper",
     "CgAsyncReportService",
+    "CgAsyncReportServiceHelper",
     "CgAsyncSearchService",
+    "CgAsyncSearchServiceHelper",
     "CgAsyncSurveyService",
+    "CgAsyncSurveyServiceHelper",
     "CgAsyncTestSessionService",
+    "CgAsyncTestSessionServiceHelper",
     "CgAsyncTestSessionQuestionSubmissionService",
+    "CgAsyncTestSessionQuestionSubmissionServiceHelper",
     "CgAsyncUserService",
+    "CgAsyncUserServiceHelper",
 ]
 
 class CgAsyncServices:
     """
     Service endpoints for the async CodinGame client.
-    
+
     An instance of this class is created on CgAsyncClient, giving users well-typed access to all service endpoints.
     For example, to find a codingamer's points stats by their handle:
-    
+
         async with CgAsyncClient() as client:
             stats = await client.services.codingamer.find_codingame_points_stats_by_handle("some_handle")
     """
-    
+
     client: CgAsyncClient
     """The client through which endpoint requests are made."""
-    
+
     # well-typed service endpoints
     achievement: CgAsyncAchievementService
     clash_of_code: CgAsyncClashOfCodeService

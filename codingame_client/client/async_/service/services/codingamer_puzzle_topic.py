@@ -10,10 +10,14 @@ from json_data_types import JsonDict
 
 from ....common.protocol.codingamer_puzzle_topic import CgCodingamerPuzzleTopic, CgCodingamerTopicNode
 from ....common.raw_client import CgAuthenticationError
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncCodingamerPuzzleTopicServiceHelper(CgAsyncServiceHelper["CgAsyncCodingamerPuzzleTopicService"]):
+    """Helper methods for CgAsyncCodingamerPuzzleTopicService. Currently empty."""
 
 
 class CgAsyncCodingamerPuzzleTopicService(CgAsyncService):
@@ -21,6 +25,7 @@ class CgAsyncCodingamerPuzzleTopicService(CgAsyncService):
 
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "CodingamerPuzzleTopic")
+        self.helper = CgAsyncCodingamerPuzzleTopicServiceHelper(self)
 
     async def find_topics_by_codingamer_id(
                 self,

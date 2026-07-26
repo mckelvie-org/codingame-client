@@ -9,10 +9,14 @@ from typing import TYPE_CHECKING
 from ....common.protocol.clash_of_code import CgClash, CgClashRank
 from ....common.raw_client import CgAuthenticationError
 from ...raw_client import CgAsyncClientHttpError
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncClashOfCodeServiceHelper(CgAsyncServiceHelper["CgAsyncClashOfCodeService"]):
+    """Helper methods for CgAsyncClashOfCodeService. Currently empty."""
 
 
 class CgAsyncClashOfCodeService(CgAsyncService):
@@ -20,6 +24,7 @@ class CgAsyncClashOfCodeService(CgAsyncService):
 
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "ClashOfCode")
+        self.helper = CgAsyncClashOfCodeServiceHelper(self)
 
     async def get_clash_rank_by_codingamer_id(
                 self,

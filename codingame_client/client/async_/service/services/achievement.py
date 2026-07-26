@@ -10,10 +10,14 @@ from json_data_types import JsonDict
 
 from ....common.protocol.achievement import CgAchievement
 from ....common.raw_client import CgAuthenticationError
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncAchievementServiceHelper(CgAsyncServiceHelper["CgAsyncAchievementService"]):
+    """Helper methods for CgAsyncAchievementService. Currently empty."""
 
 
 class CgAsyncAchievementService(CgAsyncService):
@@ -21,6 +25,7 @@ class CgAsyncAchievementService(CgAsyncService):
 
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "Achievement")
+        self.helper = CgAsyncAchievementServiceHelper(self)
 
     async def find_by_codingamer_id(
                 self,

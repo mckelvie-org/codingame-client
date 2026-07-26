@@ -11,10 +11,14 @@ from json_data_types import JsonDict
 
 from ....common.protocol.featured_event import CgClashSlot, CgFeaturedEvent
 from ....common.raw_client import CgAuthenticationError
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncFeaturedEventServiceHelper(CgAsyncServiceHelper["CgAsyncFeaturedEventService"]):
+    """Helper methods for CgAsyncFeaturedEventService. Currently empty."""
 
 
 class CgAsyncFeaturedEventService(CgAsyncService):
@@ -22,6 +26,7 @@ class CgAsyncFeaturedEventService(CgAsyncService):
 
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "FeaturedEvent")
+        self.helper = CgAsyncFeaturedEventServiceHelper(self)
 
     async def find_upcoming_and_ongoing_featured_events(
                 self,

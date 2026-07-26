@@ -650,6 +650,7 @@ class CgCli(CliBase):
         return handler
 
     @cli_command("ClashOfCode service commands.")
+    @cli_command("ClashOfCode service commands.")
     async def cmd_api__clash_of_code(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         return None  # No handler for the parent command; subcommands will be handled by their own handlers.
 
@@ -1226,6 +1227,59 @@ class CgCli(CliBase):
             client = await self.get_client()
             language_ids = await client.services.programming_language.find_all_ids()
             print(json.dumps(language_ids, indent=2, sort_keys=True))
+        return handler
+
+    @cli_command("Higher-level helper commands, layered on top of the plain API wrappers "
+                 "(retries, polling, data normalization).")
+    async def cmd_api_helper(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Contribution service helper commands.")
+    async def cmd_api_helper__contribution(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Submit a new version of a contribution's content, with 524 retry/polling and "
+                 "test-case data normalization. A JSON-serialized CgContributionData object is "
+                 "read from stdin.")
+    async def cmd_api_helper__contribution__update_contribution(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_id: str = self.args.contribution_id
+            puzzle_type: str = self.args.puzzle_type
+            prev_version: int = self.args.prev_version
+            draft: bool = self.args.draft
+            ready_for_moderation: bool = self.args.ready_for_moderation
+            codingamer_id: int | None = self.args.codingamer_id
+            strip_test_final_eols: bool = self.args.strip_test_final_eols
+            max_wait_seconds: float = self.args.max_wait_seconds
+            contribution_data = CgContributionData.loads(sys.stdin.read())
+            client = await self.get_client()
+            contribution = await client.services.contribution.helper.update_contribution(
+                    contribution_id, puzzle_type, contribution_data, draft, ready_for_moderation,
+                    prev_version, codingamer_id, strip_test_final_eols=strip_test_final_eols,
+                    max_wait_seconds=max_wait_seconds)
+            print(json.dumps(contribution.to_dict(), indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("contribution_id", type=str, metavar="CONTRIBUTION-ID",
+                       help="Opaque contribution ID string.")
+        p.add_argument("puzzle_type", type=str, metavar="PUZZLE-TYPE",
+                       help="The type of the contribution, e.g. 'PUZZLE_INOUT'.")
+        p.add_argument("prev_version", type=int, metavar="PREV-VERSION",
+                       help="The contribution's current version number, as last retrieved via find-contribution "
+                            "(an idempotency/concurrency check--rejected if stale).")
+        p.add_argument("--draft", default=False, action="store_true",
+                       help="Submit as a private, unpublished draft. Defaults to false.")
+        p.add_argument("--ready-for-moderation", default=False, action="store_true",
+                       help="Formally submit for moderation. Defaults to false.")
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="The authoring codingamer's numeric ID. Defaults to the logged-in codingamer's ID.")
+        p.add_argument("--no-strip-test-final-eols", dest="strip_test_final_eols",
+                       default=True, action="store_false",
+                       help="Don't strip a single trailing newline from each test case's input/output text "
+                            "before submitting. By default, this normalization is applied.")
+        p.add_argument("--max-wait-seconds", type=float, default=0.0, metavar="SECONDS",
+                       help="If the server returns HTTP 524 (Cloudflare/origin timeout), how long to keep "
+                            "polling find-contribution for the version to increment before giving up, in "
+                            "seconds. Defaults to 0, meaning wait indefinitely.")
         return handler
 
     @cli_command("Codingame client command-line interface.")

@@ -4,6 +4,10 @@ Async Contribution service endpoint.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, cast
 
@@ -17,10 +21,136 @@ from ....common.protocol.contribution import (
     CgPuzzleType,
 )
 from ....common.raw_client import CgAuthenticationError
-from ..cg_service import CgAsyncService
+from ...raw_client import CgAsyncClientHttpError
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+logger = logging.getLogger(__name__)
+
+
+class CgAsyncContributionServiceHelper(CgAsyncServiceHelper["CgAsyncContributionService"]):
+    """Helper methods for CgAsyncContributionService."""
+
+    _POLL_INTERVAL_SECONDS = 30.0
+    """How often to re-check `find_contribution` while waiting out a 524 in `update_contribution`."""
+
+    @staticmethod
+    def _normalize_contribution_data(contribution_data: CgContributionData) -> CgContributionData:
+        """Return a copy of `contribution_data` with a single trailing '\\n' stripped from each
+           test case's `test_in`/`test_out` text, if present--the preferred submission format
+           per CodinGame site admins. The original object is never mutated."""
+        normalized = deepcopy(contribution_data)
+        for test_case in normalized.test_cases:
+            if test_case.test_in.endswith("\n"):
+                test_case.test_in = test_case.test_in[:-1]
+            if test_case.test_out.endswith("\n"):
+                test_case.test_out = test_case.test_out[:-1]
+        return normalized
+
+    async def _poll_until_committed(
+                self,
+                contribution_id: CgContributionId,
+                prev_version: int,
+                deadline: float | None,
+                submitted_data: CgContributionData,
+            ) -> CgContribution:
+        """Poll `find_contribution` every `_POLL_INTERVAL_SECONDS` until its version increments
+           past `prev_version` (indicating the server committed the update), or `deadline`
+           (a `time.monotonic()`-relative deadline, or None to wait indefinitely) passes."""
+        while True:
+            if deadline is None:
+                wait = self._POLL_INTERVAL_SECONDS
+            else:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"Timed out waiting for contribution {contribution_id!r} version to "
+                        f"increment past {prev_version} after an HTTP 524; the update may still "
+                        "complete server-side."
+                    )
+                wait = min(self._POLL_INTERVAL_SECONDS, remaining)
+            logger.info("update_contribution: polling find_contribution for %r again in %.0fs...",
+                        contribution_id, wait)
+            await asyncio.sleep(wait)
+            result = await self.service.find_contribution(contribution_id)
+            if result.last_version.version > prev_version:
+                if result.last_version.data != submitted_data:
+                    logger.warning(
+                        "update_contribution: committed data for contribution %r does not "
+                        "exactly match the submitted data after 524 recovery", contribution_id)
+                return result
+
+    async def update_contribution(
+                self,
+                contribution_id: CgContributionId,
+                puzzle_type: CgPuzzleType,
+                contribution_data: CgContributionData,
+                draft: bool,
+                ready_for_moderation: bool,
+                prev_version: int,
+                codingamer_id: int | None = None,
+                *,
+                strip_test_final_eols: bool = True,
+                max_wait_seconds: float = 0.0,
+            ) -> CgContribution:
+        """Submit a new version of a contribution's content, adding retry/polling and data
+           normalization on top of the plain `CgAsyncContributionService.update_contribution`.
+
+           The server re-validates a contribution's full test suite on every update, which for
+           heavy contributions can take long enough that Cloudflare's edge disconnects the
+           request even though the origin call eventually completes successfully server-side. If
+           that happens (an `CgAsyncClientHttpError` with `status_code == 524`), this method
+           assumes the update likely succeeded and polls `find_contribution` every 30 seconds
+           until `last_version.version` increments past `prev_version`, instead of propagating
+           the 524.
+
+        Args:
+            contribution_id, puzzle_type, contribution_data, draft, ready_for_moderation,
+            prev_version, codingamer_id:
+                See `CgAsyncContributionService.update_contribution`.
+            strip_test_final_eols:
+                If True (the default), submit a normalized copy of `contribution_data` with a
+                single trailing '\\n' stripped from each test case's input/output text, if
+                present. `contribution_data` itself is never mutated.
+            max_wait_seconds:
+                How long to keep polling after a 524 before giving up, in seconds. 0 (the
+                default) means wait indefinitely. Ignored entirely if no 524 occurs.
+
+        Returns:
+            The updated CgContribution.
+
+        Raises:
+            CgAuthenticationError:
+                If the session is not authenticated and cannot implicitly login, or if
+                `codingamer_id` is not provided and no codingamer ID can be resolved from the
+                session's credentials.
+            CgAsyncClientHttpError:
+                If a transport error occurs, if the response content could not be decoded at all,
+                if the status code is not 2xx and not 524, or if the decoded content is not a
+                dict.
+            TimeoutError:
+                If a 524 occurred and `max_wait_seconds` elapsed before the contribution's
+                version incremented. The update may still complete server-side.
+        """
+        if strip_test_final_eols:
+            contribution_data = self._normalize_contribution_data(contribution_data)
+        try:
+            return await self.service.update_contribution(
+                    contribution_id, puzzle_type, contribution_data, draft, ready_for_moderation,
+                    prev_version, codingamer_id)
+        except CgAsyncClientHttpError as e:
+            if e.status_code != 524:
+                raise
+        logger.warning(
+            "update_contribution: got HTTP 524 for contribution %r; server likely committed "
+            "the update anyway. Polling find_contribution for the version to increment "
+            "(max_wait_seconds=%s)...",
+            contribution_id, "infinite" if max_wait_seconds <= 0 else max_wait_seconds,
+        )
+        deadline = None if max_wait_seconds <= 0 else time.monotonic() + max_wait_seconds
+        return await self._poll_until_committed(contribution_id, prev_version, deadline, contribution_data)
 
 
 class CgAsyncContributionService(CgAsyncService):
@@ -28,6 +158,7 @@ class CgAsyncContributionService(CgAsyncService):
     
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "Contribution")
+        self.helper = CgAsyncContributionServiceHelper(self)
 
     async def find_contribution(
                 self,
@@ -179,10 +310,10 @@ class CgAsyncContributionService(CgAsyncService):
            For a contribution with many/heavy test cases, this re-validation can take long enough
            that Cloudflare's edge disconnects the request (surfacing as an
            `CgAsyncClientHttpError` with `status_code == 524`) even though the origin request
-           eventually completes successfully server-side. Handling that (e.g. via polling
-           `find_contribution` for the version to increment) and any data normalization (e.g.
-           stripping trailing newlines from test case text) is left to a higher-level contribution
-           management layer, not implemented here.
+           eventually completes successfully server-side. See
+           `CgAsyncContributionServiceHelper.update_contribution` (`self.helper.update_contribution`)
+           for a version that layers retry/polling and data normalization (e.g. stripping trailing
+           newlines from test case text) on top of this method.
 
         Args:
             contribution_id:      The opaque contribution ID (see `CgContributionId`).

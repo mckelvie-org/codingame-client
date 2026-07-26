@@ -10,10 +10,14 @@ from json_data_types import JsonDict
 
 from ....common.protocol.codingamer import CgCodingamePointsStats, CgCodingamer, CgCodingamerFollower
 from ....common.raw_client import CgAuthenticationError
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncCodingamerServiceHelper(CgAsyncServiceHelper["CgAsyncCodingamerService"]):
+    """Helper methods for CgAsyncCodingamerService. Currently empty."""
 
 
 class CgAsyncCodingamerService(CgAsyncService):
@@ -21,6 +25,7 @@ class CgAsyncCodingamerService(CgAsyncService):
     
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "CodinGamer")
+        self.helper = CgAsyncCodingamerServiceHelper(self)
 
     async def find_codingame_points_stats_by_handle(
                 self,

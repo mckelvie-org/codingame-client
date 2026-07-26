@@ -9,10 +9,14 @@ from typing import TYPE_CHECKING
 from ....common.protocol.survey import CgSurvey
 from ....common.raw_client import CgAuthenticationError
 from ...raw_client import CgAsyncClientHttpError
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncSurveyServiceHelper(CgAsyncServiceHelper["CgAsyncSurveyService"]):
+    """Helper methods for CgAsyncSurveyService. Currently empty."""
 
 
 class CgAsyncSurveyService(CgAsyncService):
@@ -20,6 +24,7 @@ class CgAsyncSurveyService(CgAsyncService):
 
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "Survey")
+        self.helper = CgAsyncSurveyServiceHelper(self)
 
     async def find_survey(
                 self,

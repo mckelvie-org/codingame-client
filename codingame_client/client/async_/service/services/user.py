@@ -8,10 +8,14 @@ from typing import TYPE_CHECKING
 
 from ....common.protocol.user import CgUserProperties
 from ....common.raw_client import CgAuthenticationError
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncUserServiceHelper(CgAsyncServiceHelper["CgAsyncUserService"]):
+    """Helper methods for CgAsyncUserService. Currently empty."""
 
 
 class CgAsyncUserService(CgAsyncService):
@@ -19,6 +23,7 @@ class CgAsyncUserService(CgAsyncService):
 
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "User")
+        self.helper = CgAsyncUserServiceHelper(self)
 
     async def update_user_properties(
                 self,

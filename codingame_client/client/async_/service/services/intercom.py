@@ -7,10 +7,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ...raw_client import CgAsyncClientHttpError
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncIntercomServiceHelper(CgAsyncServiceHelper["CgAsyncIntercomService"]):
+    """Helper methods for CgAsyncIntercomService. Currently empty."""
 
 
 class CgAsyncIntercomService(CgAsyncService):
@@ -18,6 +22,7 @@ class CgAsyncIntercomService(CgAsyncService):
 
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "Intercom")
+        self.helper = CgAsyncIntercomServiceHelper(self)
 
     async def generate_token(self) -> str | None:
         """Generate an Intercom identity-verification JWT for the logged-in codingamer, used to

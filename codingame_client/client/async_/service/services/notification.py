@@ -10,10 +10,14 @@ from json_data_types import JsonDict
 
 from ....common.protocol.notification import CgNotification
 from ....common.raw_client import CgAuthenticationError
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncNotificationServiceHelper(CgAsyncServiceHelper["CgAsyncNotificationService"]):
+    """Helper methods for CgAsyncNotificationService. Currently empty."""
 
 
 class CgAsyncNotificationService(CgAsyncService):
@@ -21,6 +25,7 @@ class CgAsyncNotificationService(CgAsyncService):
     
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "Notification")
+        self.helper = CgAsyncNotificationServiceHelper(self)
 
     async def find_unread_notifications(
                 self,

@@ -7,10 +7,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ....common.protocol.report import CgSubmissionReport
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncReportServiceHelper(CgAsyncServiceHelper["CgAsyncReportService"]):
+    """Helper methods for CgAsyncReportService. Currently empty."""
 
 
 class CgAsyncReportService(CgAsyncService):
@@ -18,6 +22,7 @@ class CgAsyncReportService(CgAsyncService):
 
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "Report")
+        self.helper = CgAsyncReportServiceHelper(self)
 
     async def find_report_by_submission(self, submission_id: int) -> CgSubmissionReport:
         """Find the results report for a single puzzle submission.

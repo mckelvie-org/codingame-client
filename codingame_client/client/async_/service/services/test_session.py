@@ -9,10 +9,14 @@ from typing import TYPE_CHECKING, cast
 from json_data_types import JsonData
 
 from ....common.protocol.test_session import CgPlayRequest, CgPlayResult, CgSubmitRequest, CgTestSession
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncTestSessionServiceHelper(CgAsyncServiceHelper["CgAsyncTestSessionService"]):
+    """Helper methods for CgAsyncTestSessionService. Currently empty."""
 
 
 class CgAsyncTestSessionService(CgAsyncService):
@@ -20,6 +24,7 @@ class CgAsyncTestSessionService(CgAsyncService):
 
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "TestSession")
+        self.helper = CgAsyncTestSessionServiceHelper(self)
 
     async def start_test_session(self, test_session_handle: str) -> CgTestSession:
         """Start (or resume) an interactive IDE test session for a puzzle.

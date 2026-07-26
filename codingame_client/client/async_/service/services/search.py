@@ -9,10 +9,14 @@ from typing import TYPE_CHECKING, cast
 from json_data_types import JsonDict
 
 from ....common.protocol.search.schema import CgSearchResult, CgSearchResultType
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncSearchServiceHelper(CgAsyncServiceHelper["CgAsyncSearchService"]):
+    """Helper methods for CgAsyncSearchService. Currently empty."""
 
 
 class CgAsyncSearchService(CgAsyncService):
@@ -20,6 +24,7 @@ class CgAsyncSearchService(CgAsyncService):
     
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "Search")
+        self.helper = CgAsyncSearchServiceHelper(self)
 
     async def search(
                 self,

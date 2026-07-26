@@ -16,10 +16,14 @@ from ....common.protocol.puzzle import (
     CgSolvedPuzzlesByLanguage,
 )
 from ....common.raw_client import CgAuthenticationError
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncPuzzleServiceHelper(CgAsyncServiceHelper["CgAsyncPuzzleService"]):
+    """Helper methods for CgAsyncPuzzleService. Currently empty."""
 
 
 class CgAsyncPuzzleService(CgAsyncService):
@@ -27,6 +31,7 @@ class CgAsyncPuzzleService(CgAsyncService):
 
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "Puzzle")
+        self.helper = CgAsyncPuzzleServiceHelper(self)
 
     async def count_solved_puzzles_by_programming_language(
                 self,

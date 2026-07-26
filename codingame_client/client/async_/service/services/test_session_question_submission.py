@@ -9,10 +9,14 @@ from typing import TYPE_CHECKING, cast
 from json_data_types import JsonDict
 
 from ....common.protocol.test_session_question_submission import CgTestSessionQuestionSubmission
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncTestSessionQuestionSubmissionServiceHelper(CgAsyncServiceHelper["CgAsyncTestSessionQuestionSubmissionService"]):
+    """Helper methods for CgAsyncTestSessionQuestionSubmissionService. Currently empty."""
 
 
 class CgAsyncTestSessionQuestionSubmissionService(CgAsyncService):
@@ -20,6 +24,7 @@ class CgAsyncTestSessionQuestionSubmissionService(CgAsyncService):
 
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "TestSessionQuestionSubmission")
+        self.helper = CgAsyncTestSessionQuestionSubmissionServiceHelper(self)
 
     async def find_all_submissions(
                 self,

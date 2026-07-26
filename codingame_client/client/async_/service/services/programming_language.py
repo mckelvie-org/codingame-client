@@ -7,10 +7,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from ....common.protocol.schema import CgSolutionLanguage
-from ..cg_service import CgAsyncService
+from ..cg_service import CgAsyncService, CgAsyncServiceHelper
 
 if TYPE_CHECKING:
     from ...client import CgAsyncClient
+
+
+class CgAsyncProgrammingLanguageServiceHelper(CgAsyncServiceHelper["CgAsyncProgrammingLanguageService"]):
+    """Helper methods for CgAsyncProgrammingLanguageService. Currently empty."""
 
 
 class CgAsyncProgrammingLanguageService(CgAsyncService):
@@ -18,6 +22,7 @@ class CgAsyncProgrammingLanguageService(CgAsyncService):
     
     def __init__(self, client: CgAsyncClient) -> None:
         super().__init__(client, "ProgrammingLanguage")
+        self.helper = CgAsyncProgrammingLanguageServiceHelper(self)
 
     async def find_all_ids(self) -> list[CgSolutionLanguage]:
         """Find the IDs of all programming languages supported for contribution reference solutions.
