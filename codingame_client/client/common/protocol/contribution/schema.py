@@ -208,17 +208,23 @@ class CgContributionVersion(JSONWizardX):
 
     draft: bool | None = None
     """Whether this version of the contribution is a draft. Draft versions are private to
-       the contributor and are not shared for comment/approval. This field is only present in the response from findContribution,
-       and is not included when submitting an update."""
-       
+       the contributor and are not shared for comment/approval. Present in both `findContribution`
+       and `updateContribution` responses (confirmed 2026-07-26 via round-trip test)."""
+
     ready_for_moderation: bool | None = None
-    """Whether this version of the contribution is ready for moderation.
-       This field is only present in the response from findContribution, and is not included when submitting an update.
+    """Whether this version of the contribution is ready for moderation. Present in both
+       `findContribution` and `updateContribution` responses (confirmed 2026-07-26 via round-trip
+       test).
     """
     
     statement_html: CgHtml | None = Alias("statementHTML", default=None)
-    """server-derived HTML rendering of the statement, input/output descriptions, and constraints.
-       This field is only present in the response from findContribution, and is not included when submitting an update.
+    """Server-rendered HTML of the statement, input/output descriptions, and constraints, used only
+       for display on the contribution view page. Entirely derivative of `data.statement` (and the
+       other `CgContributionData` text fields it's rendered from)--non-authoritative, and never
+       needed to reconstruct or resubmit a version. Present in `findContribution` responses; omitted
+       from `updateContribution` responses (confirmed 2026-07-26), presumably because the update
+       response doesn't wait for/include the server-side re-render. Fetch via `findContribution` if
+       the rendered HTML for a just-submitted version is needed.
 
        Explicitly aliased: the server sends "statementHTML" (all-caps acronym), which the automatic
        camelCase transform doesn't produce from `statement_html` (it produces "statementHtml").
