@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, cast
 
 from json_data_types import JsonDict
 
-from ....common.protocol.contribution import CgContribution, CgPendingContribution
+from ....common.protocol.contribution import (
+    CgContribution,
+    CgContributionData,
+    CgContributionId,
+    CgPendingContribution,
+    CgPuzzleType,
+)
 from ....common.raw_client import CgAuthenticationError
 from ..cg_service import CgAsyncService
 
@@ -153,3 +159,75 @@ class CgAsyncContributionService(CgAsyncService):
         raw_contributions = await self.service_request_to_list(
                 "getAllPendingContributions", [page, contribution_type_filter, codingamer_id])
         return CgPendingContribution.from_list(cast(list[JsonDict], raw_contributions))
+
+    async def update_contribution(
+                self,
+                contribution_id: CgContributionId,
+                puzzle_type: CgPuzzleType,
+                contribution_data: CgContributionData,
+                draft: bool,
+                ready_for_moderation: bool,
+                prev_version: int,
+                codingamer_id: int | None = None,
+            ) -> CgContribution:
+        """Submit a new version of a contribution's content.
+
+           A thin wrapper over the raw API--no retries and no normalization of
+           `contribution_data` are performed here. The server re-validates the full contribution
+           (running all local and server-side validator test cases) on every call, though it is
+           reportedly smart enough to skip re-running test cases whose content hasn't changed.
+           For a contribution with many/heavy test cases, this re-validation can take long enough
+           that Cloudflare's edge disconnects the request (surfacing as an
+           `CgAsyncClientHttpError` with `status_code == 524`) even though the origin request
+           eventually completes successfully server-side. Handling that (e.g. via polling
+           `find_contribution` for the version to increment) and any data normalization (e.g.
+           stripping trailing newlines from test case text) is left to a higher-level contribution
+           management layer, not implemented here.
+
+        Args:
+            contribution_id:      The opaque contribution ID (see `CgContributionId`).
+            puzzle_type:          The type of the contribution, e.g. "PUZZLE_INOUT".
+            contribution_data:    The new contribution content, typically obtained by mutating
+                                  the `CgContributionData` returned by `find_contribution`.
+            draft:                Whether this version is a private, unpublished draft.
+            ready_for_moderation: Whether the contribution is being formally submitted for
+                                  moderation (requiring 3 moderator upvotes and fewer than 3
+                                  downvotes before the moderation window expires).
+            prev_version:         The version number of the contribution as last retrieved via
+                                  `find_contribution` (`CgContribution.last_version.version`).
+                                  Serves as an idempotency/concurrency check--the server rejects
+                                  the update if this doesn't match its current version.
+            codingamer_id:        The authoring codingamer's numeric ID. If not provided,
+                                  defaults to the logged-in codingamer's ID.
+
+        Returns:
+            The updated CgContribution.
+
+        Raises:
+            CgAuthenticationError:
+                If the session is not authenticated and cannot implicitly login, or if
+                `codingamer_id` is not provided and no codingamer ID can be resolved from the
+                session's credentials.
+            CgAsyncClientHttpError:
+                If a transport error occurs, if the response content could not be decoded at all,
+                if the status code is not 2xx (e.g. if `prev_version` is stale, or 524 if
+                Cloudflare's edge disconnects while the origin is still validating--see above), or
+                if the decoded content is not a dict.
+        """
+        if codingamer_id is None:
+            await self.require_authenticate()
+            codingamer_id = self.client.codingamer_id
+            if codingamer_id is None:
+                raise CgAuthenticationError()
+        raw_result = await self.service_request_to_dict(
+                "updateContribution",
+                [
+                        codingamer_id,
+                        contribution_id,
+                        puzzle_type,
+                        contribution_data.to_dict(),
+                        draft,
+                        ready_for_moderation,
+                        prev_version,
+                    ])
+        return CgContribution.from_dict(raw_result)

@@ -1,6 +1,6 @@
 """
 JSON-serializable dataclasses for the CodingamerPuzzleTopic service's findTopicsByCodingamerId
-Codingame API method.
+and selectTopicsByCodingamerIdAndPuzzleId Codingame API methods.
 """
 
 from __future__ import annotations
@@ -48,4 +48,35 @@ class CgCodingamerPuzzleTopic(JSONWizardX):
         self._last_progress_time = CgEpochMillis.upcast(value)
 
 
-__all__ = ["CgCodingamerPuzzleTopic", "CgPuzzleTopicCategory"]
+@dataclass
+class CgCodingamerTopicNode(JSONWizardX):
+    """A single node in a puzzle's topic tree, personalized for a specific codingamer, as
+       returned (in a bare JSON array) by selectTopicsByCodingamerIdAndPuzzleId. Similar to
+       `CgPuzzleTopicNode` (last_activities/schema.py, used by other puzzle-related endpoints),
+       but adds `id`/`learned` for per-codingamer topic mastery tracking; `category` was not
+       observed in the single example seen so far, so it's modeled as optional here (as it is
+       on `CgPuzzleTopicNode`)."""
+
+    id: int
+    """Numeric ID of the topic."""
+
+    handle: str
+    """Opaque (but human-readable) slug for the topic, e.g. "constraint-propagation"."""
+
+    value: str
+    """Display name for the topic, e.g. "Constraint Propagation"."""
+
+    learned: bool
+    """Whether the codingamer has "learned" (mastered) this topic."""
+
+    extra_data: CatchAll = field(default_factory=dict)
+
+    children: list[CgCodingamerTopicNode] = field(default_factory=list)
+    """Child topics nested under this one. Often empty."""
+
+    category: CgPuzzleTopicCategory | None = None
+    """The topic's difficulty category; see `CgPuzzleTopicCategory`. Not observed in the single
+       example seen so far."""
+
+
+__all__ = ["CgCodingamerPuzzleTopic", "CgCodingamerTopicNode", "CgPuzzleTopicCategory"]

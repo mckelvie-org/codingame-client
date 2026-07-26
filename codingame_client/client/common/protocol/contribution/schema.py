@@ -85,7 +85,12 @@ class CgTestCase(JSONWizardX):
     """A single test case for the contribution, including the input and expected
        output for the test. May represent either a local test case or a server-sideq validator test case.
        Tests are numbers in the order given, separately for local tests and validator tests.
-       The server-side validator test cases are not shared with the puzzler, and used to validate the solution and score the submission."""
+       The server-side validator test cases are not shared with the puzzler, and used to validate the solution and score the submission.
+
+       See the note on `CgTestSessionTestCase` (test_session/schema.py) re: a possible future
+       shared "puzzle test case" model--that class represents the same underlying concept from
+       the solve/IDE side (TestSession/startTestSession), with binary-ID references instead of
+       this class's inline text content."""
     title: str
     """Friendly title for the test case, e.g. "Large grid test case"""
 

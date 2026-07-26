@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:85d217200823c6260c669b1fc49a94528fff6e65542055107e8f2e768dbcf5d3"
+content_hash = "sha256:5bb7e667107f36d43adcaffc1d78e39ddb2be7104e370080e53de64663a422be"
 
 [[metadata.targets]]
 requires_python = ">=3.10"
@@ -507,14 +507,13 @@ files = [
 name = "dataclass-wizard"
 version = "1.0.0"
 requires_python = ">=3.9"
+git = "https://github.com/mckelvie-org/dataclass-wizard.git"
+ref = "fix/catchall-reuse-across-contexts"
+revision = "9575bcf0c5b796caedc42898640f732ba6e22510"
 summary = "A wizard-like JSON serialization library for Python dataclasses"
 groups = ["default"]
 dependencies = [
     "typing-extensions>=4.13.0; python_version <= \"3.12\"",
-]
-files = [
-    {file = "dataclass_wizard-1.0.0-py3-none-any.whl", hash = "sha256:0dc53acbfed4ca5fe6bbdc517003959afbd50c0794dec1f8405d3c4d8ae6690c"},
-    {file = "dataclass_wizard-1.0.0.tar.gz", hash = "sha256:d458e6a97585377337f1633e5738ee1c051e84ca7726276ecde78d6534e485b5"},
 ]
 
 [[package]]

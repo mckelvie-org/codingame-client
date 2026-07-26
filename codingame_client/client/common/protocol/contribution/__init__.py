@@ -21,6 +21,7 @@ from .schema import (
     CgTopic,
     CgValidateAction,
     cg_extension_to_solution_language,
+    cg_solution_language_to_extension,
 )
 
 __all__ = [
@@ -28,5 +29,5 @@ __all__ = [
     "CgContributionStatusHistoryEntry", "CgContributionVersion", "CgTestCase",
     "CgMarkdown", "CgHtml", "CgStubGenerator", "CgTopic", "CgContributionId",
     "CgPendingContribution", "CgPuzzleType", "CgSolutionLanguage", "CgValidateAction",
-    "cg_extension_to_solution_language",
+    "cg_extension_to_solution_language", "cg_solution_language_to_extension",
 ]

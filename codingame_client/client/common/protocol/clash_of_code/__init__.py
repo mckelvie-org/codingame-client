@@ -4,6 +4,7 @@ Protocol schema definitions for the ClashOfCode service.
 
 from __future__ import annotations
 
+from ..schema import CgSolutionLanguage
 from .schema import (
     CgClash,
     CgClashMode,
@@ -16,5 +17,5 @@ from .schema import (
 
 __all__ = [
     "CgClash", "CgClashMode", "CgClashPlayer", "CgClashPlayerStatus", "CgClashRank",
-    "CgClashType", "CgTestSessionStatus",
+    "CgClashType", "CgSolutionLanguage", "CgTestSessionStatus",
 ]

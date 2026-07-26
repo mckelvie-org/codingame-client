@@ -173,6 +173,51 @@ class CgAsyncCodingamerService(CgAsyncService):
                 "findFollowing", [codingamer_id, current_codingamer_id])
         return CgCodingamerFollower.from_list(cast(list[JsonDict], raw_following))
 
+    async def find_codingamer_follow_card(
+                self,
+                codingamer_id: int | None = None,
+                current_codingamer_id: int | None = None,
+            ) -> CgCodingamerFollower:
+        """Find a codingamer's follow-card summary--their public profile plus
+           follow-relationship flags relative to another codingamer.
+
+           Same `codingamer_id`/`current_codingamer_id` semantics as `find_followers` (see its
+           docstring)--`current_codingamer_id` must equal the logged-in codingamer's own ID
+           (server-enforced with a 422 otherwise); it serves only to compute
+           `is_follower`/`is_following` from the logged-in codingamer's perspective. The response
+           shape is identical to a single entry of `find_followers`/`find_following`.
+
+        Args:
+            codingamer_id: The codingamer whose follow card to fetch. Defaults to the logged-in
+                           codingamer's ID.
+            current_codingamer_id: Must equal the logged-in codingamer's ID (server-enforced).
+                           Defaults to the logged-in codingamer's ID.
+
+        Returns:
+            A CgCodingamerFollower object.
+
+        Raises:
+            CgAuthenticationError:
+                If the session is not authenticated and cannot implicitly login, or if either ID
+                is not provided and cannot be resolved from the session's credentials.
+            CgAsyncClientHttpError:
+                If a transport error occurs, if the response content could not be decoded at all,
+                if the status code is not 2xx, or if the decoded content is not a dict.
+        """
+        await self.require_authenticate()
+        own_id = self.client.codingamer_id
+        if codingamer_id is None:
+            codingamer_id = own_id
+            if codingamer_id is None:
+                raise CgAuthenticationError()
+        if current_codingamer_id is None:
+            current_codingamer_id = own_id
+            if current_codingamer_id is None:
+                raise CgAuthenticationError()
+        raw_card = await self.service_request_to_dict(
+                "findCodingamerFollowCard", [codingamer_id, current_codingamer_id])
+        return CgCodingamerFollower.from_dict(raw_card)
+
     async def find_follower_ids(
                 self,
                 codingamer_id: int | None = None,

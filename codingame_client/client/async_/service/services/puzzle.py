@@ -185,3 +185,41 @@ class CgAsyncPuzzleService(CgAsyncService):
         raw_progress = await self.service_request_to_list(
                 "findBestFollowingProgress", [codingamer_id, puzzle_id])
         return CgFollowingPuzzleProgress.from_list(cast(list[JsonDict], raw_progress))
+
+    async def find_progress_by_pretty_id(
+                self,
+                pretty_id: str,
+                codingamer_id: int | None = None,
+            ) -> CgLastActivityPuzzle:
+        """Find a codingamer's progress summary for a single puzzle, by its pretty ID (the
+           displayed puzzle title, lowercased with spaces replaced by hyphens--e.g.
+           "literary-alfabet-soupe" for "Literary Alfabet Soupe").
+
+           The richest of the three findProgress* methods: uniquely among them, this one also
+           populates `linked_achievements`/`moderators`/`statement`/`title_map`.
+
+        Args:
+            pretty_id:     The puzzle's pretty ID (see `CgLastActivityPuzzle.pretty_id`).
+            codingamer_id: The codingamer whose progress to look up. If not provided, defaults
+                           to the logged-in codingamer's ID.
+
+        Returns:
+            A CgLastActivityPuzzle object.
+
+        Raises:
+            CgAuthenticationError:
+                If the session is not authenticated and cannot implicitly login, or if
+                `codingamer_id` is not provided and no codingamer ID can be resolved from the
+                session's credentials.
+            CgAsyncClientHttpError:
+                If a transport error occurs, if the response content could not be decoded at all,
+                if the status code is not 2xx, or if the decoded content is not a dict.
+        """
+        if codingamer_id is None:
+            await self.require_authenticate()
+            codingamer_id = self.client.codingamer_id
+            if codingamer_id is None:
+                raise CgAuthenticationError()
+        raw_puzzle = await self.service_request_to_dict(
+                "findProgressByPrettyId", [pretty_id, codingamer_id])
+        return CgLastActivityPuzzle.from_dict(raw_puzzle)

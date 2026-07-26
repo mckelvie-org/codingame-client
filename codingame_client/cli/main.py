@@ -17,6 +17,8 @@ from json_data_types import JsonData, JsonList
 from rich.console import Console
 
 from ..client.async_.client import CgAsyncClient
+from ..client.common.protocol.contribution import CgContributionData
+from ..client.common.protocol.test_session import CgMultipleLanguagesTestParams, CgPlayRequest, CgSubmitRequest
 from ..client.common.protocol.user import CgUserProperties
 from ..client.common.raw_client import CgAuthenticationError, CgDownloadFileResult, compute_content_hash
 from ..common.timestamps import parse_timestamp
@@ -615,6 +617,38 @@ class CgCli(CliBase):
                        help="Assumed 1-indexed page number; unconfirmed. Defaults to 1.")
         return handler
 
+    @cli_command("Submit a new version of a contribution's content. A JSON-serialized "
+                 "CgContributionData object is read from stdin.")
+    async def cmd_api__contribution__update_contribution(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_id: str = self.args.contribution_id
+            puzzle_type: str = self.args.puzzle_type
+            prev_version: int = self.args.prev_version
+            draft: bool = self.args.draft
+            ready_for_moderation: bool = self.args.ready_for_moderation
+            codingamer_id: int | None = self.args.codingamer_id
+            contribution_data = CgContributionData.loads(sys.stdin.read())
+            client = await self.get_client()
+            contribution = await client.services.contribution.update_contribution(
+                    contribution_id, puzzle_type, contribution_data, draft, ready_for_moderation,
+                    prev_version, codingamer_id)
+            print(json.dumps(contribution.to_dict(), indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("contribution_id", type=str, metavar="CONTRIBUTION-ID",
+                       help="Opaque contribution ID string.")
+        p.add_argument("puzzle_type", type=str, metavar="PUZZLE-TYPE",
+                       help="The type of the contribution, e.g. 'PUZZLE_INOUT'.")
+        p.add_argument("prev_version", type=int, metavar="PREV-VERSION",
+                       help="The contribution's current version number, as last retrieved via find-contribution "
+                            "(an idempotency/concurrency check--rejected if stale).")
+        p.add_argument("--draft", default=False, action="store_true",
+                       help="Submit as a private, unpublished draft. Defaults to false.")
+        p.add_argument("--ready-for-moderation", default=False, action="store_true",
+                       help="Formally submit for moderation. Defaults to false.")
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="The authoring codingamer's numeric ID. Defaults to the logged-in codingamer's ID.")
+        return handler
+
     @cli_command("ClashOfCode service commands.")
     async def cmd_api__clash_of_code(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         return None  # No handler for the parent command; subcommands will be handled by their own handlers.
@@ -740,6 +774,22 @@ class CgCli(CliBase):
                        help="Codingamer whose puzzle topic progress to list. Defaults to the logged-in codingamer's ID.")
         return handler
 
+    @cli_command("Find the topic tree for a single puzzle, personalized with the codingamer's per-topic learned status.")
+    async def cmd_api__codingamer_puzzle_topic__select_topics_by_codingamer_id_and_puzzle_id(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            puzzle_id: int = self.args.puzzle_id
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            topics = await client.services.codingamer_puzzle_topic.select_topics_by_codingamer_id_and_puzzle_id(
+                    puzzle_id, codingamer_id)
+            print(json.dumps([t.to_dict() for t in topics], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("puzzle_id", type=int, metavar="PUZZLE-ID",
+                       help="Numeric ID of the puzzle.")
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer whose topic mastery to check. Defaults to the logged-in codingamer's ID.")
+        return handler
+
     @cli_command("Puzzle service commands.")
     async def cmd_api__puzzle(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         return None  # No handler for the parent command; subcommands will be handled by their own handlers.
@@ -807,6 +857,22 @@ class CgCli(CliBase):
                        help="Numeric ID of the puzzle to check.")
         p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
                        help="Codingamer whose followees to check. Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("Find a codingamer's progress summary for a single puzzle, by its pretty ID.")
+    async def cmd_api__puzzle__find_progress_by_pretty_id(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            pretty_id: str = self.args.pretty_id
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            puzzle = await client.services.puzzle.find_progress_by_pretty_id(pretty_id, codingamer_id)
+            print(json.dumps(puzzle.to_dict(), indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("pretty_id", type=str, metavar="PRETTY-ID",
+                       help="The puzzle's pretty ID: displayed title, lowercased with spaces replaced by "
+                            "hyphens, e.g. 'literary-alfabet-soupe'.")
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer whose progress to look up. Defaults to the logged-in codingamer's ID.")
         return handler
 
     @cli_command("LastActivities service commands.")
@@ -926,6 +992,106 @@ class CgCli(CliBase):
                             "from now (e.g., '-1h30m'), or an ISO 8601 datetime string.")
         return handler
 
+    @cli_command("TestSession service commands.")
+    async def cmd_api__test_session(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Start (or resume) an interactive IDE test session for a puzzle.")
+    async def cmd_api__test_session__start_test_session(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            test_session_handle: str = self.args.test_session_handle
+            client = await self.get_client()
+            session = await client.services.test_session.start_test_session(test_session_handle)
+            print(json.dumps(session.to_dict(), indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("test_session_handle", type=str, metavar="TEST-SESSION-HANDLE",
+                       help="The puzzle's test session handle (e.g. CgLastActivityPuzzle.test_session_handle).")
+        return handler
+
+    @cli_command("Run a codingamer's code against a single test case within a test session. Code is read from stdin.")
+    async def cmd_api__test_session__play(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            test_session_handle: str = self.args.test_session_handle
+            programming_language_id: str = self.args.language
+            test_index: int | None = self.args.test_index
+            code = sys.stdin.read()
+            request = CgPlayRequest(code=code, programming_language_id=programming_language_id)
+            if test_index is not None:
+                request.multiple_languages = CgMultipleLanguagesTestParams(test_index=test_index)
+            client = await self.get_client()
+            result = await client.services.test_session.play(test_session_handle, request)
+            print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("test_session_handle", type=str, metavar="TEST-SESSION-HANDLE",
+                       help="The puzzle's test session handle.")
+        p.add_argument("--language", "-l", type=str, required=True, metavar="LANGUAGE-ID",
+                       help="Programming language ID the code is written in, e.g. 'Python3'.")
+        p.add_argument("--test-index", "-t", type=int, default=None, metavar="N",
+                       help="1-based test case index to run against, for MULTIPLE_LANGUAGES-type puzzles.")
+        return handler
+
+    @cli_command("Generate a Language Server Protocol (LSP) auth token for a test session.")
+    async def cmd_api__test_session__generate_lsp_token(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            test_session_id: int = self.args.test_session_id
+            client = await self.get_client()
+            token = await client.services.test_session.generate_lsp_token(test_session_id)
+            print(json.dumps(token))
+        p = cmd.get_parser()
+        p.add_argument("test_session_id", type=int, metavar="TEST-SESSION-ID",
+                       help="The test session's numeric ID (CgTestSession.test_session_id).")
+        return handler
+
+    @cli_command("Submit a final solution to a puzzle for credit. Code is read from stdin.")
+    async def cmd_api__test_session__submit(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            test_session_handle: str = self.args.test_session_handle
+            programming_language_id: str = self.args.language
+            code = sys.stdin.read()
+            request = CgSubmitRequest(code=code, programming_language_id=programming_language_id)
+            client = await self.get_client()
+            submission_id = await client.services.test_session.submit(test_session_handle, request)
+            print(json.dumps(submission_id))
+        p = cmd.get_parser()
+        p.add_argument("test_session_handle", type=str, metavar="TEST-SESSION-HANDLE",
+                       help="The puzzle's test session handle.")
+        p.add_argument("--language", "-l", type=str, required=True, metavar="LANGUAGE-ID",
+                       help="Programming language ID the code is written in, e.g. 'Python3'.")
+        return handler
+
+    @cli_command("Report service commands.")
+    async def cmd_api__report(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Find the results report for a single puzzle submission.")
+    async def cmd_api__report__find_report_by_submission(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            submission_id: int = self.args.submission_id
+            client = await self.get_client()
+            report = await client.services.report.find_report_by_submission(submission_id)
+            print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("submission_id", type=int, metavar="SUBMISSION-ID",
+                       help="Numeric ID of the submission.")
+        return handler
+
+    @cli_command("TestSessionQuestionSubmission service commands.")
+    async def cmd_api__test_session_question_submission(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Find all past submissions for a puzzle, most recent first.")
+    async def cmd_api__test_session_question_submission__find_all_submissions(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            test_session_handle: str = self.args.test_session_handle
+            client = await self.get_client()
+            submissions = await client.services.test_session_question_submission.find_all_submissions(
+                    test_session_handle)
+            print(json.dumps([s.to_dict() for s in submissions], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("test_session_handle", type=str, metavar="TEST-SESSION-HANDLE",
+                       help="The puzzle's test session handle.")
+        return handler
+
     @cli_command("CodinGamer service commands.")
     async def cmd_api__codingamer(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         return None  # No handler for the parent command; subcommands will be handled by their own handlers.
@@ -981,6 +1147,23 @@ class CgCli(CliBase):
         p = cmd.get_parser()
         p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
                        help="Codingamer whose followees to list. Defaults to the logged-in codingamer's ID.")
+        p.add_argument("--current-codingamer-id", "-c", type=int, default=None, metavar="ID",
+                       help="Must equal the logged-in codingamer's ID (server-enforced). "
+                            "Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("Find a codingamer's follow-card summary (profile plus follow-relationship flags).")
+    async def cmd_api__codingamer__find_codingamer_follow_card(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            current_codingamer_id: int | None = self.args.current_codingamer_id
+            client = await self.get_client()
+            card = await client.services.codingamer.find_codingamer_follow_card(
+                    codingamer_id, current_codingamer_id)
+            print(json.dumps(card.to_dict(), indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer whose follow card to fetch. Defaults to the logged-in codingamer's ID.")
         p.add_argument("--current-codingamer-id", "-c", type=int, default=None, metavar="ID",
                        help="Must equal the logged-in codingamer's ID (server-enforced). "
                             "Defaults to the logged-in codingamer's ID.")

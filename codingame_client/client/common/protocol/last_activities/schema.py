@@ -1,6 +1,7 @@
 """
 JSON-serializable dataclasses for the LastActivities service's getLastActivities Codingame API
-method. `CgPuzzleFeedback` is also reused by the Puzzle service's findAllMinimalProgress method
+method. `CgLastActivityPuzzle`/`CgLastActivityContributor`/`CgPuzzleFeedback` are also reused by
+the Puzzle service's findProgressByIds/findAllMinimalProgress/findProgressByPrettyId methods
 (see puzzle/schema.py).
 """
 
@@ -8,8 +9,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from .....common.dataclass_wizard_x import Alias, CatchAll, CgEpochMillis, JSONWizardX
+from ..contribution.schema import CgHtml
 
 
 @dataclass
@@ -79,8 +82,10 @@ class CgPuzzleFeedback(JSONWizardX):
 @dataclass
 class CgLastActivityPuzzle(JSONWizardX):
     """A community puzzle summary, as embedded in a "PUZZLE"-type `CgLastActivity` entry
-       (getLastActivities), and also returned directly (in a bare JSON array) by
-       Puzzle/findProgressByIds."""
+       (getLastActivities), and also returned directly by Puzzle/findProgressByIds (bare JSON
+       array) and Puzzle/findProgressByPrettyId (bare JSON object--the richest of the three,
+       populating `linked_achievements`/`moderators`/`statement`/`title_map`, which the other
+       two never include)."""
 
     id: int
     """Numeric ID of the puzzle."""
@@ -153,6 +158,21 @@ class CgLastActivityPuzzle(JSONWizardX):
     _last_activity: CgEpochMillis | None = Alias("lastActivity", default=None)
     """When the requesting codingamer last interacted with this puzzle. Not always present; see
        `test_session_handle`."""
+
+    linked_achievements: list[Any] | None = None
+    """Achievements linked to this puzzle. Only observed as an empty list so far, so element
+       shape is unknown. Only present via Puzzle/findProgressByPrettyId."""
+
+    moderators: list[CgLastActivityContributor] | None = None
+    """Codingamers who moderate this puzzle. Only present via Puzzle/findProgressByPrettyId."""
+
+    statement: CgHtml | None = None
+    """Rendered HTML of the puzzle's full problem statement. Only present via
+       Puzzle/findProgressByPrettyId."""
+
+    title_map: dict[str, str] | None = None
+    """Localized title (locale ID as a string key, e.g. "1"/"2" -> title). Only present via
+       Puzzle/findProgressByPrettyId."""
 
     @property
     def creation_time(self) -> datetime:

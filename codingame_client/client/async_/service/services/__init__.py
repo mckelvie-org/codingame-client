@@ -15,8 +15,11 @@ from .notification import CgAsyncNotificationService
 from .programming_language import CgAsyncProgrammingLanguageService
 from .puzzle import CgAsyncPuzzleService
 from .quest import CgAsyncQuestService
+from .report import CgAsyncReportService
 from .search import CgAsyncSearchService
 from .survey import CgAsyncSurveyService
+from .test_session import CgAsyncTestSessionService
+from .test_session_question_submission import CgAsyncTestSessionQuestionSubmissionService
 from .user import CgAsyncUserService
 
 __all__ = [
@@ -33,7 +36,10 @@ __all__ = [
     "CgAsyncProgrammingLanguageService",
     "CgAsyncPuzzleService",
     "CgAsyncQuestService",
+    "CgAsyncReportService",
     "CgAsyncSearchService",
     "CgAsyncSurveyService",
+    "CgAsyncTestSessionService",
+    "CgAsyncTestSessionQuestionSubmissionService",
     "CgAsyncUserService",
 ]

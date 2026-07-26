@@ -18,8 +18,11 @@ from .services.notification import CgAsyncNotificationService
 from .services.programming_language import CgAsyncProgrammingLanguageService
 from .services.puzzle import CgAsyncPuzzleService
 from .services.quest import CgAsyncQuestService
+from .services.report import CgAsyncReportService
 from .services.search import CgAsyncSearchService
 from .services.survey import CgAsyncSurveyService
+from .services.test_session import CgAsyncTestSessionService
+from .services.test_session_question_submission import CgAsyncTestSessionQuestionSubmissionService
 from .services.user import CgAsyncUserService
 
 if TYPE_CHECKING:
@@ -42,8 +45,11 @@ __all__ = [
     "CgAsyncProgrammingLanguageService",
     "CgAsyncPuzzleService",
     "CgAsyncQuestService",
+    "CgAsyncReportService",
     "CgAsyncSearchService",
     "CgAsyncSurveyService",
+    "CgAsyncTestSessionService",
+    "CgAsyncTestSessionQuestionSubmissionService",
     "CgAsyncUserService",
 ]
 
@@ -75,8 +81,11 @@ class CgAsyncServices:
     programming_language: CgAsyncProgrammingLanguageService
     puzzle: CgAsyncPuzzleService
     quest: CgAsyncQuestService
+    report: CgAsyncReportService
     search: CgAsyncSearchService
     survey: CgAsyncSurveyService
+    test_session: CgAsyncTestSessionService
+    test_session_question_submission: CgAsyncTestSessionQuestionSubmissionService
     user: CgAsyncUserService
 
     def __init__(self, client: CgAsyncClient) -> None:
@@ -94,6 +103,9 @@ class CgAsyncServices:
         self.programming_language = CgAsyncProgrammingLanguageService(client)
         self.puzzle = CgAsyncPuzzleService(client)
         self.quest = CgAsyncQuestService(client)
+        self.report = CgAsyncReportService(client)
         self.search = CgAsyncSearchService(client)
         self.survey = CgAsyncSurveyService(client)
+        self.test_session = CgAsyncTestSessionService(client)
+        self.test_session_question_submission = CgAsyncTestSessionQuestionSubmissionService(client)
         self.user = CgAsyncUserService(client)

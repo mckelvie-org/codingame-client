@@ -46,6 +46,7 @@ def _load_cg_epoch_millis(value: int) -> CgEpochMillis:
 def _dump_cg_epoch_millis(value: datetime) -> int:
     return int(value.timestamp() * 1000)
 
+
 class JsonDictDecoder(Protocol):
     """A callable that takes a JSON string and returns a JsonDict. Compatible with json.loads."""
     def __call__(self,
@@ -106,12 +107,17 @@ class JSONWizardX(JSONWizard):
             ) -> JsonDict:
         """Convert the dataclass instance to a JSON-compatible dictionary."""
         return super().to_dict(dict_factory=dict_factory, exclude=exclude, skip_defaults=skip_defaults)
-    
+
     @classmethod
     def from_dict(cls, d: JsonDict) -> Self:
         """Create a dataclass instance from a JSON-compatible dictionary."""
         return super().from_dict(d)
-    
+
+    @classmethod
+    def from_list(cls, list_of_dict: list[JsonDict]) -> list[Self]:
+        """Create a list of dataclass instances from a JSON-compatible list of dictionaries."""
+        return super().from_list(list_of_dict)
+
     @classmethod
     def normalize(cls, value: Self | JsonDict) -> Self:
         """Normalize a value to an instance of this dataclass. If value is a dict, convert it to an instance."""
