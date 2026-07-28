@@ -65,3 +65,41 @@ def vcr_cassette(request: pytest.FixtureRequest) -> Iterator[None]:
     cassette_name = f"{request.node.name}.yaml"
     with cg_vcr.use_cassette(cassette_name):
         yield
+
+
+class _FakeGlobalPlatformDirs:
+    """Stand-in for the object `codingame_client.config.resolver._global_platformdirs()`
+       returns, pointed at a tmp_path subtree."""
+
+    def __init__(self, root: Path) -> None:
+        self._root = root
+
+    @property
+    def user_config_dir(self) -> str:
+        return str(self._root / "config")
+
+    @property
+    def user_data_dir(self) -> str:
+        return str(self._root / "data")
+
+
+@pytest.fixture
+def fake_global_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Redirects the global (per-user) fallback config/data location into an isolated tmp_path
+       subtree, so tests never touch the real machine's actual global config."""
+    root = tmp_path / "global_root"
+    monkeypatch.setattr(
+        "codingame_client.config.resolver._global_platformdirs",
+        lambda: _FakeGlobalPlatformDirs(root),
+    )
+    return root
+
+
+@pytest.fixture
+def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Redirects Path.home() into an isolated tmp_path subtree, so config-discovery tests
+       involving $HOME (e.g. the upward-search stop-at-$HOME rule) run deterministically."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    return home

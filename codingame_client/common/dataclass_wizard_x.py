@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+import yaml
 from dataclass_wizard import JSONWizard
 from dataclass_wizard.models import Alias, CatchAll
 from json_data_types import JsonDict, validate_json_dict
@@ -20,6 +21,8 @@ __all__ = [
     "JsonDictEncoder", "JsonDict", "validate_json_dict",
     "DEFAULT_JSON_DECODER",
     "DEFAULT_JSON_ENCODER",
+    "DEFAULT_YAML_DECODER",
+    "DEFAULT_YAML_ENCODER",
     "Alias", "CgEpochMillis",
 ]
 
@@ -70,6 +73,33 @@ class JsonDictEncoder(Protocol):
 DEFAULT_JSON_DECODER: JsonDictDecoder = json.loads
 DEFAULT_JSON_ENCODER: JsonDictEncoder = json.dumps
 
+
+def _yaml_decode(s: str, **kwargs: Any) -> JsonDict:
+    if kwargs:
+        raise TypeError(f"YAML decoder does not accept extra keyword arguments: {sorted(kwargs)}")
+    result = yaml.safe_load(s)
+    if result is None:
+        # An empty or comment-only YAML document decodes to None, not {}--e.g. a config file
+        # whose only real field is commented out as a documentation example. Treat that as an
+        # empty mapping (all fields unset/default) rather than rejecting it as "not a dict".
+        result = {}
+    return cast(JsonDict, result)
+
+
+def _yaml_encode(
+            obj: JsonDict,
+            *,
+            indent: int | None = 2,
+            sort_keys: bool = True,
+            **kwargs: Any
+        ) -> str:
+    kwargs.setdefault("default_flow_style", False)
+    return cast(str, yaml.safe_dump(obj, indent=indent, sort_keys=sort_keys, **kwargs))
+
+
+DEFAULT_YAML_DECODER: JsonDictDecoder = _yaml_decode
+DEFAULT_YAML_ENCODER: JsonDictEncoder = _yaml_encode
+
 class JSONWizardX(JSONWizard):
     """Refinement of dataclass_wizard.JSONWizard to use stronger JSONDict type hints.
 
@@ -105,8 +135,19 @@ class JSONWizardX(JSONWizard):
                 exclude: Collection[str] | None = None,
                 skip_defaults: bool | None = None,
             ) -> JsonDict:
-        """Convert the dataclass instance to a JSON-compatible dictionary."""
-        return super().to_dict(dict_factory=dict_factory, exclude=exclude, skip_defaults=skip_defaults)
+        """Convert the dataclass instance to a JSON-compatible dictionary.
+
+           If `skip_defaults` is not given (None), this class's own `Meta.skip_defaults` setting
+           applies (True by default--see the class docstring). Passing `skip_defaults=None`
+           through unconditionally to `dataclass_wizard`'s own `to_dict()` would NOT do this--it
+           only consults `Meta.skip_defaults` when the keyword is omitted from the call entirely,
+           not when it's explicitly present as None--so the keyword is only forwarded here when
+           the caller actually wants to override the Meta-configured default.
+        """
+        kwargs: dict[str, Any] = {}
+        if skip_defaults is not None:
+            kwargs["skip_defaults"] = skip_defaults
+        return super().to_dict(dict_factory=dict_factory, exclude=exclude, **kwargs)
 
     @classmethod
     def from_dict(cls, d: JsonDict) -> Self:
@@ -190,3 +231,25 @@ class JSONWizardX(JSONWizard):
         with open(path, "w", encoding="utf-8") as f:
             f.write(text)
             f.write("\n")
+
+    @classmethod
+    def from_yaml(cls, text: str) -> Self:
+        """Creates an instance of this class from a YAML string. Convenience wrapper over
+           `loads()` using a YAML decoder instead of the default JSON one."""
+        return cls.loads(text, decoder=DEFAULT_YAML_DECODER)
+
+    @classmethod
+    def load_yaml(cls, path: str | Path) -> Self:
+        """Creates an instance of this class from a YAML file. Convenience wrapper over `load()`
+           using a YAML decoder instead of the default JSON one."""
+        return cls.load(path, decoder=DEFAULT_YAML_DECODER)
+
+    def to_yaml(self) -> str:
+        """Converts the dataclass instance to a YAML string. Convenience wrapper over `saves()`
+           using a YAML encoder instead of the default JSON one."""
+        return self.saves(encoder=DEFAULT_YAML_ENCODER)
+
+    def save_yaml(self, path: str | Path) -> None:
+        """Saves the dataclass instance to a YAML file, with a newline at the end. Convenience
+           wrapper over `save()` using a YAML encoder instead of the default JSON one."""
+        self.save(path, encoder=DEFAULT_YAML_ENCODER)

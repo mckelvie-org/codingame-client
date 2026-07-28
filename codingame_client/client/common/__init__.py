@@ -31,7 +31,10 @@ from .raw_client import (
     CgClientErrorResponse,
     CgClientHttpError,
     CgDownloadFileResult,
+    CgFileUploadError,
     CgRawClient,
+    CgServletError,
+    CgUploadFileResult,
     compute_content_hash,
 )
 
@@ -54,6 +57,9 @@ __all__ = [
     "override",
     "compute_content_hash",
     "CgDownloadFileResult",
+    "CgUploadFileResult",
+    "CgServletError",
+    "CgFileUploadError",
     "DEFAULT_HEADERS",
     "MISSING",
     "CgAuthenticationError",

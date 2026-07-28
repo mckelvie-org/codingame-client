@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:5bb7e667107f36d43adcaffc1d78e39ddb2be7104e370080e53de64663a422be"
+content_hash = "sha256:97d159a13864a8dac5bcec9b4a2425395d24b1c2ed8591d064e73639b3dcd4d8"
 
 [[metadata.targets]]
 requires_python = ">=3.10"
@@ -207,7 +207,7 @@ files = [
 
 [[package]]
 name = "argparse-wizard"
-version = "2.1.0"
+version = "2.1.2"
 requires_python = ">=3.10"
 summary = "Cleaner object-oriented argparse-driven command-line interfaces"
 groups = ["default"]
@@ -215,8 +215,8 @@ dependencies = [
     "typing-extensions>=4.12.0",
 ]
 files = [
-    {file = "argparse_wizard-2.1.0-py3-none-any.whl", hash = "sha256:3ffed0d5d3253722260ebced60ef11673a1f9a129d986a0a763bec8aff825afb"},
-    {file = "argparse_wizard-2.1.0.tar.gz", hash = "sha256:f12af6d5982014ab8d9a78603a1a6bf866159f7f0cd2f809d2552aada82fdf40"},
+    {file = "argparse_wizard-2.1.2-py3-none-any.whl", hash = "sha256:8f7657caa6ad8a15e6311b463bc20885cf0fb83e21a4466974f77f1cac42b021"},
+    {file = "argparse_wizard-2.1.2.tar.gz", hash = "sha256:5f9895d1bf132422a8c34c21324c283b1daba7b34a2499a8db3ab255a57f1438"},
 ]
 
 [[package]]
@@ -1729,7 +1729,7 @@ name = "pyyaml"
 version = "6.0.3"
 requires_python = ">=3.8"
 summary = "YAML parser and emitter for Python"
-groups = ["dev"]
+groups = ["default", "dev"]
 files = [
     {file = "pyyaml-6.0.3-cp310-cp310-macosx_10_13_x86_64.whl", hash = "sha256:214ed4befebe12df36bcc8bc2b64b396ca31be9304b8f59e25c11cf94a4c033b"},
     {file = "pyyaml-6.0.3-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:02ea2dfa234451bbb8772601d7b8e426c2bfa197136796224e50e35a78777956"},
@@ -1942,6 +1942,17 @@ groups = ["dev"]
 files = [
     {file = "truststore-0.10.4-py3-none-any.whl", hash = "sha256:adaeaecf1cbb5f4de3b1959b42d41f6fab57b2b1666adb59e89cb0b53361d981"},
     {file = "truststore-0.10.4.tar.gz", hash = "sha256:9d91bd436463ad5e4ee4aba766628dd6cd7010cf3e2461756b3303710eebc301"},
+]
+
+[[package]]
+name = "types-pyyaml"
+version = "6.0.12.20260724"
+requires_python = ">=3.10"
+summary = "Typing stubs for PyYAML"
+groups = ["dev"]
+files = [
+    {file = "types_pyyaml-6.0.12.20260724-py3-none-any.whl", hash = "sha256:d57db930a4b2efbc57cf430ec8882765d246929432fa253092f383902329a453"},
+    {file = "types_pyyaml-6.0.12.20260724.tar.gz", hash = "sha256:3c1ce1bb73cd5ec02e90390c2b1f00e810d241d8825fd73ff359696839271b6b"},
 ]
 
 [[package]]

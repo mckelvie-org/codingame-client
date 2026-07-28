@@ -8,11 +8,12 @@ import logging
 import sys
 import textwrap
 from datetime import datetime
+from pathlib import Path
 from types import TracebackType
 from typing import cast
 
 import aiohttp
-from argparse_wizard import CliBase, CliCommand, OptCmdFunc, cli_command
+from argparse_wizard import CliBase, CliCommand, CliError, OptCmdFunc, cli_command
 from json_data_types import JsonData, JsonList
 from rich.console import Console
 
@@ -23,10 +24,54 @@ from ..client.common.protocol.user import CgUserProperties
 from ..client.common.raw_client import CgAuthenticationError, CgDownloadFileResult, compute_content_hash
 from ..common.timestamps import parse_timestamp
 from ..common.typedefs import Self, override
+from ..config import (
+    CONFIG_FILE_NAME,
+    CONFIG_SUBDIR_NAME,
+    PROJECT_CONFIG_MARKER_DIR_NAME,
+    CgConfig,
+    CgConfigData,
+    default_global_config_file,
+    find_config_file,
+    resolve_config,
+)
 from ..credentials.browser_login import async_cg_browser_login, cg_browser_delete_session
-from ..credentials.cg_credentials import CgCredentials, get_credentials_with_override, set_credentials
+from ..credentials.cg_credentials import (
+    CgCredentials,
+    get_credentials_with_override,
+    set_credentials,
+    validate_profile_name,
+)
+from ..settings import CgSettings, resolve_settings
 
 logger = logging.getLogger(__name__)
+
+def default_config_template(default_data_dir: Path) -> str:
+    """Build the content for a freshly-`init`'d config.yaml.
+
+       Hand-written (not generated via CgConfigData.to_yaml()) so it can carry comments--plain
+       YAML dumping can't emit those. Deliberately kept in sync with CgConfigData's actual fields
+       by a test that parses this (for some placeholder path) and asserts it equals
+       CgConfigData() (all defaults); update both together if a field is added, renamed, or its
+       default changes.
+
+       `default_data_dir` is the actual resolved default for the specific config file being
+       created (project-local sibling "data" dir, or the global per-user data location for
+       --global)--shown as the commented-out example value instead of a static description,
+       since the two cases genuinely differ and a fixed comment describing one would be
+       misleading for the other.
+    """
+    return f"""\
+# codingame-client configuration file.
+#
+# Run `cg config where` to see which config file is currently active (this one, unless
+# shadowed by a more specific one), and `cg config dump` to see the fully resolved
+# configuration, including defaults for anything left unset here.
+
+# Override the persistent, app-writable data directory. A relative path is resolved relative
+# to the directory containing this file; an absolute path (or a "~"-prefixed path) is used
+# as-is. Currently defaults to (uncomment to pin explicitly):
+#dataDir: {default_data_dir}
+"""
 
 class CgCli(CliBase):
     """Command-line interface for the contribution manager."""
@@ -35,6 +80,8 @@ class CgCli(CliBase):
     _client_authenticated: bool = False
     _client_validated: bool = False
     _console: Console | None = None
+    _resolved_config: CgConfig | None = None
+    _resolved_settings: CgSettings | None = None
     
     @property
     def console(self) -> Console:
@@ -124,9 +171,18 @@ class CgCli(CliBase):
         """
         if self._client is None:
             profile: str | None = self.args.profile
+            # resolve_default_settings() (rather than CgAsyncClient's own no-args best-effort
+            # fallback) so that -c/--config actually controls the client's default-profile
+            # resolution too--not just cg config/cg settings commands--and so this agrees with
+            # login_helper()'s own resolution (see resolve_default_settings()'s docstring for why
+            # that matters). Only attempted when actually needed (profile is None); skipping it
+            # otherwise avoids a spurious FileNotFoundError from a broken --config that the
+            # client wouldn't even consult in that case.
+            settings = None if profile is not None else self.resolve_default_settings()
             self._client = CgAsyncClient(
                 profile_name=profile,
-                trace_configs=self.get_trace_configs()
+                trace_configs=self.get_trace_configs(),
+                settings=settings,
             )
         client = self._client
         if not self._client_authenticated:
@@ -141,7 +197,58 @@ class CgCli(CliBase):
             self._client_validated = True
 
         return client
-    
+
+    async def get_config(self) -> CgConfig:
+        """Return the resolved configuration for this invocation, resolving it lazily on first
+           use (honoring the --config/-c flag) and caching the result for the rest of the process.
+
+           Raises CgConfigNotFoundError if none can be found. Any predispatch hook or command
+           handler that needs config can just call this--call order and command hierarchy depth
+           don't matter, since the first caller triggers resolution and everyone after gets the
+           cached value. `cg config init` never calls this (it constructs its own target path
+           from scratch); `cg config where` calls `find_config_file()` directly instead, since it
+           needs to report absence as normal output rather than let it raise.
+        """
+        if self._resolved_config is None:
+            explicit: str | None = self.args.config
+            self._resolved_config = resolve_config(explicit)
+        return self._resolved_config
+
+    async def get_settings(self) -> CgSettings:
+        """Return the resolved settings for this invocation, resolving it lazily on first use
+           (which itself lazily resolves the config via `get_config()`) and caching the result.
+
+           Unlike `get_config()`, never raises for "not found"--a missing settings.json just
+           means all-default settings (see `resolve_settings()`).
+        """
+        if self._resolved_settings is None:
+            config = await self.get_config()
+            self._resolved_settings = resolve_settings(config)
+        return self._resolved_settings
+
+    def resolve_default_settings(self) -> CgSettings:
+        """Best-effort settings resolution: honors -c/--config, but--unlike `get_settings()`--
+           never raises `CgConfigNotFoundError` if no config.yaml exists (see
+           `resolve_config(allow_default=True)`).
+
+           This exists specifically so `get_client()` and `login_helper()` resolve the effective
+           default profile name (when --profile isn't given) via the exact same logic and always
+           agree with each other--previously, `login_helper()` saved credentials under whatever
+           `credentials.cg_credentials`'s own hardcoded default profile resolved to, while
+           `get_client()` separately resolved the profile via settings/config, and the two could
+           silently disagree (e.g. settings.json overriding the default profile) with the
+           confusing symptom of "login succeeded but the client reports unauthenticated". `cg
+           settings dump`/`cg config dump` intentionally keep using the strict
+           `get_settings()`/`get_config()` instead--those exist specifically to tell the user
+           "nothing configured yet", which this method must never do.
+
+           Not cached on the CLI instance (unlike `get_config()`/`get_settings()`)--cheap to
+           recompute (pure filesystem checks), and giving it its own cache would either diverge
+           from `get_config()`/`get_settings()`'s cache or require unifying them despite their
+           different failure semantics, both worse than just recomputing.
+        """
+        return resolve_settings(resolve_config(self.args.config, allow_default=True))
+
     @override
     async def ctx_exit(
                self,
@@ -214,8 +321,15 @@ class CgCli(CliBase):
             remember_me:        The rememberMe cookie value, for manual (non-browser) login. Must be provided together with --cg-session.
             cg_session:         The cgSession cookie value, for manual (non-browser) login. Must be provided together with --remember-me.
             no_validate:        If True, skip validation of the credentials after login. Defaults to False.
-        
+
         """
+        if profile_name is None:
+            # Resolved once, up front, via the same best-effort settings/config logic
+            # get_client() uses (see resolve_default_settings()'s docstring)--every use of
+            # profile_name below (credential lookup, save, and the validation client
+            # construction) must agree on the same concrete profile name, or credentials can be
+            # saved under one profile and then looked up under another.
+            profile_name = self.resolve_default_settings().default_profile
         credentials: CgCredentials | None = None
         if not force:
             # Try to get existing credentials; if they exist, just return without doing a browser or manual login.
@@ -301,7 +415,11 @@ class CgCli(CliBase):
                 await self.get_client(require_credentials=True, validate=True)
             
             # For debugging, might log credentials here, but omitting here to keep creds out of logs.
-            self.logger.debug(f"Login completed successfully for profile {profile_name or 'default'!r}")
+            # profile_name here is self.args.profile, possibly still None (login_helper resolves
+            # its own local copy internally)--not guessing "default" avoids this message being
+            # wrong when the resolved default profile is actually something else.
+            resolved_profile_desc = profile_name if profile_name is not None else "<resolved default>"
+            self.logger.debug(f"Login completed successfully for profile {resolved_profile_desc!r}")
 
         p = cmd.get_parser()
         p.add_argument(
@@ -471,8 +589,8 @@ class CgCli(CliBase):
     async def cmd_api(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         return None  # No handler for the parent command; subcommands will be handled by their own handlers.
 
-    @cli_command("Download a file by server object ID.")
-    async def cmd_api__download(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+    @cli_command("Download a file by server object ID (the fileservlet servlet).")
+    async def cmd_api__file_servlet(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             file_id: int = self.args.file_id
             timestamp: datetime | None = self.args.timestamp
@@ -481,7 +599,7 @@ class CgCli(CliBase):
             # level 2: not every file requires a login--attach credentials if available and let
             # the server decide (401/403) whether this particular file actually needs them.
             client = await self.get_client()
-            file_info: CgDownloadFileResult = await client.download_file(
+            file_info: CgDownloadFileResult = await client.servlets.file_servlet(
                     file_id,
                     format=format,
                     timestamp=timestamp,
@@ -506,8 +624,8 @@ class CgCli(CliBase):
                             " or an ISO 8601 datetime string.")
         return handler
 
-    @cli_command("Upload a file from stdin.")
-    async def cmd_api__upload(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+    @cli_command("Upload a file from stdin (the fileupload servlet).")
+    async def cmd_api__file_upload(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             filename: str = self.args.filename
             content_type: str = self.args.content_type
@@ -525,12 +643,12 @@ class CgCli(CliBase):
                 print(str(prev_id))
                 return
             self.eprint("Content hash differs from previous content hash; proceeding with upload.")
-            id = await client.upload_file(
+            result = await client.servlets.file_upload(
                     content,
                     filename=filename,
                     content_type=content_type,
                 )
-            print(str(id))
+            print(str(result.id))
         p = cmd.get_parser()
         p.add_argument("--filename", type=str, default="data.bin",
                        help="Optional filename provided to the server for the uploaded file; e.g., 'cover.png'.")
@@ -1282,6 +1400,125 @@ class CgCli(CliBase):
                             "seconds. Defaults to 0, meaning wait indefinitely.")
         return handler
 
+    @cli_command("Configuration commands.")
+    async def cmd_config(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Create a new config.yaml--project-local (under the current directory, or "
+                 "--at DIR) by default, or the shared per-user fallback location with --global. "
+                 "Does not consult the top-level --config/-c flag or CG_CONFIG--that's a "
+                 "discovery override for reading an existing config, not a placement option for "
+                 "creating a new one.")
+    async def cmd_config__init(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            use_global: bool = self.args.global_
+            force: bool = self.args.force
+            at: Path = self.args.at
+            if use_global:
+                target = default_global_config_file()
+                existing: Path | None = None
+            else:
+                target = at / PROJECT_CONFIG_MARKER_DIR_NAME / CONFIG_SUBDIR_NAME / CONFIG_FILE_NAME
+                existing = find_config_file(start_dir=at)
+                if existing is not None and existing not in (target, default_global_config_file()):
+                    self.eprint(f"Note: this will shadow the existing configuration found at {existing}")
+            if target.is_file() and not force:
+                raise CliError(f"Config file already exists: {target}. Use --force to overwrite.")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # Computed before writing, from an empty CgConfigData, so the template can show the
+            # actual default for this specific file (project-local sibling dir, or the global
+            # per-user location for --global)--not a static description that would be wrong for
+            # one of the two cases.
+            default_data_dir = CgConfig(config_file=target.resolve(), raw_data=CgConfigData()).data_dir
+            target.write_text(default_config_template(default_data_dir))
+            raw_data = CgConfigData.load_yaml(target)
+            resolved = CgConfig(config_file=target.resolve(), raw_data=raw_data)
+            resolved.data_dir.mkdir(parents=True, exist_ok=True)
+            self.eprint(f"Created config file: {resolved.config_file}")
+            self.eprint(f"Data directory: {resolved.data_dir}")
+        p = cmd.get_parser()
+        p.add_argument("--global", dest="global_", default=False, action="store_true",
+                       help="Create the shared, per-user fallback config instead of a project-local one.")
+        p.add_argument("--at", type=Path, default=Path.cwd(), metavar="DIR",
+                       help="Project-local only: directory to create .cg/config/config.yaml under. "
+                            "Defaults to the current directory.")
+        p.add_argument("--force", "-f", default=False, action="store_true",
+                       help="Overwrite an existing config file at the target location.")
+        return handler
+
+    @cli_command("Show which config.yaml (if any) would be used, and where its persistent data "
+                 "directory resolves to.")
+    async def cmd_config__where(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            explicit: str | None = self.args.config
+            try:
+                config_file = find_config_file(explicit)
+            except FileNotFoundError as e:
+                raise CliError(str(e)) from e
+            if config_file is None:
+                print("No configuration file found. Run `cg config init` to create one.")
+                return
+            raw_data = CgConfigData.load_yaml(config_file)
+            resolved = CgConfig(config_file=config_file.resolve(), raw_data=raw_data)
+            print(f"Config file: {resolved.config_file}")
+            print(f"Data directory: {resolved.data_dir}")
+        return handler
+
+    @cli_command("Dump the resolved configuration as JSON.")
+    async def cmd_config__dump(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            resolved = await self.get_config()
+            print(json.dumps(resolved.to_dump_dict(), indent=2, sort_keys=True))
+        return handler
+
+    @cli_command("Settings commands (app-managed persistent state in settings.json, as opposed "
+                 "to the user-edited config.yaml--see `cg config`).")
+    async def cmd_settings(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Dump the resolved settings as JSON.")
+    async def cmd_settings__dump(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            settings = await self.get_settings()
+            print(json.dumps(settings.to_dump_dict(), indent=2, sort_keys=True))
+        return handler
+
+    @cli_command("Set a settings.json value.")
+    async def cmd_settings__set(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Set the default codingame-client credential profile name.")
+    async def cmd_settings__set__default_profile(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            profile_name: str = self.args.profile_name
+            validate_profile_name(profile_name)
+            settings = await self.get_settings()
+            settings.raw_data.default_profile = profile_name
+            settings.save()
+            self.eprint(f"defaultProfile set to {profile_name!r} in {settings.settings_file}")
+        p = cmd.get_parser()
+        p.add_argument("profile_name", type=str, metavar="PROFILE-NAME",
+                       help="The credential profile name to record as the default--used "
+                            "whenever --profile isn't given (see `cg login`, `cg api ...`, etc.), "
+                            "and shown resolved by `cg config dump`/`cg settings dump`.")
+        return handler
+
+    @cli_command("Delete a settings.json value.")
+    async def cmd_settings__delete(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Delete (unset) the default codingame-client credential profile name override.")
+    async def cmd_settings__delete__default_profile(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            settings = await self.get_settings()
+            settings.raw_data.default_profile = None
+            settings.save()
+            self.eprint(
+                    f"defaultProfile unset in {settings.settings_file} "
+                    f"(now falls back to config.yaml's defaultProfile, or \"default\")."
+                )
+        return handler
+
     @cli_command("Codingame client command-line interface.")
     async def main(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         """Main command handler for the CLI."""
@@ -1298,6 +1535,12 @@ class CgCli(CliBase):
         p.add_argument(
                 "--json", "-j", default=False, action="store_true",
                 help="Where supported, output information in JSON format.",
+            )
+        p.add_argument(
+                "--config", "-c", default=None, metavar="PATH",
+                help="Explicit config.yaml file, or a directory containing config/config.yaml. "
+                     "Overrides the normal discovery search (see `cg config where`). Same as the "
+                     "CG_CONFIG environment variable; this flag takes precedence if both are set.",
             )
 
         # No handler for the main command; bare command is not allowed

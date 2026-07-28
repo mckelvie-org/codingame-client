@@ -13,9 +13,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from http import HTTPStatus
 from pathlib import Path
-from typing import Final, NamedTuple
+from typing import Final, NamedTuple, cast
 
-from json_data_types import JsonData
+from json_data_types import JsonData, JsonDict
 
 from ...common.dataclass_wizard_x import CatchAll, JSONWizardX
 from ...common.typedefs import Self
@@ -25,6 +25,9 @@ from ...version import __version__
 __all__ = [
     "compute_content_hash",
     "CgDownloadFileResult",
+    "CgUploadFileResult",
+    "CgServletError",
+    "CgFileUploadError",
     "DEFAULT_HEADERS",
     "MISSING",
     "CgAuthenticationError",
@@ -84,6 +87,104 @@ class CgDownloadFileResult(NamedTuple):
             hash=hash,
             filename=file_tail_name,
         )
+
+
+class CgUploadFileResult(NamedTuple):
+    """The well-typed result of a successful file upload--parsed from the raw `fileupload`
+       servlet response, e.g. `{"result": [{"fieldName": "file", "name": "cover.png",
+       "size": 250401, "id": 163935944975958}]}`."""
+
+    id: int
+    """The globally unique ID assigned to the uploaded file. Used to download the file later
+       (see `CgDownloadFileResult.id`) or to reference it from other APIs that accept file IDs."""
+
+    name: str
+    """The filename as echoed back by the server; normally matches the `filename` provided at
+       upload time."""
+
+    size: int
+    """The size of the uploaded file content, in bytes."""
+
+    field_name: str
+    """The multipart form field name the file was uploaded under. Always "file" in current usage."""
+
+    @classmethod
+    def from_dict(cls, d: JsonDict) -> Self:
+        """Parse a `CgUploadFileResult` from a successful entry of a raw `fileupload` servlet
+           response's `"result"` list. Assumes `d` is already known to be a successful entry
+           (not an embedded per-file error--see `CgFileUploadError`); callers must check for that
+           themselves before calling this."""
+        return cls(
+            id=cast(int, d["id"]),
+            name=cast(str, d["name"]),
+            size=cast(int, d["size"]),
+            field_name=cast(str, d["fieldName"]),
+        )
+
+
+class CgServletError(Exception):
+    """Base class for an embedded per-entry error returned by a servlet in an otherwise-successful
+       (200 OK) response--i.e. an application-level error signaled inside the JSON body rather
+       than via HTTP status, so it can't be caught as a `CgClientHttpError`.
+
+       This is *not* a claim that all servlets share one common error response shape--currently
+       only `fileupload` is known to work this way (see `CgFileUploadError`)--just the common
+       subset of fields (`error_type`, `error_message`, `field_name`) that make sense to factor
+       out if/when a second servlet turns out to follow the same pattern.
+    """
+
+    error_type: str
+    """The server's error type code, e.g. "UNSUPPORT_FILE_ERROR"."""
+
+    error_message: str
+    """The server's human-readable error message, e.g. "Unsupported file: Format not supported"."""
+
+    field_name: str
+    """The form field name the error applies to, if applicable. Defaults to "" when not
+       applicable or not provided by the server."""
+
+    def __init__(self, error_type: str, error_message: str, *, field_name: str = "") -> None:
+        self.error_type = error_type
+        self.error_message = error_message
+        self.field_name = field_name
+        super().__init__(self._format_message())
+
+    def _format_message(self) -> str:
+        """Build the exception's string message. Subclasses adding fields relevant to the error
+           should override this to include them, rather than overriding `__init__` message
+           construction directly."""
+        return f"{self.error_type}: {self.error_message}"
+
+
+class CgFileUploadError(CgServletError):
+    """Raised when the `fileupload` servlet accepts the HTTP request itself (a 200 OK) but
+       rejects the uploaded file's content--e.g. an unsupported format--returning an embedded
+       error object in its response instead of a successful upload entry. Confirmed live (2026-07-27):
+       uploading a plain-text file returns
+       `{"result": [{"error": {"type": "UNSUPPORT_FILE_ERROR", "message": "Unsupported file: "
+       "Format not supported"}, "fieldName": "file", "name": "...", "size": ...}]}`."""
+
+    name: str
+    """The filename that was rejected, as echoed back by the server."""
+
+    size: int
+    """The size of the rejected file content, in bytes."""
+
+    def __init__(
+                self,
+                error_type: str,
+                error_message: str,
+                *,
+                field_name: str = "",
+                name: str,
+                size: int,
+            ) -> None:
+        self.name = name
+        self.size = size
+        super().__init__(error_type, error_message, field_name=field_name)
+
+    def _format_message(self) -> str:
+        return f"{super()._format_message()} (file={self.name!r}, size={self.size})"
 
 
 DEFAULT_HEADERS: dict[str, str] = {

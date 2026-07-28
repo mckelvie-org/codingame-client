@@ -7,22 +7,21 @@ from __future__ import annotations
 import contextlib
 import http.cookies
 import json
-import re
-from datetime import datetime
-from pathlib import Path
 from types import TracebackType
-from typing import cast
+from typing import NamedTuple, cast
+from urllib.parse import urlencode
 
 import aiohttp
 from json_data_types import JsonData, JsonDict, JsonList
 
 from ....common.typedefs import Never, Self, override
+from ....config import resolve_config
 from ....credentials.cg_credentials import CgCredentials
+from ....settings import CgSettings, resolve_settings
 from ...common.raw_client import (
     MISSING,
     CgAuthenticationError,
     CgClientHttpError,
-    CgDownloadFileResult,
     CgRawClient,
     _Missing,
 )
@@ -86,6 +85,17 @@ class CgAsyncClientHttpError(CgClientHttpError):
         return cls(e.message, response=response, content=content, status_code=e.status)
 
 
+class CgAsyncServletGetBytesResult(NamedTuple):
+    """The result of `CgAsyncRawClient.servlet_get_bytes`: a servlet GET response's raw content
+       bytes, paired with the `aiohttp.ClientResponse` (for its headers, e.g. Content-Type/
+       Content-Disposition). Only `content` and `response.headers`/`.status` remain usable--
+       aiohttp releases the underlying connection once the request's `async with` block exits, so
+       `response.read()`/`.text()` must not be called again."""
+
+    content: bytes
+    response: aiohttp.ClientResponse
+
+
 class CgAsyncRawClient(CgRawClient):
     """Async-only low-level (JsonData) client."""
 
@@ -102,19 +112,33 @@ class CgAsyncRawClient(CgRawClient):
                 default_http_headers: dict[str, str] | None = None,
                 trace_configs: list[aiohttp.TraceConfig] | None = None,
                 app_name: str | None = None,
+                settings: CgSettings | None = None,
             ):
         """Create a CgAsyncRawClient.
 
         Args:
             profile_name: Optional name of the profile to use for persistent credentials. Allows
                           for multiple independent session profiles; e.g., if multiple CodinGame accounts are used.
-                          If None, defaults to the default profile. This parameter may be overridden at authenticate() time.
+                          If None, the default profile name is resolved from `settings` (see below).
+                          This parameter may be overridden at authenticate() time.
             default_http_headers:
                           Optional default HTTP headers for requests. If None, default headers are used.
             trace_configs: Optional list of aiohttp.TraceConfig for the session. If None, an empty list is used.
             app_name: Optional name of the application using the client. Used to allow different applications to have different
                       cached credentials in the same environment. If None, a default application name is used.
+            settings: Optional CgSettings to resolve the default profile name from, used only when
+                      `profile_name` is None. If not given (and `profile_name` is also not given),
+                      the normal config/settings discovery path is used, best-effort--matching how
+                      credential resolution elsewhere in this class never requires setup to exist
+                      first: if no config.yaml can be found, a synthetic all-defaults CgConfig is
+                      used instead of raising (see `resolve_config(allow_default=True)`), so this
+                      never requires `cg config init` to have been run. The `CgConfig` is not a
+                      separate parameter since it's already reachable as `settings.config`.
         """
+        if profile_name is None:
+            if settings is None:
+                settings = resolve_settings(resolve_config(allow_default=True))
+            profile_name = settings.default_profile
         super().__init__(profile_name=profile_name, default_http_headers=default_http_headers, app_name=app_name)
         if trace_configs is None:
             trace_configs = []
@@ -522,136 +546,112 @@ class CgAsyncRawClient(CgRawClient):
             result = await self.get_json_list_response(response)
         return result
 
-    async def upload_file(
+    @staticmethod
+    def _build_servlet_url(base_url: str, servlet_name: str, params: dict[str, str] | None = None) -> str:
+        """Build a servlet URL from a base URL (e.g. `CODINGAME_SERVLET_URL`), a servlet name
+           (e.g. "fileupload"), and optional query string parameters."""
+        url = f"{base_url}/{servlet_name}"
+        if params:
+            url += "?" + urlencode(params)
+        return url
+
+    async def servlet_get_bytes(
                 self,
-                content: bytes | str,
+                base_url: str,
+                servlet_name: str,
+                params: dict[str, str] | None = None,
                 *,
-                filename: str | Path | None = None,
-                content_type: str = "application/octet-stream",
-                params: JsonDict | None = None,
-            ) -> JsonDict:
-        """Uploads a file to the CodinGame servers, returning the response data as a json-decoded dictionary.
-        
-           Generates a multipart MIME POST request to the URL https://www.codingame.com/servlet/fileupload with
-           the file content, metadata, and parameters.
-           
-           Files that are successfully uploaded are assigned a globally unique ID by the CodinGame servers,
-           which can be used to download the file later and can be provided to other APIs that accept file IDs.
-           Presumably there is some kind of garbage collection on the server side if a file ID is not attached
-           to another persistent resource, but the policy is not documented. In general, an uploaded
-           file should be attached to a persistent resource (e.g., a contribution) as soon as possible.
-        
-           This is a low-level method that does not distinguish between normal responses and error responses, provided
-           they are a valid JsonDict.
-           
-            Args:
-                content:      The content of the file to upload, as bytes or a string.
-                              If a string is provided, it will be encoded as UTF-8.
-                filename:     Optional filename to provide to the server. This filename will be provided
-                              back to the client at download time in the Content-Disposition header.
-                              Only the final path component is used. If not provided, defaults to "file.bin".
-                content_type: The MIME type of the file. This content type will be provided back to the
-                              client at download time in the Content-Type header. Defaults to "application/octet-stream".
-                params:       Optional JsonDict of additional named parameters to provide to the server.
-                              Documentation is sparse, but in current usage, the only parameter that seems to be used is "testImage",
-                              which should be set to true for image files.
-                              If not provided, defaults to { "testImage": true }.
-                
-            Returns:
-                A JsonDict containing the response data. May be a successful response or an error response,
-                depending on the service and function called. If successful, looks like:
-                    {
-                        "result": [
-                            {
-                                "fieldName": "file",
-                                "name": "cover.png",
-                                "size": 250401,
-                                "id": 163935944975958
-                            }
-                        ]
-                    }            
-                
-            Raises:
-                CgAuthenticationError:
-                    If the session is not authenticated and cannot implicitly login.
-                CgAsyncClientHttpError:
-                    If a transport error occurs, or if the response is not a valid JSON dictionary
-                    or if the status code is not 2xx.
-        """
-        if params is None:
-            params = {"testImage": True}
-        if filename is None:
-            filename = "file.bin"
-        filename = Path(filename).name  # Only use the final path component
-        if isinstance(content, str):
-            content = content.encode("utf-8")
-        params_text = json.dumps(params, separators=(",", ":"))
-        endpoint_url = f"{self.CODINGAME_SERVLET_URL}/fileupload"
+                require_login: bool = True,
+            ) -> CgAsyncServletGetBytesResult:
+        """Make a GET request to a CodinGame servlet endpoint, returning its raw content bytes
+           along with the response (for its headers).
 
-        form = aiohttp.FormData()
-        form.add_field("file", content, filename=filename, content_type=content_type)
-        form.add_field("data", params_text, content_type="application/json")
+           Generates a GET request to `{base_url}/{servlet_name}`, with `params` (if any)
+           URL-encoded as a query string.
 
-        await self.require_authenticate()
-        async with self.session.post(endpoint_url, data=form) as response:
-            result = await self.get_json_dict_response(response)
-        return result
-        
-    async def download_file(
-            self,
-            id: int,
-            format: str | None = None,
-            timestamp: datetime |None = None,
-            *,
-            require_login: bool = True,
-        ) -> CgDownloadFileResult:
-        """Downloads a file from the CodinGame servers, returning a tuple of (file_bytes, content_type).
-
-        Generates a GET request to the URL https://static.codingame.com/servlet/fileservlet?id={id}&format={format}&timestamp={timestamp}
+           This is a low-level, content-shape-agnostic method--unlike `service_request*`, it does
+           not assume a JSON response, since servlets like `fileservlet` return arbitrary binary
+           content. Named `*_bytes` (rather than a general-purpose `servlet_get`) because the body
+           is read and returned directly as `bytes`: aiohttp releases the underlying connection
+           once the request's `async with` block exits, after which the response object's own
+           `.read()`/`.text()` can no longer be called (though its `.headers`/`.status` remain
+           readable)--a hypothetical future `servlet_get_json` (or similar) for a JSON-returning
+           GET servlet would need its own decode-before-return method, not a shared one returning
+           the raw response.
 
         Args:
-            id:        The globally unique ID of the file to download, as provided by the server at upload time.
-            format:    Optional format string to request a specific format of the file. If not provided, the server
-                       will return the file in its original format.
-            timestamp: Optional timestamp to request a specific version of the file. If not provided, the server will
-                       return the latest version of the file.
+            base_url:     The servlet's base URL, e.g. `CODINGAME_STATIC_SERVLET_URL`.
+            servlet_name: The servlet's name, e.g. "fileservlet".
+            params:       Optional query string parameters.
             require_login:
-                       If True (the default), the session must be logged in. If False, the request is made
-                       with whatever credentials (if any) are already attached to the session--some files
-                       are publicly downloadable and don't need a login at all, so this allows the server to
-                       be the one to decide (via a 401/403) rather than always requiring it up front.
+                          If True (the default), the session must be logged in. If False, the
+                          request is made with whatever credentials (if any) are already attached
+                          to the session--some servlets are genuinely public.
 
         Returns:
-            A CgDownloadFileResult object containing the file bytes, content type, and filename (if provided by the server).
+            A CgAsyncServletGetBytesResult(content, response)--the response body as bytes, and the
+            aiohttp.ClientResponse (for reading headers such as Content-Type/Content-Disposition).
+
         Raises:
             CgAuthenticationError:
-                If require_login is True and the session is not authenticated and cannot implicitly login.
+                If require_login is True and the session is not authenticated and cannot
+                implicitly login.
             CgAsyncClientHttpError:
-                If a transport error occurs
+                If a transport error occurs, or if the status code is not 2xx.
         """
-        url = f"{self.CODINGAME_STATIC_SERVLET_URL}/fileservlet?id={id}"
-        if format:
-            url += f"&format={format}"
-        if timestamp:
-            # The timestamp in the URL is interpreted as milliseconds since the epoch.
-            ms_timestamp = int(timestamp.timestamp() * 1000)
-            url += f"&timestamp={ms_timestamp}"
+        url = self._build_servlet_url(base_url, servlet_name, params)
         if require_login:
             await self.require_authenticate()
         async with self.session.get(url) as response:
             try:
                 response.raise_for_status()
                 content = await response.read()
-                content_type = response.headers.get(aiohttp.hdrs.CONTENT_TYPE, "application/octet-stream").lower()
-                disposition = response.headers.get(aiohttp.hdrs.CONTENT_DISPOSITION)
-                filename: str | None = None
-                if disposition:
-                    # Extract filename from Content-Disposition header
-                    # TODO: Make this more robust
-                    match = re.search(r'filename="([^"]+)"', disposition)
-                    if match:
-                        filename = match.group(1)
-                return CgDownloadFileResult.create(id=id, content=content, content_type=content_type, filename=filename)
             except aiohttp.ClientResponseError as e:
                 raise CgAsyncClientHttpError.normalize(e, content=None, response=response) from e
-    
+        return CgAsyncServletGetBytesResult(content, response)
+
+    async def servlet_post(
+                self,
+                base_url: str,
+                servlet_name: str,
+                *,
+                data: aiohttp.FormData | bytes | str | None = None,
+                params: dict[str, str] | None = None,
+                require_login: bool = True,
+            ) -> JsonDict:
+        """Make a POST request to a CodinGame servlet endpoint, returning its JSON-decoded dict response.
+
+           Generates a POST request to `{base_url}/{servlet_name}` (with `params`, if any,
+           URL-encoded as a query string) with the given request body.
+
+           This is a low-level method that does not distinguish between normal responses and
+           error responses, provided they are a valid JsonDict.
+
+        Args:
+            base_url:     The servlet's base URL, e.g. `CODINGAME_SERVLET_URL`.
+            servlet_name: The servlet's name, e.g. "fileupload".
+            data:         The request body, e.g. an `aiohttp.FormData` for a multipart request.
+            params:       Optional query string parameters.
+            require_login:
+                          If True (the default), the session must be logged in.
+
+        Returns:
+            The JSON-decoded response as a dict. May be a successful response or an error
+            response, depending on the servlet.
+
+        Raises:
+            CgAuthenticationError:
+                If require_login is True and the session is not authenticated and cannot
+                implicitly login.
+            CgAsyncClientHttpError:
+                If a transport error occurs, if the response content could not be decoded at all,
+                if the status code is not 2xx, or if the decoded content is not a dict.
+        """
+        url = self._build_servlet_url(base_url, servlet_name, params)
+        if require_login:
+            await self.require_authenticate()
+        async with self.session.post(url, data=data) as response:
+            result = await self.get_json_dict_response(response)
+        return result
+
+

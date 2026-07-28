@@ -13,18 +13,20 @@ from .....common.dataclass_wizard_x import Alias, CatchAll, CgEpochMillis, JSONW
 
 @dataclass
 class CgCodingamer(JSONWizardX):
-    """A codingamer's profile, as embedded in the response to findCodingamePointsStatsByHandle.
-       Only a single example (a fully filled-out profile) has been observed so far, so most fields
-       beyond the core identity fields are treated as optional."""
+    """A codingamer's profile, as embedded in the response to findCodingamePointsStatsByHandle,
+       and returned directly by findCodinGamerPublicInformations.
+
+       `pseudo`/`country_id` are Optional--confirmed live (a fresh/minimal "dev" test account,
+       level 1, no display name set, returned `{"userId": ..., "countryId": "US",
+       "publicHandle": ..., "formValues": {}, "level": 1}` with no `pseudo` key at all). Matches
+       the same already-documented behavior on the sibling class `CgCodingamerFollower` (used by
+       findFollowers/findFollowing), which independently discovered `pseudo`/`country_id` missing
+       for "apparently never-configured accounts"--`country_id` hasn't been directly observed
+       missing here yet, but is made Optional pre-emptively given that precedent, rather than
+       waiting to hit the same failure a second time for a different field."""
 
     user_id: int
     """The codingamer's numeric ID."""
-
-    pseudo: str
-    """The codingamer's display name."""
-
-    country_id: str
-    """ISO country code, e.g. "US", "GB"."""
 
     public_handle: str
     """The codingamer's opaque public handle string, as passed to findCodingamePointsStatsByHandle."""
@@ -33,6 +35,12 @@ class CgCodingamer(JSONWizardX):
     # any defaulted field positioned immediately before it (silently, no error) to the CatchAll's
     # own value. Keeping it first among the defaulted fields makes that impossible.
     extra_data: CatchAll = field(default_factory=dict)
+
+    pseudo: str | None = None
+    """The codingamer's display name. Not always present; see class docstring."""
+
+    country_id: str | None = None
+    """ISO country code, e.g. "US", "GB". Not always present; see class docstring."""
 
     form_values: dict[str, str] | None = None
     """Freeform profile fields the codingamer has filled in, e.g. {"city": "Seattle",
@@ -193,10 +201,12 @@ class CgXpThreshold(JSONWizardX):
 
 @dataclass
 class CgCodingamePointsStats(JSONWizardX):
-    """The complete response to findCodingamePointsStatsByHandle."""
+    """The complete response to findCodingamePointsStatsByHandle.
 
-    codingamer_points: int
-    """The codingamer's current total points. Duplicates `codingame_points_ranking_dto.codingame_points_total`."""
+       `codingamer_points` is Optional--confirmed live (the same fresh/minimal "dev" test account
+       that exposed `CgCodingamer.pseudo`/`country_id` being Optional): the top-level
+       `codingamerPoints` key was entirely absent, even though its duplicate,
+       `codingame_points_ranking_dto.codingame_points_total`, was present (as 0)."""
 
     achievement_count: int
     """The number of achievements the codingamer has unlocked."""
@@ -208,6 +218,10 @@ class CgCodingamePointsStats(JSONWizardX):
     """The codingamer's points-ranking summary and history."""
 
     extra_data: CatchAll = field(default_factory=dict)
+
+    codingamer_points: int | None = None
+    """The codingamer's current total points. Duplicates `codingame_points_ranking_dto.codingame_points_total`.
+       Not always present; see class docstring."""
 
     xp_thresholds: list[CgXpThreshold] = field(default_factory=list)
     """The per-level XP threshold/progression table, up to (at least) the codingamer's current level."""
