@@ -1,13 +1,22 @@
 """Generic 2-way/3-way directory-tree comparison, used to detect and render drift between a
-   contribution working directory's local content, its cached base (`last_committed/`), and the
-   current server state--all as plain materialized directories on disk (see
-   `codingame_client.contribution_manager.manager`'s `materialize_base`/`materialize_remote`), so
+   contribution working directory's local content, its cached base (`.meta/last_committed/`), and
+   the current server state (`.meta/remote/`)--all as plain materialized directories on disk (see
+   `codingame_client.contribution_manager.manager.CgContributionManager.materialize_remote`), so
    this module itself has no client/network dependency at all.
+
+   Every caller passes a view's `data/` subdirectory specifically (see
+   `codingame_client.contribution_manager.layout.DATA_SUBDIR_NAME`), never a view's root--`data/`
+   holds *only* diffable content by construction (no identity file, no version-tracking file, no
+   convenience symlink), so `read_view_files` needs no exclusion rules at all.
 
    Content is compared purely as raw bytes--no test-case-aware or field-aware logic. This is
    deliberate: it's fine (expected, even) for this to report a difference where semantically there
    isn't one (e.g. `import_test_cases`'s ordinal directory naming producing a different-but-
-   equivalent layout)--simplicity was explicitly preferred here over precision.
+   equivalent layout)--simplicity was explicitly preferred here over precision. This extends to
+   `contribution-data.json`/`test.json`: they're diffed and conflict-marked as ordinary text, same
+   as anything else--safe specifically because `contribution.json` (identity) and
+   `contribution-version-data.json` (version-tracking) live outside `data/` entirely, so nothing
+   that needs to keep working mid-merge depends on the diffable files parsing.
 """
 
 from __future__ import annotations
@@ -20,33 +29,28 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .last_committed import LAST_COMMITTED_SUBDIR_NAME
-
 __all__ = [
     "TwoWayEntry",
     "ThreeWayEntry",
     "diff_two_trees",
     "diff_three_trees",
     "looks_like_text",
+    "read_view_files",
     "render_two_way_diff",
     "render_three_way_diff",
+    "compute_diff3_merge",
 ]
 
 
-def _read_file_map(root: Path) -> dict[str, bytes]:
-    """relative POSIX path -> content, for every regular file under `root`, excluding
-       `last_committed/` itself--working-directory bookkeeping, never meaningful to diff (and
-       ephemeral base/remote trees never contain one in the first place)."""
+def read_view_files(root: Path) -> dict[str, bytes]:
+    """relative POSIX path -> content, for every file under `root` (a view's `data/` directory--
+       see the module docstring). Returns `{}` if `root` doesn't exist."""
     result: dict[str, bytes] = {}
     if not root.is_dir():
         return result
     for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(root)
-        if rel.parts and rel.parts[0] == LAST_COMMITTED_SUBDIR_NAME:
-            continue
-        result[rel.as_posix()] = path.read_bytes()
+        if path.is_file():
+            result[path.relative_to(root).as_posix()] = path.read_bytes()
     return result
 
 
@@ -67,8 +71,8 @@ def diff_two_trees(a_dir: Path, b_dir: Path) -> list[TwoWayEntry]:
     """Compare every file under `a_dir` and `b_dir` (union of relative paths, sorted), reading
        full file content into memory (contribution working directories are small enough that this
        is simpler and fast enough, rather than hashing first)."""
-    a_map = _read_file_map(a_dir)
-    b_map = _read_file_map(b_dir)
+    a_map = read_view_files(a_dir)
+    b_map = read_view_files(b_dir)
     paths = sorted(set(a_map) | set(b_map))
     return [TwoWayEntry(p, a_map.get(p), b_map.get(p)) for p in paths]
 
@@ -103,9 +107,9 @@ class ThreeWayEntry:
 
 def diff_three_trees(base_dir: Path, local_dir: Path, remote_dir: Path) -> list[ThreeWayEntry]:
     """Like `diff_two_trees`, but across three directory trees at once."""
-    base_map = _read_file_map(base_dir)
-    local_map = _read_file_map(local_dir)
-    remote_map = _read_file_map(remote_dir)
+    base_map = read_view_files(base_dir)
+    local_map = read_view_files(local_dir)
+    remote_map = read_view_files(remote_dir)
     paths = sorted(set(base_map) | set(local_map) | set(remote_map))
     return [ThreeWayEntry(p, base_map.get(p), local_map.get(p), remote_map.get(p)) for p in paths]
 
@@ -143,10 +147,18 @@ def render_two_way_diff(entries: list[TwoWayEntry], *, a_label: str = "base", b_
     return "".join(parts)
 
 
-def _run_diff3(local_path: Path, base_path: Path, remote_path: Path) -> str:
-    """Run the system `diff3 -m` (merge mode--conflict-marker output, `<<<<<<<`/`|||||||`/
-       `=======`/`>>>>>>>`) on the three given paths, substituting an empty temp file for any that
-       don't exist (an add/remove tangled up in a genuine conflict).
+def compute_diff3_merge(
+            local_path: Path, base_path: Path, remote_path: Path,
+            *, labels: tuple[str, str, str] = ("local", "base", "remote"),
+        ) -> str:
+    """Run the system `diff3 -m` (merge mode--conflict-marker output: `<<<<<<< local`/
+       `||||||| base`/`=======`/`>>>>>>> remote`, using `labels`) on the three given paths,
+       substituting an empty temp file for any that don't exist (an add/remove tangled up in a
+       genuine conflict).
+
+       Used both to render a read-only summary (`render_three_way_diff`) and, by
+       `CgContributionManager.merge_start`, to actually write the merged (conflict-marked) content
+       into a working-directory file for the user to resolve by hand.
 
        Requires `diff3` on PATH--part of standard diffutils, present by default on macOS and
        Linux; not attempted/verified on other platforms.
@@ -162,7 +174,12 @@ def _run_diff3(local_path: Path, base_path: Path, remote_path: Path) -> str:
                 return str(path)
             empty = stack.enter_context(tempfile.NamedTemporaryFile(mode="w", suffix=".empty"))
             return empty.name
-        args = ["diff3", "-m", resolve(local_path), resolve(base_path), resolve(remote_path)]
+        local_label, base_label, remote_label = labels
+        args = [
+                "diff3", "-m",
+                "-L", local_label, "-L", base_label, "-L", remote_label,
+                resolve(local_path), resolve(base_path), resolve(remote_path),
+            ]
         result = subprocess.run(args, capture_output=True, text=True, check=False)
         # diff3 exit codes: 0 = no conflicts found, 1 = conflicts found (expected/normal here), 2 = trouble.
         if result.returncode not in (0, 1):
@@ -198,7 +215,7 @@ def render_three_way_diff(
                 parts.append("Binary and conflicting on both sides--cannot auto-render; compare the files directly.\n")
                 continue
             try:
-                parts.append(_run_diff3(
+                parts.append(compute_diff3_merge(
                         local_dir / entry.relative_path, base_dir / entry.relative_path, remote_dir / entry.relative_path))
             except FileNotFoundError as e:
                 parts.append(f"{e} Falling back to separate diffs:\n")

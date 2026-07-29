@@ -6,7 +6,6 @@ import difflib
 import json
 import logging
 import sys
-import tempfile
 import textwrap
 from datetime import datetime
 from pathlib import Path
@@ -36,11 +35,16 @@ from ..config import (
     resolve_config,
 )
 from ..contribution_manager import (
+    DATA_SUBDIR_NAME,
     DEFAULT_MERGE_TOOL,
     TESTS_SUBDIR_NAME,
+    CgContributionCommitData,
     CgContributionManager,
+    CgContributionView,
+    CgMergeStartStatus,
     CgMergeToolNotFoundError,
     CgRebaseStatus,
+    TwoWayEntry,
     diff_three_trees,
     diff_two_trees,
     find_contribution_dir,
@@ -1457,7 +1461,7 @@ class CgCli(CliBase):
 
     @cli_command("Push this working directory's content to the server via updateContribution "
                  "(with 524 retry/polling and test-case data normalization). Requires "
-                 "last_committed/ to already exist--submitting a brand-new contribution isn't "
+                 ".meta/last_committed/ to already exist--submitting a brand-new contribution isn't "
                  "supported yet.")
     async def cmd_contribution__commit(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
@@ -1483,16 +1487,16 @@ class CgCli(CliBase):
             print(f"Contribution directory: {found}")
         return handler
 
-    @cli_command("Revert this working directory's content to match last_committed/ (the cached "
+    @cli_command("Revert this working directory's content to match .meta/last_committed/ (the cached "
                  "base state) exactly, discarding local edits. Purely local--no network access, "
-                 "unlike `cg contribution merge --discard-local`, which re-fetches from the server.")
+                 "unlike `cg contribution merge discard-local`, which re-fetches from the server.")
     async def cmd_contribution__revert(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             contribution_dir: Path | None = self.args.contribution_dir
             resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
             manager = CgContributionManager(resolved_dir, await self.get_client())
             working = manager.revert()
-            self.eprint(f"{resolved_dir}: reverted to last_committed/ (title: {working.data.title!r}).")
+            self.eprint(f"{resolved_dir}: reverted to .meta/last_committed/ (title: {working.data.title!r}).")
         return handler
 
     @cli_command("Renumber tests/'s ordinal directories to a clean, sequential, zero-padded sort "
@@ -1506,32 +1510,10 @@ class CgCli(CliBase):
             self.eprint(f"Renormalized {resolved_dir / TESTS_SUBDIR_NAME}")
         return handler
 
-    async def _resolve_merge_tool(self, tool_name: str | None) -> str:
-        if tool_name is not None:
-            return tool_name
-        settings = self.resolve_default_settings()
-        return settings.merge_tool or DEFAULT_MERGE_TOOL
-
-    async def _launch_interactive_merge(self, manager: CgContributionManager, resolved_dir: Path, tool_name: str | None) -> None:
-        resolved_tool = await self._resolve_merge_tool(tool_name)
-        with tempfile.TemporaryDirectory(prefix="cg-contribution-merge-") as tmp:
-            base_dir = Path(tmp) / "base"
-            remote_dir = Path(tmp) / "remote"
-            manager.materialize_base(base_dir)
-            await manager.materialize_remote(remote_dir)
-            self.eprint(f"base:   {base_dir}")
-            self.eprint(f"local:  {resolved_dir}")
-            self.eprint(f"remote: {remote_dir}")
-            try:
-                exit_code = launch_merge_tool(resolved_tool, base_dir=base_dir, local_dir=resolved_dir, remote_dir=remote_dir)
-            except CgMergeToolNotFoundError as e:
-                raise CliError(str(e)) from e
-            self.eprint(f"{resolved_tool} exited with code {exit_code}.")
-
     @cli_command("Detect drift between the server and this working directory, resolving it "
                  "automatically when unambiguous: a no-op if the server hasn't changed since "
-                 "last_committed/ (regardless of local edits), a fast-forward if only the server "
-                 "changed (equivalent to `merge --discard-local`), or a reported conflict--left "
+                 ".meta/last_committed/ (regardless of local edits), a fast-forward if only the server "
+                 "changed (equivalent to `merge discard-local`), or a reported conflict--left "
                  "entirely alone--if both sides changed (see `cg contribution diff`/`merge`).")
     async def cmd_contribution__rebase(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
@@ -1551,89 +1533,290 @@ class CgCli(CliBase):
                     )
         return handler
 
-    @cli_command("Resolve drift between the server and this working directory. Exactly one of "
-                 "--discard-local, --discard-server, or --interactive is required.")
+    @staticmethod
+    def _commit_version(loaded: tuple[CgContributionView, CgContributionCommitData] | None) -> int | str:
+        """The commit version number from a `load_last_committed()`/`load_remote()` result, for
+           display--"?" if not yet populated (shouldn't normally happen where this is used)."""
+        return loaded[1].prev_version if loaded is not None else "?"
+
+    async def _merge_start(self, resolved_dir: Path) -> None:
+        client = await self.get_client()
+        manager = CgContributionManager(resolved_dir, client)
+        result = await manager.merge_start()
+        if result.status == CgMergeStartStatus.ALREADY_IN_PROGRESS:
+            self.eprint(
+                    f"{resolved_dir}: a merge is already in progress. Run `cg contribution merge "
+                    "continue` or `cg contribution merge abort`."
+                )
+            return
+        if result.status == CgMergeStartStatus.UP_TO_DATE:
+            version = self._commit_version(manager.load_last_committed())
+            self.eprint(f"{resolved_dir}: server unchanged since the last commit, version {version}--nothing to merge.")
+            return
+        base_version = self._commit_version(manager.load_last_committed())
+        remote_version = self._commit_version(manager.load_remote())
+        self.eprint(f"{resolved_dir}: merge started (local was at version {base_version}, server is at version {remote_version}).")
+        if result.text_conflicts:
+            self.eprint(
+                    "  text conflicts (resolve by hand, then `cg contribution merge continue`): "
+                    + ", ".join(result.text_conflicts)
+                )
+        if result.binary_conflicts:
+            self.eprint(
+                    "  binary conflicts (kept local; see .meta/remote/<path> for the "
+                    "server's version): " + ", ".join(result.binary_conflicts)
+                )
+        if not result.text_conflicts and not result.binary_conflicts:
+            self.eprint("  no conflicts--run `cg contribution merge continue` to finish.")
+
+    async def _launch_interactive_merge(self, resolved_dir: Path, tool_name: str | None) -> None:
+        client = await self.get_client()
+        manager = CgContributionManager(resolved_dir, client)
+        result = await manager.merge_start()
+        if result.status == CgMergeStartStatus.UP_TO_DATE:
+            version = self._commit_version(manager.load_last_committed())
+            self.eprint(f"{resolved_dir}: server unchanged since the last commit, version {version}--nothing to merge.")
+            return
+        if result.status == CgMergeStartStatus.STARTED:
+            base_version = self._commit_version(manager.load_last_committed())
+            remote_version = self._commit_version(manager.load_remote())
+            self.eprint(f"{resolved_dir}: merge started (local was at version {base_version}, server is at version {remote_version}).")
+        settings = self.resolve_default_settings()
+        resolved_tool = tool_name or settings.merge_tool or DEFAULT_MERGE_TOOL
+        self.eprint(f"base:   {manager.last_committed_dir}")
+        self.eprint(f"local:  {resolved_dir}")
+        self.eprint(f"remote: {manager.remote_dir}")
+        try:
+            exit_code = launch_merge_tool(
+                    resolved_tool, base_dir=manager.last_committed_dir, local_dir=resolved_dir,
+                    remote_dir=manager.remote_dir,
+                )
+        except CgMergeToolNotFoundError as e:
+            raise CliError(str(e)) from e
+        self.eprint(
+                f"{resolved_tool} exited with code {exit_code}. Merge is still in progress--run "
+                "`cg contribution merge continue` (or `abort`) when done."
+            )
+
+    @cli_command("Resolve drift between the server and this working directory--parent for the "
+                 "merge state machine (start/continue/abort/interactive) and the instant "
+                 "discard-local/discard-server resolutions. Bare `cg contribution merge` is an "
+                 "alias for `merge start`.")
     async def cmd_contribution__merge(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             contribution_dir: Path | None = self.args.contribution_dir
             resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
-            discard_local: bool = self.args.discard_local
-            discard_server: bool = self.args.discard_server
-            tool_name: str | None = self.args.tool
-            client = await self.get_client()
-            manager = CgContributionManager(resolved_dir, client)
-            if discard_local:
-                working = await manager.merge_discard_local()
-                self.eprint(f"{resolved_dir}: discarded local changes--now matches the server (title: {working.data.title!r}).")
-            elif discard_server:
-                last_committed = await manager.merge_discard_server()
-                self.eprint(
-                        f"{resolved_dir}: last_committed/ now matches the server (version "
-                        f"{last_committed.prev_version}); working directory content left untouched."
-                    )
-            else:
-                await self._launch_interactive_merge(manager, resolved_dir, tool_name)
-        p = cmd.get_parser()
-        group = p.add_mutually_exclusive_group(required=True)
-        group.add_argument("--discard-local", default=False, action="store_true",
-                       help="Discard all local edits; replace the working directory (and "
-                            "last_committed/) with the current server state.")
-        group.add_argument("--discard-server", default=False, action="store_true",
-                       help="Update last_committed/ to match the current server state, without "
-                            "touching any working-directory content files.")
-        group.add_argument("--interactive", default=False, action="store_true",
-                       help="Materialize base/remote into temporary directories and launch an "
-                            "external 3-way merge tool pointed at them (plus the real working "
-                            "directory itself as \"local\", so edits apply directly)--see --tool "
-                            "and `cg settings set merge-tool`.")
-        p.add_argument("--tool", type=str, default=None, metavar="NAME",
-                       help="Merge tool to use with --interactive (see codingame_client"
-                            ".contribution_manager.merge_tools.MERGE_TOOL_COMMANDS). Defaults to "
-                            "the configured `cg settings set merge-tool`, then \"meld\".")
+            await self._merge_start(resolved_dir)
         return handler
 
-    @cli_command("Show what's changed: a 3-way diff (base/local/remote) if the server has "
-                 "diverged since last_committed/, otherwise a plain 2-way diff of local changes "
-                 "since the last commit. Genuine conflicts are rendered diff3-style (conflict "
-                 "markers) via the system `diff3`. Pass --interactive to launch an external merge "
-                 "tool instead of printing text (same as `cg contribution merge --interactive`).")
+    @cli_command("Begin a merge: materialize base/local/remote into .meta/merge/, auto-resolve "
+                 "unambiguous changes directly into the working directory, and write diff3 "
+                 "conflict markers for genuine text conflicts (keeping local, with a warning, for "
+                 "binary conflicts). Idempotent--does nothing (and doesn't error) if a merge is "
+                 "already in progress, or if the server's version already matches "
+                 ".meta/last_committed/ (nothing to merge).")
+    async def cmd_contribution__merge__start(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            await self._merge_start(resolved_dir)
+        return handler
+
+    @cli_command("Finish an in-progress merge: verify no unresolved diff3 conflict markers "
+                 "remain anywhere in the working directory, promote the merge's captured remote "
+                 "snapshot to .meta/last_committed/, refresh the solution symlink, and remove "
+                 ".meta/merge/.")
+    async def cmd_contribution__merge__continue(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            manager = CgContributionManager(resolved_dir, await self.get_client())
+            manager.merge_continue()
+            version = self._commit_version(manager.load_last_committed())
+            self.eprint(f"{resolved_dir}: merge complete, now at version {version}.")
+        return handler
+
+    @cli_command("Abort an in-progress merge: restore the working directory from the local "
+                 "snapshot taken when the merge started (discarding any auto-resolution/manual "
+                 "edits made since), and remove .meta/merge/. .meta/last_committed/ is left untouched.")
+    async def cmd_contribution__merge__abort(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            manager = CgContributionManager(resolved_dir, await self.get_client())
+            manager.merge_abort()
+            version = self._commit_version(manager.load_last_committed())
+            self.eprint(
+                    f"{resolved_dir}: merge aborted; working directory restored to its pre-merge "
+                    f"state (still at version {version})."
+                )
+        return handler
+
+    @cli_command("Show the 3-way base/local/remote diff of an in-progress merge's persistent "
+                 ".meta/merge/ state, with genuine conflicts rendered diff3-style (conflict "
+                 "markers) via the system `diff3`. Equivalent to bare `cg contribution diff` "
+                 "while a merge is in progress--doesn't take --remote/--cached (there's no "
+                 "server round-trip involved; the merge already froze its own remote snapshot). "
+                 "Fails if no merge is in progress.")
+    async def cmd_contribution__merge__diff(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            manager = CgContributionManager(resolved_dir, await self.get_client())
+            if not manager.merge_in_progress:
+                raise CliError("No merge in progress (run `cg contribution merge` to start one).")
+            self._print_three_way_diff(
+                    manager, manager.last_committed_dir / DATA_SUBDIR_NAME, manager.data_dir, manager.remote_dir / DATA_SUBDIR_NAME)
+        return handler
+
+    @cli_command("Start a merge if one isn't already in progress, then launch an external 3-way "
+                 "merge tool pointed at .meta/last_committed (base) and .meta/remote (remote) plus "
+                 "the real working directory as \"local\" (so edits apply directly). The merge "
+                 "remains in progress after the tool exits--run `cg contribution merge continue` "
+                 "(or `abort`) when done.")
+    async def cmd_contribution__merge__interactive(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            tool_name: str | None = self.args.tool
+            await self._launch_interactive_merge(resolved_dir, tool_name)
+        p = cmd.get_parser()
+        p.add_argument("--tool", type=str, default=None, metavar="NAME",
+                       help="Merge tool to use (see codingame_client.contribution_manager"
+                            ".merge_tools.MERGE_TOOL_COMMANDS). Defaults to the configured "
+                            "`cg settings set merge-tool`, then \"meld\".")
+        return handler
+
+    @cli_command("Discard all local edits; replace the working directory (and .meta/last_committed/) "
+                 "with the current server state. Instant--doesn't use the merge state machine.")
+    async def cmd_contribution__merge__discard_local(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            manager = CgContributionManager(resolved_dir, await self.get_client())
+            working = await manager.merge_discard_local()
+            self.eprint(f"{resolved_dir}: discarded local changes--now matches the server (title: {working.data.title!r}).")
+        return handler
+
+    @cli_command("Update .meta/last_committed/ to match the current server state, without touching any "
+                 "working-directory content files. Instant--doesn't use the merge state machine.")
+    async def cmd_contribution__merge__discard_server(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            manager = CgContributionManager(resolved_dir, await self.get_client())
+            snapshot = await manager.merge_discard_server()
+            self.eprint(
+                    f"{resolved_dir}: .meta/last_committed/ now matches the server (version "
+                    f"{snapshot.prev_version}); working directory content left untouched."
+                )
+        return handler
+
+    def _print_two_way_diff(self, entries: list[TwoWayEntry], *, a_label: str, b_label: str, no_changes_message: str) -> None:
+        text = render_two_way_diff(entries, a_label=a_label, b_label=b_label)
+        if text:
+            print(text, end="")
+        else:
+            self.eprint(no_changes_message)
+
+    def _print_three_way_diff(self, manager: CgContributionManager, base_dir: Path, local_dir: Path, remote_dir: Path) -> None:
+        """Render the 3-way base/local/remote diff of an in-progress merge's persistent
+           `.meta/merge/` state (see `cmd_contribution__diff`)."""
+        entries3 = diff_three_trees(base_dir, local_dir, remote_dir)
+        text = render_three_way_diff(entries3, base_dir, local_dir, remote_dir)
+        if text:
+            print(text, end="")
+        else:
+            base_version = self._commit_version(manager.load_last_committed())
+            remote_version = self._commit_version(manager.load_remote())
+            self.eprint(f"No differences in the merge state (local was at version {base_version}, server is at version {remote_version}).")
+
+    @cli_command("Show what's changed. With no flags: a plain 2-way diff of local changes against "
+                 ".meta/last_committed/ (no network access)--unless a merge is in progress, in "
+                 "which case a 3-way base/local/remote diff of the persistent .meta/merge/ state "
+                 "is shown instead, with genuine conflicts rendered diff3-style (conflict "
+                 "markers) via the system `diff3`. Pass --remote to compare against the current "
+                 "server state instead (always a 2-way diff, merge or not): a fresh "
+                 "findContribution refreshes .meta/remote/ first (unless a merge is in progress, "
+                 "in which case fetching is skipped--merge start already fetched it, and nothing "
+                 "may refresh it again until the merge ends--so whatever's cached is used "
+                 "as-is). Add --cached to always skip the fetch and use whatever's most recently "
+                 "cached in .meta/remote/, regardless of merge state. Pass --interactive to "
+                 "launch an external merge tool instead of printing text (same as "
+                 "`cg contribution merge interactive`).")
     async def cmd_contribution__diff(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             contribution_dir: Path | None = self.args.contribution_dir
             resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
             interactive: bool = self.args.interactive
             tool_name: str | None = self.args.tool
+            remote: bool = self.args.remote
+            cached: bool = self.args.cached
+
+            if interactive:
+                await self._launch_interactive_merge(resolved_dir, tool_name)
+                return
+
             client = await self.get_client()
             manager = CgContributionManager(resolved_dir, client)
 
-            if interactive:
-                await self._launch_interactive_merge(manager, resolved_dir, tool_name)
+            if not remote:
+                if manager.merge_in_progress:
+                    self._print_three_way_diff(
+                            manager, manager.last_committed_dir / DATA_SUBDIR_NAME, manager.data_dir,
+                            manager.remote_dir / DATA_SUBDIR_NAME,
+                        )
+                else:
+                    base_version = self._commit_version(manager.load_last_committed())
+                    self._print_two_way_diff(
+                            diff_two_trees(manager.last_committed_dir / DATA_SUBDIR_NAME, manager.data_dir),
+                            a_label="last-commit", b_label="local",
+                            no_changes_message=f"No local changes since the last commit, version {base_version}.",
+                        )
                 return
 
-            with tempfile.TemporaryDirectory(prefix="cg-contribution-diff-") as tmp:
-                base_dir = Path(tmp) / "base"
-                remote_dir = Path(tmp) / "remote"
-                manager.materialize_base(base_dir)
-                await manager.materialize_remote(remote_dir)
-
-                server_changed = any(entry.changed for entry in diff_two_trees(base_dir, remote_dir))
-                if not server_changed:
-                    entries = diff_two_trees(base_dir, resolved_dir)
-                    text = render_two_way_diff(entries, a_label="last-commit", b_label="local")
-                    if text:
-                        print(text, end="")
-                    else:
-                        self.eprint("No local changes since the last commit.")
-                else:
-                    entries3 = diff_three_trees(base_dir, resolved_dir, remote_dir)
-                    text = render_three_way_diff(entries3, base_dir, resolved_dir, remote_dir)
-                    print(text, end="")
+            if cached or manager.merge_in_progress:
+                if not manager.remote_dir.is_dir():
+                    raise CliError(
+                            f"{manager.remote_dir} doesn't exist yet--run `cg contribution fetch` "
+                            "first, or drop --cached."
+                        )
+            else:
+                await manager.materialize_remote(manager.remote_dir)
+            remote_version = self._commit_version(manager.load_remote())
+            self._print_two_way_diff(
+                    diff_two_trees(manager.remote_dir / DATA_SUBDIR_NAME, manager.data_dir),
+                    a_label="remote", b_label="local",
+                    no_changes_message=f"No local changes since the current server version {remote_version}.",
+                )
         p = cmd.get_parser()
+        p.add_argument("--remote", default=False, action="store_true",
+                       help="Compare against the current server state (.meta/remote/) instead of "
+                            ".meta/last_committed/.")
+        p.add_argument("--cached", default=False, action="store_true",
+                       help="With --remote, don't fetch--use whatever's already cached in "
+                            ".meta/remote/ from a prior fetch/rebase/merge start/diff --remote.")
         p.add_argument("--interactive", default=False, action="store_true",
                        help="Launch an external merge tool instead of printing a text diff.")
         p.add_argument("--tool", type=str, default=None, metavar="NAME",
                        help="Merge tool to use with --interactive. Defaults to the configured "
                             "`cg settings set merge-tool`, then \"meld\".")
+        return handler
+
+    @cli_command("Refresh .meta/remote/--the cached current server state--via a fresh "
+                 "findContribution. Leaves it untouched if the version hasn't changed, and avoids "
+                 "re-downloading the cover image if its binary ID hasn't changed either. `rebase` "
+                 "and `merge start` do this automatically; use this to refresh the cache for "
+                 "`diff --remote --cached` without either of those. Refuses while a merge is in "
+                 "progress.")
+    async def cmd_contribution__fetch(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            client = await self.get_client()
+            manager = CgContributionManager(resolved_dir, client)
+            contribution = await manager.materialize_remote(manager.remote_dir)
+            self.eprint(f"{resolved_dir}: .meta/remote/ refreshed (version {contribution.last_version.version}).")
         return handler
 
     @cli_command("Configuration commands.")

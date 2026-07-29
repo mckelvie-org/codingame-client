@@ -18,7 +18,7 @@ from codingame_client.contribution_manager.resolver import (
     find_contribution_dir,
     resolve_contribution_dir,
 )
-from codingame_client.contribution_manager.schema import CONTRIBUTION_FILE_NAME
+from codingame_client.contribution_manager.schema import CONTRIBUTION_IDENTITY_FILE_NAME
 from codingame_client.settings import CgSettings, CgSettingsData
 
 
@@ -64,22 +64,22 @@ def test_env_overrides_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
 
 def test_cwd_used_when_it_contains_manifest(tmp_path: Path) -> None:
-    (tmp_path / CONTRIBUTION_FILE_NAME).write_text("{}")
+    (tmp_path / CONTRIBUTION_IDENTITY_FILE_NAME).write_text("{}")
     assert find_contribution_dir(start_dir=tmp_path) == tmp_path
 
 
 def test_contribution_subdir_used_when_it_contains_manifest(tmp_path: Path) -> None:
     sub = tmp_path / "contribution"
     sub.mkdir()
-    (sub / CONTRIBUTION_FILE_NAME).write_text("{}")
+    (sub / CONTRIBUTION_IDENTITY_FILE_NAME).write_text("{}")
     assert find_contribution_dir(start_dir=tmp_path) == sub
 
 
 def test_cwd_preferred_over_contribution_subdir(tmp_path: Path) -> None:
-    (tmp_path / CONTRIBUTION_FILE_NAME).write_text("{}")
+    (tmp_path / CONTRIBUTION_IDENTITY_FILE_NAME).write_text("{}")
     sub = tmp_path / "contribution"
     sub.mkdir()
-    (sub / CONTRIBUTION_FILE_NAME).write_text("{}")
+    (sub / CONTRIBUTION_IDENTITY_FILE_NAME).write_text("{}")
     assert find_contribution_dir(start_dir=tmp_path) == tmp_path
 
 
@@ -90,7 +90,7 @@ def test_returns_none_when_nothing_found(tmp_path: Path) -> None:
 
 
 def test_settings_with_no_override_falls_through_to_cwd_check(tmp_path: Path) -> None:
-    (tmp_path / CONTRIBUTION_FILE_NAME).write_text("{}")
+    (tmp_path / CONTRIBUTION_IDENTITY_FILE_NAME).write_text("{}")
     settings = _settings_with_contribution_dir(None, tmp_path)
     assert find_contribution_dir(settings=settings, start_dir=tmp_path) == tmp_path
 
@@ -112,5 +112,5 @@ def test_resolve_allow_default_falls_back_to_start_dir(tmp_path: Path) -> None:
 
 
 def test_resolve_allow_default_still_prefers_a_real_match(tmp_path: Path) -> None:
-    (tmp_path / CONTRIBUTION_FILE_NAME).write_text("{}")
+    (tmp_path / CONTRIBUTION_IDENTITY_FILE_NAME).write_text("{}")
     assert resolve_contribution_dir(start_dir=tmp_path, allow_default=True) == tmp_path

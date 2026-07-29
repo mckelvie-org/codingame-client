@@ -1,7 +1,7 @@
 """Registry of known external 3-way diff/merge tools that can be pointed at three materialized
    directory trees (base/local/remote)--see `codingame_client.contribution_manager.manager`'s
-   `materialize_base`/`materialize_remote`, and the `cg contribution diff`/`merge --interactive`
-   CLI commands.
+   `CgContributionManager.last_committed_dir`/`remote_dir`/`materialize_remote`, and the
+   `cg contribution diff`/`merge --interactive` CLI commands.
 """
 
 from __future__ import annotations

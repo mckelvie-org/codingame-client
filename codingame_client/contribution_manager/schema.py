@@ -1,50 +1,90 @@
-"""The `contribution.json` manifest schema for a contribution working directory--a local,
-   possibly-uncommitted working view of a single contribution, analogous to a git working
-   directory backed by a remote repo. See `codingame_client.contribution_manager.manager` for the
-   code that builds/consumes this from the server (`import_`/`commit`), and
-   `codingame_client.contribution_manager.last_committed` for the separate `last_committed/`
-   subdirectory that tracks the base (last-synced) server state.
+"""The two working-directory manifest files that aren't a `CgContributionCommitData`
+   (`codingame_client.contribution_manager.contribution_commit_data`):
+
+   - `contribution.json` (`CgContributionIdentity`): global identity, lives only at the working
+     directory's own root (a sibling of `data/`, never inside it). Never part of any materialized
+     view--not propagated to `.meta/last_committed/` or `.meta/merge/local/`, never diffed, never
+     touched by merge machinery. Its presence is what identifies a directory as a contribution
+     working directory at all; most commands (especially the merge state machine) only need this
+     file to be valid, never `contribution-data.json`.
+
+   - `contribution-data.json` (`CgContributionView`): the actual per-view materialized content,
+     inside a view's `data/` subdirectory (see
+     `codingame_client.contribution_manager.layout.DATA_SUBDIR_NAME`)--present in every
+     materialized view: the working directory's own `data/`, `.meta/last_committed/data/`,
+     `.meta/remote/data/`, and `.meta/merge/local/data/`. Fully diffable, ordinary JSON--if it
+     conflicts during a merge, it gets `diff3` conflict markers like any other text file, same as
+     everything else; that's safe specifically because `contribution.json` lives outside `data/`
+     entirely, so nothing that needs to keep working mid-merge (the merge state machine itself)
+     depends on this file being valid JSON.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..client.common.protocol.contribution import CgContributionData, CgPuzzleType
+from ..client.common.protocol.contribution import CgContributionData, CgContributionId, CgPuzzleType
 from ..common.dataclass_wizard_x import CatchAll, JSONWizardX
 
 __all__ = [
-    "CONTRIBUTION_FILE_NAME",
-    "CgContributionWorkingDir",
+    "CONTRIBUTION_IDENTITY_FILE_NAME",
+    "CONTRIBUTION_DATA_FILE_NAME",
+    "CONTRIBUTION_SCHEMA_VERSION",
+    "CgContributionIdentity",
+    "CgContributionView",
 ]
 
-CONTRIBUTION_FILE_NAME = "contribution.json"
-"""Name of the working-directory manifest file, directly inside the contribution directory."""
+CONTRIBUTION_IDENTITY_FILE_NAME = "contribution.json"
+"""Name of the global-identity manifest file, directly inside the contribution directory root
+   only (never inside `data/`)--never propagated to any materialized view."""
+
+CONTRIBUTION_DATA_FILE_NAME = "contribution-data.json"
+"""Name of the per-view materialized-content manifest file, inside every view's `data/`
+   subdirectory."""
+
+CONTRIBUTION_SCHEMA_VERSION = 1
+"""Current on-disk format version for a contribution working directory, recorded in
+   `CgContributionIdentity.schema_version` so a future format change can detect and offer to
+   migrate an older working directory."""
 
 
 @dataclass
-class CgContributionWorkingDir(JSONWizardX):
-    """The `contribution.json` manifest for a contribution working directory: purely local/working
-       state. The last-synced server state ("base") lives separately, in `last_committed/`--see
-       `codingame_client.contribution_manager.last_committed.CgLastCommittedContribution`--so that
-       it can be materialized and diffed uniformly with this file rather than being an embedded
-       field here.
+class CgContributionIdentity(JSONWizardX):
+    """The `contribution.json` manifest: global identity for a contribution working directory,
+       constant for its lifetime (never changes across `import_`/`commit`/`merge`/etc.--unlike
+       everything else in the working directory, this is not tied to any specific commit/version)."""
+
+    schema_version: int
+    """The on-disk format version this working directory was written in--see
+       `CONTRIBUTION_SCHEMA_VERSION`."""
+
+    contribution_handle: CgContributionId
+    """The opaque contribution ID (`CgContribution.public_handle`) this working directory tracks."""
+
+    extra_data: CatchAll = field(default_factory=dict)
+
+
+@dataclass
+class CgContributionView(JSONWizardX):
+    """The `contribution-data.json` manifest: the materialized content of one view of a
+       contribution (the working directory's own local edits, `.meta/last_committed/`'s cached
+       base, or a `.meta/merge/` snapshot)--everything needed to `commit()` this view, or to
+       compare it against another view.
 
        `data` is a working version of `CgContributionData`, with several fields deliberately kept
        always-empty by convention (not schema-enforced) because their real content lives in
-       sibling files/directories instead--overwritten from those sources at `commit()` time, so a
-       stray hand-edited value here is harmless, just confusing to read:
+       sibling files/directories instead--overwritten from those sources when a view is
+       materialized, so a stray hand-edited value here is harmless, just confusing to read:
 
          - `statement`      -> `statement.cgmd`
          - `input_description` -> `input_description.cgmd`
          - `output_description` -> `output_description.cgmd`
          - `constraints`    -> `constraints.cgmd`
          - `stub_generator` -> `stub_generator.cgstub`
-         - `solution`       -> built from the file named by `solution_file`
+         - `solution`       -> `solution.src` (always this exact name--see
+                                `codingame_client.contribution_manager.layout.SOLUTION_FILE_NAME`)
          - `test_cases`     -> built from the `tests/` subdirectory (see `test_cases_dir`)
-         - `cover_binary_id` -> built from `cover.png` (reusing `last_committed/`'s cached
-                                `cover_binary_hash` to decide whether a previously-uploaded image
-                                can be reused)
+         - `cover_binary_id` -> built from `cover.png`
 
        All other fields of `data` (`title`, `difficulty`, `topics`, `solution_language`) are used
        normally--there's no sidecar file for them.
@@ -68,22 +108,6 @@ class CgContributionWorkingDir(JSONWizardX):
     """Whether the version being committed is being formally submitted for moderation. A required
        top-level parameter to `updateContribution`."""
 
-    solution_file: str | None = None
-    """Path, relative to and always inside this working directory (e.g. "solution.py"), to the
-       file containing the puzzle's reference solution source code, in any language. `None` if no
-       solution has been provided yet. This file is always a real, plain file here--recommended
-       way to also access it from elsewhere is a symlink *outside* the working directory pointing
-       in at it (that symlink is entirely outside our management--we never see or touch it). The
-       reverse (a symlink at this path, pointing out to a real file elsewhere) is also supported,
-       relying on one guarantee: as long as `data.solution_language` doesn't change, new content
-       is always written by overwriting this path in place, never by deleting and recreating it--
-       so a symlink here survives every `import_`/`commit`/`revert` untouched, only its target's
-       content changes. That guarantee only breaks when the language actually changes (see below).
-
-       Preserved across `import_`/`revert` as long as its extension still matches
-       `data.solution_language`; if the language changes, a fresh default name is generated and
-       the old file (or symlink itself, never whatever it points to) is deleted."""
-
     data: CgContributionData = field(default_factory=lambda: CgContributionData(title=""))
-    """The working contribution content--see the class docstring for which fields are real and
-       which are always-empty placeholders backed by sibling files/directories instead."""
+    """The materialized contribution content--see the class docstring for which fields are real
+       and which are always-empty placeholders backed by sibling files/directories instead."""

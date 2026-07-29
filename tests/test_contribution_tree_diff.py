@@ -71,16 +71,22 @@ def test_diff_two_trees_missing_directory_treated_as_empty(tmp_path: Path) -> No
     assert entries[0].b is None
 
 
-def test_diff_two_trees_excludes_last_committed_subdir(tmp_path: Path) -> None:
+def test_diff_two_trees_walks_everything_under_root(tmp_path: Path) -> None:
+    """`read_view_files`/`diff_two_trees` no longer have any exclusion logic--every caller passes
+       a view's `data/` subdirectory specifically (see
+       `codingame_client.contribution_manager.layout.DATA_SUBDIR_NAME`), which holds *only*
+       diffable content by construction, so there's nothing left to filter here."""
     a_dir = tmp_path / "a"
     b_dir = tmp_path / "b"
-    (a_dir / "last_committed").mkdir(parents=True)
-    (a_dir / "last_committed" / "contribution.json").write_text("{}")
+    a_dir.mkdir()
     b_dir.mkdir()
+    (a_dir / "nested" / "deep").mkdir(parents=True)
+    (a_dir / "nested" / "deep" / "f.txt").write_text("hello\n")
 
     entries = diff_two_trees(a_dir, b_dir)
 
-    assert entries == []
+    assert len(entries) == 1
+    assert entries[0].relative_path == "nested/deep/f.txt"
 
 
 def test_render_two_way_diff_shows_unified_diff_for_text(tmp_path: Path) -> None:

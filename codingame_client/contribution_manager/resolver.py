@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .schema import CONTRIBUTION_FILE_NAME
+from .schema import CONTRIBUTION_IDENTITY_FILE_NAME
 
 if TYPE_CHECKING:
     from ..settings import CgSettings
@@ -79,10 +79,10 @@ def find_contribution_dir(
     if settings is not None and settings.contribution_dir is not None:
         return settings.contribution_dir
     start = Path(start_dir).resolve() if start_dir is not None else Path.cwd()
-    if (start / CONTRIBUTION_FILE_NAME).is_file():
+    if (start / CONTRIBUTION_IDENTITY_FILE_NAME).is_file():
         return start
     default_subdir = start / DEFAULT_CONTRIBUTION_SUBDIR_NAME
-    if (default_subdir / CONTRIBUTION_FILE_NAME).is_file():
+    if (default_subdir / CONTRIBUTION_IDENTITY_FILE_NAME).is_file():
         return default_subdir
     return None
 
