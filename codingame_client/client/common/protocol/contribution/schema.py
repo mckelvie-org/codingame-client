@@ -311,12 +311,23 @@ class CgValidateAction(JSONWizardX):
 
 @dataclass
 class CgContribution(JSONWizardX):
-    """The complete response to findContribution"""
+    """The complete response to findContribution. Also the response shape for updateContribution
+       (see `CgAsyncContributionService.update_contribution`)--but see `active_version` and
+       `CgContributionVersion.statement_html` for two fields confirmed to differ between the two
+       in practice."""
     id: int
     """The unique identifier for the contribution, assigned by the server."""
-    
+
     active_version: int
-    """The version number of the currently active version of the contribution."""
+    """The version number of the currently active version of the contribution.
+
+       In an updateContribution response, this has been confirmed live (2026-07-28) to lag by one
+       version behind the version just created--e.g. after submitting what becomes version 63,
+       `active_version` is still 62 even though `last_version.version` in that same response is
+       already 63. A `findContribution` call moments later correctly reports 63. Likely the new
+       version's activation happens slightly asynchronously server-side, similar to why
+       `CgContributionVersion.statement_html` isn't rendered yet either. Use `last_version.version`
+       (not this field) when a just-submitted version's number is needed."""
     
     score: int
     """The score of the contribution."""

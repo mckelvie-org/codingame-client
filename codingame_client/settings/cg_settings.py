@@ -55,6 +55,21 @@ class CgSettingsData(JSONWizardX):
        falls back to `CgConfigData.default_profile` (and from there to "default"). See
        `CgSettings.default_profile` for the resolved value."""
 
+    contribution_dir: str | None = None
+    """Default contribution working directory (see `codingame_client.contribution_manager`), used
+       when one isn't given explicitly and `CG_CONTRIBUTION_DIR` isn't set. Unlike
+       `default_profile`, there is no further fallback--if unset here, contribution-dir discovery
+       moves on to its cwd-based heuristics. May be relative (resolved against the current
+       directory at the time it's consulted) or absolute; `~` is expanded. See
+       `CgSettings.contribution_dir` for the resolved value."""
+
+    merge_tool: str | None = None
+    """Default external 3-way diff/merge tool name for `cg contribution diff`/`merge
+       --interactive` (see `codingame_client.contribution_manager.merge_tools`), used when
+       `--tool` isn't given on the command line. Falls back to
+       `merge_tools.DEFAULT_MERGE_TOOL` ("meld") if unset. See `CgSettings.merge_tool` for the
+       resolved value."""
+
 
 @dataclass
 class CgSettings:
@@ -85,6 +100,25 @@ class CgSettings:
             return self.raw_data.default_profile
         return self.config.default_profile
 
+    @property
+    def contribution_dir(self) -> Path | None:
+        """The configured default contribution working directory, resolved to an absolute path
+           (relative values resolved against the current directory, `~` expanded), or None if not
+           set. There is no further fallback (unlike `default_profile`)--`None` here just means
+           "not configured", and callers (see `codingame_client.contribution_manager.resolver`)
+           move on to their own cwd-based discovery steps."""
+        if self.raw_data.contribution_dir is None:
+            return None
+        return Path(self.raw_data.contribution_dir).expanduser().resolve()
+
+    @property
+    def merge_tool(self) -> str | None:
+        """The configured default external merge-tool name, or None if unset (in which case
+           callers should fall back to `contribution_manager.merge_tools.DEFAULT_MERGE_TOOL`--not
+           done here, to avoid this low-level package depending on the higher-level
+           `contribution_manager` package just for a constant)."""
+        return self.raw_data.merge_tool
+
     def save(self) -> None:
         """Write `raw_data` back to `settings_file`."""
         write_settings(self.raw_data, self.settings_file)
@@ -95,6 +129,8 @@ class CgSettings:
         return {
             "settingsFile": str(self.settings_file),
             "defaultProfile": self.default_profile,
+            "contributionDir": str(self.contribution_dir) if self.contribution_dir is not None else None,
+            "mergeTool": self.merge_tool,
             "rawSettings": self.raw_data.to_dict(),
         }
 

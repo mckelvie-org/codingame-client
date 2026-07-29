@@ -12,7 +12,7 @@ _extension_map = {
         "cpp": "C++",
         "c": "C",
         "cs": "C#",
-        "d": "DMD",
+        "d": "D",
         "clj": "Clojure",
         "dart": "Dart",
         "fs": "F#",
@@ -20,7 +20,7 @@ _extension_map = {
         "hs": "Haskell",
         "kt": "Kotlin",
         "lua": "Lua",
-        "m": "Objective-C",
+        "m": "ObjectiveC",
         "ml": "OCaml",
         "pas": "Pascal",
         "pl": "Perl",
@@ -28,13 +28,17 @@ _extension_map = {
         "scala": "Scala",
         "swift": "Swift",
         "vb": "VB.NET",
-        "js": "JavaScript",
+        "js": "Javascript",
         "ts": "TypeScript",
         "rb": "Ruby",
         "go": "Go",
         "rs": "Rust",
-        # Add more mappings as needed
-    } 
+        # Confirmed live (2026-07-28) against `ProgrammingLanguage/findAllIds`--matches this
+        # exact 27-entry set of solution-language ID strings. Three values were previously
+        # wrong (didn't match any real ID, so `cg_solution_language_to_extension` silently
+        # returned None for them): "DMD" -> "D", "Objective-C" -> "ObjectiveC" (no hyphen),
+        # "JavaScript" -> "Javascript" (lowercase "s").
+    }
 
 def cg_extension_to_solution_language(filename_or_extension: str) -> CgSolutionLanguage | None:
     """Map a file extension to the corresponding Codingame solution language string used in the protocol.

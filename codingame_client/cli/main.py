@@ -6,6 +6,7 @@ import difflib
 import json
 import logging
 import sys
+import tempfile
 import textwrap
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,21 @@ from ..config import (
     default_global_config_file,
     find_config_file,
     resolve_config,
+)
+from ..contribution_manager import (
+    DEFAULT_MERGE_TOOL,
+    TESTS_SUBDIR_NAME,
+    CgContributionManager,
+    CgMergeToolNotFoundError,
+    CgRebaseStatus,
+    diff_three_trees,
+    diff_two_trees,
+    find_contribution_dir,
+    launch_merge_tool,
+    render_three_way_diff,
+    render_two_way_diff,
+    renormalize_test_case_dirs,
+    resolve_contribution_dir,
 )
 from ..credentials.browser_login import async_cg_browser_login, cg_browser_delete_session
 from ..credentials.cg_credentials import (
@@ -1400,6 +1416,226 @@ class CgCli(CliBase):
                             "seconds. Defaults to 0, meaning wait indefinitely.")
         return handler
 
+    @cli_command("Contribution working directory commands--manage a local, possibly-uncommitted "
+                 "working view of a single contribution (see `cg api contribution`/`cg api-helper "
+                 "contribution` for the raw, stateless API this is built on).")
+    async def cmd_contribution(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        p = cmd.get_parser()
+        p.add_argument("--contribution-dir", type=Path, default=None, metavar="DIR",
+                       help="Working directory to operate on. Defaults to CG_CONTRIBUTION_DIR, then "
+                            "the configured default (`cg settings set contribution-dir`), then the "
+                            "current directory or \"./contribution\" if it contains contribution.json. "
+                            "Ignored by `cg contribution import`, which always takes an explicit new "
+                            "target directory as a positional argument instead.")
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Build a fresh contribution working directory from an existing server-side "
+                 "contribution: findContribution, plus downloading the cover image if one is set. "
+                 "DIRECTORY must not already exist. Ignores --contribution-dir.")
+    async def cmd_contribution__import(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_id: str = self.args.contribution_id
+            directory: Path = self.args.directory
+            if directory.exists():
+                raise CliError(
+                        f"Directory already exists: {directory}. `cg contribution import` only "
+                        "creates a new working directory; import into an existing one by editing "
+                        "it directly, or remove the directory first."
+                    )
+            client = await self.get_client()
+            manager = CgContributionManager(directory, client)
+            working = await manager.import_(contribution_id)
+            self.eprint(f"Imported contribution {contribution_id!r} into {directory}")
+            self.eprint(f"  title: {working.data.title!r}")
+            self.eprint(f"  puzzleType: {working.puzzle_type!r}")
+        p = cmd.get_parser()
+        p.add_argument("contribution_id", type=str, metavar="CONTRIBUTION-ID",
+                       help="Opaque contribution ID string (see `cg api contribution find-contribution`).")
+        p.add_argument("directory", type=Path, metavar="DIRECTORY",
+                       help="New directory to create the working directory in. Must not already exist.")
+        return handler
+
+    @cli_command("Push this working directory's content to the server via updateContribution "
+                 "(with 524 retry/polling and test-case data normalization). Requires "
+                 "last_committed/ to already exist--submitting a brand-new contribution isn't "
+                 "supported yet.")
+    async def cmd_contribution__commit(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            client = await self.get_client(require_credentials=True)
+            manager = CgContributionManager(resolved_dir, client)
+            result = await manager.commit()
+            self.eprint(
+                    f"Committed {resolved_dir} -> contribution {result.public_handle!r}, "
+                    f"version {result.last_version.version}"
+                )
+        return handler
+
+    @cli_command("Show which contribution working directory would be used.")
+    async def cmd_contribution__where(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            found = find_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            if found is None:
+                print("No contribution working directory found. Run `cg contribution import CONTRIBUTION-ID DIRECTORY` to create one.")
+                return
+            print(f"Contribution directory: {found}")
+        return handler
+
+    @cli_command("Revert this working directory's content to match last_committed/ (the cached "
+                 "base state) exactly, discarding local edits. Purely local--no network access, "
+                 "unlike `cg contribution merge --discard-local`, which re-fetches from the server.")
+    async def cmd_contribution__revert(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            manager = CgContributionManager(resolved_dir, await self.get_client())
+            working = manager.revert()
+            self.eprint(f"{resolved_dir}: reverted to last_committed/ (title: {working.data.title!r}).")
+        return handler
+
+    @cli_command("Renumber tests/'s ordinal directories to a clean, sequential, zero-padded sort "
+                 "key, preserving relative order (see the tests/ directory layout in "
+                 "codingame_client.contribution_manager.test_cases_dir).")
+    async def cmd_contribution__renormalize_tests(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            renormalize_test_case_dirs(resolved_dir / TESTS_SUBDIR_NAME)
+            self.eprint(f"Renormalized {resolved_dir / TESTS_SUBDIR_NAME}")
+        return handler
+
+    async def _resolve_merge_tool(self, tool_name: str | None) -> str:
+        if tool_name is not None:
+            return tool_name
+        settings = self.resolve_default_settings()
+        return settings.merge_tool or DEFAULT_MERGE_TOOL
+
+    async def _launch_interactive_merge(self, manager: CgContributionManager, resolved_dir: Path, tool_name: str | None) -> None:
+        resolved_tool = await self._resolve_merge_tool(tool_name)
+        with tempfile.TemporaryDirectory(prefix="cg-contribution-merge-") as tmp:
+            base_dir = Path(tmp) / "base"
+            remote_dir = Path(tmp) / "remote"
+            manager.materialize_base(base_dir)
+            await manager.materialize_remote(remote_dir)
+            self.eprint(f"base:   {base_dir}")
+            self.eprint(f"local:  {resolved_dir}")
+            self.eprint(f"remote: {remote_dir}")
+            try:
+                exit_code = launch_merge_tool(resolved_tool, base_dir=base_dir, local_dir=resolved_dir, remote_dir=remote_dir)
+            except CgMergeToolNotFoundError as e:
+                raise CliError(str(e)) from e
+            self.eprint(f"{resolved_tool} exited with code {exit_code}.")
+
+    @cli_command("Detect drift between the server and this working directory, resolving it "
+                 "automatically when unambiguous: a no-op if the server hasn't changed since "
+                 "last_committed/ (regardless of local edits), a fast-forward if only the server "
+                 "changed (equivalent to `merge --discard-local`), or a reported conflict--left "
+                 "entirely alone--if both sides changed (see `cg contribution diff`/`merge`).")
+    async def cmd_contribution__rebase(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            client = await self.get_client()
+            manager = CgContributionManager(resolved_dir, client)
+            status = await manager.rebase()
+            if status == CgRebaseStatus.UP_TO_DATE:
+                self.eprint(f"{resolved_dir}: up to date.")
+            elif status == CgRebaseStatus.FAST_FORWARDED:
+                self.eprint(f"{resolved_dir}: fast-forwarded to the current server state.")
+            else:
+                self.eprint(
+                        f"{resolved_dir}: server and local have both changed since the last sync--conflict. "
+                        "Run `cg contribution diff` to inspect, and `cg contribution merge` to resolve."
+                    )
+        return handler
+
+    @cli_command("Resolve drift between the server and this working directory. Exactly one of "
+                 "--discard-local, --discard-server, or --interactive is required.")
+    async def cmd_contribution__merge(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            discard_local: bool = self.args.discard_local
+            discard_server: bool = self.args.discard_server
+            tool_name: str | None = self.args.tool
+            client = await self.get_client()
+            manager = CgContributionManager(resolved_dir, client)
+            if discard_local:
+                working = await manager.merge_discard_local()
+                self.eprint(f"{resolved_dir}: discarded local changes--now matches the server (title: {working.data.title!r}).")
+            elif discard_server:
+                last_committed = await manager.merge_discard_server()
+                self.eprint(
+                        f"{resolved_dir}: last_committed/ now matches the server (version "
+                        f"{last_committed.prev_version}); working directory content left untouched."
+                    )
+            else:
+                await self._launch_interactive_merge(manager, resolved_dir, tool_name)
+        p = cmd.get_parser()
+        group = p.add_mutually_exclusive_group(required=True)
+        group.add_argument("--discard-local", default=False, action="store_true",
+                       help="Discard all local edits; replace the working directory (and "
+                            "last_committed/) with the current server state.")
+        group.add_argument("--discard-server", default=False, action="store_true",
+                       help="Update last_committed/ to match the current server state, without "
+                            "touching any working-directory content files.")
+        group.add_argument("--interactive", default=False, action="store_true",
+                       help="Materialize base/remote into temporary directories and launch an "
+                            "external 3-way merge tool pointed at them (plus the real working "
+                            "directory itself as \"local\", so edits apply directly)--see --tool "
+                            "and `cg settings set merge-tool`.")
+        p.add_argument("--tool", type=str, default=None, metavar="NAME",
+                       help="Merge tool to use with --interactive (see codingame_client"
+                            ".contribution_manager.merge_tools.MERGE_TOOL_COMMANDS). Defaults to "
+                            "the configured `cg settings set merge-tool`, then \"meld\".")
+        return handler
+
+    @cli_command("Show what's changed: a 3-way diff (base/local/remote) if the server has "
+                 "diverged since last_committed/, otherwise a plain 2-way diff of local changes "
+                 "since the last commit. Genuine conflicts are rendered diff3-style (conflict "
+                 "markers) via the system `diff3`. Pass --interactive to launch an external merge "
+                 "tool instead of printing text (same as `cg contribution merge --interactive`).")
+    async def cmd_contribution__diff(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            interactive: bool = self.args.interactive
+            tool_name: str | None = self.args.tool
+            client = await self.get_client()
+            manager = CgContributionManager(resolved_dir, client)
+
+            if interactive:
+                await self._launch_interactive_merge(manager, resolved_dir, tool_name)
+                return
+
+            with tempfile.TemporaryDirectory(prefix="cg-contribution-diff-") as tmp:
+                base_dir = Path(tmp) / "base"
+                remote_dir = Path(tmp) / "remote"
+                manager.materialize_base(base_dir)
+                await manager.materialize_remote(remote_dir)
+
+                server_changed = any(entry.changed for entry in diff_two_trees(base_dir, remote_dir))
+                if not server_changed:
+                    entries = diff_two_trees(base_dir, resolved_dir)
+                    text = render_two_way_diff(entries, a_label="last-commit", b_label="local")
+                    if text:
+                        print(text, end="")
+                    else:
+                        self.eprint("No local changes since the last commit.")
+                else:
+                    entries3 = diff_three_trees(base_dir, resolved_dir, remote_dir)
+                    text = render_three_way_diff(entries3, base_dir, resolved_dir, remote_dir)
+                    print(text, end="")
+        p = cmd.get_parser()
+        p.add_argument("--interactive", default=False, action="store_true",
+                       help="Launch an external merge tool instead of printing a text diff.")
+        p.add_argument("--tool", type=str, default=None, metavar="NAME",
+                       help="Merge tool to use with --interactive. Defaults to the configured "
+                            "`cg settings set merge-tool`, then \"meld\".")
+        return handler
+
     @cli_command("Configuration commands.")
     async def cmd_config(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         return None  # No handler for the parent command; subcommands will be handled by their own handlers.
@@ -1503,6 +1739,36 @@ class CgCli(CliBase):
                             "and shown resolved by `cg config dump`/`cg settings dump`.")
         return handler
 
+    @cli_command("Set the default contribution working directory.")
+    async def cmd_settings__set__contribution_dir(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path = self.args.contribution_dir
+            settings = await self.get_settings()
+            settings.raw_data.contribution_dir = str(contribution_dir)
+            settings.save()
+            self.eprint(f"contributionDir set to {str(contribution_dir)!r} in {settings.settings_file}")
+        p = cmd.get_parser()
+        p.add_argument("contribution_dir", type=Path, metavar="DIR",
+                       help="Directory to use as the default contribution working directory--used "
+                            "whenever --contribution-dir isn't given and CG_CONTRIBUTION_DIR isn't "
+                            "set (see `cg contribution import`/`cg contribution commit`).")
+        return handler
+
+    @cli_command("Set the default external 3-way diff/merge tool.")
+    async def cmd_settings__set__merge_tool(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            tool_name: str = self.args.tool_name
+            settings = await self.get_settings()
+            settings.raw_data.merge_tool = tool_name
+            settings.save()
+            self.eprint(f"mergeTool set to {tool_name!r} in {settings.settings_file}")
+        p = cmd.get_parser()
+        p.add_argument("tool_name", type=str, metavar="TOOL-NAME",
+                       help="Name of a known merge tool (see codingame_client.contribution_manager"
+                            ".merge_tools.MERGE_TOOL_COMMANDS)--used whenever --tool isn't given "
+                            "to `cg contribution diff`/`merge --interactive`.")
+        return handler
+
     @cli_command("Delete a settings.json value.")
     async def cmd_settings__delete(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         return None  # No handler for the parent command; subcommands will be handled by their own handlers.
@@ -1517,6 +1783,24 @@ class CgCli(CliBase):
                     f"defaultProfile unset in {settings.settings_file} "
                     f"(now falls back to config.yaml's defaultProfile, or \"default\")."
                 )
+        return handler
+
+    @cli_command("Delete (unset) the default contribution working directory override.")
+    async def cmd_settings__delete__contribution_dir(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            settings = await self.get_settings()
+            settings.raw_data.contribution_dir = None
+            settings.save()
+            self.eprint(f"contributionDir unset in {settings.settings_file}.")
+        return handler
+
+    @cli_command("Delete (unset) the default external 3-way diff/merge tool override.")
+    async def cmd_settings__delete__merge_tool(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            settings = await self.get_settings()
+            settings.raw_data.merge_tool = None
+            settings.save()
+            self.eprint(f"mergeTool unset in {settings.settings_file}.")
         return handler
 
     @cli_command("Codingame client command-line interface.")

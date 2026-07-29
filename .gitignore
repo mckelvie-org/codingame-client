@@ -225,4 +225,6 @@ __marimo__/
 /.cg_api/
 /har/
 /.cg/
+/contribution/
+/solution.py
 
