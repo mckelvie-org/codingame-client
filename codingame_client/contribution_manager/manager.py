@@ -1,13 +1,20 @@
 """`CgContributionManager`: builds a contribution working directory from an existing server-side
-   contribution (`import_`), pushes a working directory's content back to the server (`commit`),
-   and reconciles local/server drift (`rebase`, `fetch`, and the `merge_start`/`merge_continue`/
+   contribution (`import_`), pushes a working directory's content back to the server (`push`), and
+   reconciles local/server drift (`rebase`, `fetch`, and the `merge_start`/`merge_continue`/
    `merge_abort` state machine)--backed by a real git repository whose working tree is `data/`.
+
+   Deliberately named `push`, not `commit`: this class already has a real, distinct git-level
+   "commit" concept (`CgGitRepo.commit_worktree`, a plain local commit onto `main`, no network
+   involved)--calling *this* method `commit()` too (as an earlier version of this API did) invited
+   exactly the confusion `git`-literate users would expect: does it commit locally, or send data to
+   the server? `push`, matching `git push`'s own "send my local state to the authoritative remote"
+   meaning, does not.
 
    Three branches (see `codingame_client.contribution_manager.layout` for the exact names):
 
    - `main`: the user's own line--`data/` is always `main`'s checkout. Commits here are optional/
      user-initiated for the user's own benefit, except a few points where this class also commits
-     automatically (a successful `commit()`, a `rebase()` fast-forward, `merge_discard_local`)--see
+     automatically (a successful `push()`, a `rebase()` fast-forward, `merge_discard_local`)--see
      each method's docstring.
    - `server`: mirrors known server state. Every commit carries git trailers (contribution ID,
      version, cover binary ID/hash--see `contribution_commit_data.CgContributionCommitMetadata`)
@@ -37,12 +44,19 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import shutil
 import tempfile
 from enum import Enum
 from pathlib import Path
 
 from ..client.async_.client import CgAsyncClient
-from ..client.common.protocol.contribution import CgContribution, CgContributionData, CgContributionId, CgPuzzleType
+from ..client.common.protocol.contribution import (
+    CgContribution,
+    CgContributionData,
+    CgContributionId,
+    CgPuzzleType,
+    CgTestCase,
+)
 from ..client.common.protocol.schema import cg_solution_language_to_extension
 from ..client.common.raw_client import compute_content_hash
 from .contribution_commit_data import (
@@ -80,7 +94,7 @@ from .schema import (
     CgContributionIdentity,
     CgContributionView,
 )
-from .test_cases_dir import TESTS_SUBDIR_NAME, commit_test_cases, import_test_cases
+from .test_cases_dir import TESTS_SUBDIR_NAME, commit_test_cases, import_test_cases, renormalize_test_case_dirs
 
 __all__ = [
     "STATEMENT_FILE_NAME",
@@ -109,7 +123,7 @@ _ACTIVE_VERSION_POLL_MAX_ATTEMPTS = 10
 
 class CgContributionManagerError(Exception):
     """Raised for contribution-manager-level errors not better represented by a more specific
-       exception (e.g. attempting to `commit()` without a `puzzle_type` set, or an operation that
+       exception (e.g. attempting to `push()` without a `puzzle_type` set, or an operation that
        refuses because a merge is in progress)."""
 
 
@@ -279,7 +293,7 @@ def _read_local_data(data_dir: Path, working_data: CgContributionData) -> tuple[
        currently in `data_dir` into a full `CgContributionData`--merging in `working_data`'s
        non-file-backed fields (`title`/`difficulty`/`topics`/`solution_language`)--and the current
        `cover.png` bytes, if any. `cover_binary_id` is left `None`; resolving it (network/hash-
-       reuse) is `commit()`'s job, not this function's."""
+       reuse) is `push()`'s job, not this function's."""
     solution = _read_sidecar(data_dir / SOLUTION_FILE_NAME)
     cover_path = data_dir / COVER_IMAGE_FILE_NAME
     cover_bytes = cover_path.read_bytes() if cover_path.is_file() else None
@@ -420,9 +434,11 @@ class CgContributionManager:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         view.save(self.contribution_data_file)
 
-    def _save_identity(self, contribution_id: CgContributionId, *, git_dir_in_data: bool) -> None:
+    def _save_identity(self, contribution_id: CgContributionId | None, *, git_dir_in_data: bool) -> None:
         """Write `contribution.json` if it doesn't already exist (never overwrites--identity is
-           constant for a working directory's lifetime)."""
+           constant for a working directory's lifetime, except `contribution_handle` itself--see
+           `_write_contribution_handle`). `contribution_id=None` for `create()`'s brand new,
+           never-yet-`push()`d working directories."""
         if self.identity_file.is_file():
             return
         self.contribution_dir.mkdir(parents=True, exist_ok=True)
@@ -430,6 +446,16 @@ class CgContributionManager:
                 schema_version=CONTRIBUTION_SCHEMA_VERSION, contribution_handle=contribution_id,
                 git_dir_in_data=git_dir_in_data,
             ).save(self.identity_file)
+
+    def _write_contribution_handle(self, contribution_id: CgContributionId | None) -> None:
+        """Overwrite `contribution.json`'s `contribution_handle`, the one field that isn't
+           constant for a working directory's whole lifetime: set (from `None`) by `push()`, the
+           first time a `create()`d working directory successfully reaches the server via
+           `createContribution`; reset back to `None` by `delete(keep_local=True)`, once the
+           contribution it pointed at no longer exists server-side."""
+        identity = self.load_identity()
+        assert identity is not None
+        dataclasses.replace(identity, contribution_handle=contribution_id).save(self.identity_file)
 
     # --- server-branch commit helper (shared by import_/fetch/commit) --------------------------
 
@@ -532,6 +558,19 @@ class CgContributionManager:
             self._save_identity(contribution_id, git_dir_in_data=git_dir_in_data)
             _refresh_solution_symlink(self.contribution_dir, data.solution_language)
 
+        if rehydrating:
+            # Unlike the fresh-import path above (which built data/ itself, via
+            # _materialize_data()--always normalized), rehydration snapshots whatever's already
+            # on disk, preserved as-is from the outer clone. If that on-disk tests/ layout isn't
+            # already in the canonical ordinal-dirname form (e.g. it came from an older tool, or
+            # from local edits that inserted/reordered directories), this commit's tree would
+            # permanently encode that non-canonical layout--and a later fetch()/import_() (always
+            # canonical, via _materialize_data()) would then show a spurious diff/conflict against
+            # it even when the actual test content never changed. See push()/merge_continue()
+            # for the same concern at those other points content ever gets committed from
+            # whatever's on disk.
+            renormalize_test_case_dirs(self.tests_dir)
+
         init_repo(git_dir, self.data_dir)
         repo = CgGitRepo(git_dir, self.data_dir)
         repo.set_head(MAIN_BRANCH_NAME)
@@ -543,31 +582,149 @@ class CgContributionManager:
 
         return self.load()
 
-    async def commit(self) -> CgContribution:
-        """Push this working directory's content to the server via `updateContribution`, updating
-           `server`/`version-data` to reflect the result on success, then auto-committing `main`
-           to match (its content already matches what was just pushed, by construction).
+    async def create(
+                self,
+                *,
+                title: str,
+                puzzle_type: CgPuzzleType = "PUZZLE_INOUT",
+            ) -> CgContributionView:
+        """Initialize a brand new, *purely local* contribution working directory--no network
+           access at all (`async` only for interface consistency with every other method here),
+           and deliberately so: no server-side contribution exists yet, matching
+           how `git init` never touches a remote either. `contribution.json`'s
+           `contribution_handle` is left `None`; the first successful `push()` fills it in, via
+           `createContribution` instead of the usual `updateContribution`--see `push()`'s
+           docstring for the full create-vs-update story.
+
+           Seeds the same placeholder statement/difficulty/test-case content `push()`'s first call
+           will need (confirmed live that `createContribution` 500s on a title-only payload--see
+           `push()`)--edit it via the usual sidecar files before that first push. Also seeds
+           `contribution-data.json`'s `draft`/`ready_for_moderation` to a private-draft default
+           (`True`/`False`)--just a starting value, not locked down: like every other field here,
+           freely editable before the first push, which reads whatever's actually there at that
+           point, the same as any later push.
+
+           A real git repo is still initialized here, with an initial commit onto `main`--local
+           history from before the first push is a normal, supported thing to have (e.g. via `cg
+           contribution git`), it just isn't reachable from `main` after that first push succeeds
+           (see `push()`'s docstring for why, same as every other place in this class that resets
+           `main` directly onto a freshly-built commit rather than preserving prior lineage).
+
+           Refuses upfront if this directory already looks like a contribution working directory
+           in any way--unlike `import_()`, there's no legitimate "rehydration" case here: a *brand
+           new* contribution can't already have a matching `contribution.json`/git-dir from some
+           earlier session, so any pre-existing state here means something is wrong, not something
+           to press on through.
+
+        Args:
+            title:       The new contribution's title.
+            puzzle_type: The type of the contribution. Defaults to "PUZZLE_INOUT" (a standard
+                         noninteractive solo puzzle--the only type this package's contribution
+                         manager has been exercised against).
 
         Raises:
-            FileNotFoundError: if this working directory hasn't been imported/initialized yet.
+            CgContributionManagerError: if this directory already tracks a contribution, or a
+                                         git-dir already exists at the location this would use.
+        """
+        identity = self.load_identity()
+        if identity is not None:
+            raise CgContributionManagerError(
+                    f"{self.identity_file} already exists (tracks contribution "
+                    f"{identity.contribution_handle!r})--`create()` only makes sense for a brand "
+                    "new working directory."
+                )
+        git_dir_in_data = not is_inside_existing_repo(self.contribution_dir)
+        git_dir = self._git_dir_for(git_dir_in_data)
+        if git_dir.is_dir():
+            raise CgContributionManagerError(
+                    f"{git_dir} already exists, though {self.identity_file} does not--refusing "
+                    "to create a new contribution into a directory in this inconsistent state."
+                )
+
+        # See push()'s docstring: createContribution has been confirmed live to 500 on a
+        # title-only payload--the server apparently requires a non-empty statement/difficulty and
+        # at least one test/validator pair to accept a new contribution at all. So this seeds the
+        # minimal placeholder content confirmed to be accepted, all obviously named/marked for the
+        # user to replace via ordinary local edits, rather than exposing a pile of statement/
+        # test-case flags on `cg contribution create` just to satisfy this.
+        data = CgContributionData(
+                title=title,
+                statement="TODO: write the problem statement.",
+                difficulty="easy",
+                test_cases=[
+                        CgTestCase(title="Test 1", test_in="1", test_out="1", is_test=True, is_validator=False, need_validation=True),
+                        CgTestCase(title="Validator 1", test_in="1", test_out="1", is_test=False, is_validator=True, need_validation=True),
+                    ],
+            )
+        _materialize_data(
+                self.data_dir, puzzle_type=puzzle_type, draft=True, ready_for_moderation=False,
+                data=data, cover_bytes=None, git_dir_in_data=git_dir_in_data,
+            )
+        if not git_dir_in_data:
+            _write_meta_gitignore(self.contribution_dir)
+        self._save_identity(None, git_dir_in_data=git_dir_in_data)
+        _refresh_solution_symlink(self.contribution_dir, data.solution_language)
+
+        init_repo(git_dir, self.data_dir)
+        repo = CgGitRepo(git_dir, self.data_dir)
+        repo.set_head(MAIN_BRANCH_NAME)
+        repo.commit_worktree("Initial local content (not yet pushed to the server)")
+
+        return self.load()
+
+    async def push(self) -> CgContribution:
+        """Push this working directory's content to the server, updating `server`/`version-data`
+           to reflect the result on success, then auto-committing `main` to match (its content
+           already matches what was just pushed, by construction).
+
+           **Deliberately hides a create-vs-update decision that real git never has to make.**
+           `git push` always requires an already-configured remote (`git remote add`/`git push -u`
+           first)--pushing establishes no new identity, it only updates one that already exists.
+           This method is different: if this working directory has never been pushed before (i.e.
+           it was built via `create()`, not `import_()`, and no `push()` has succeeded yet--
+           detected via `server` branch not existing), it calls `createContribution` instead of
+           `updateContribution`, and on success writes the new contribution's handle into
+           `contribution.json` (`CgContributionIdentity.contribution_handle`, previously `None`)--
+           establishing the "remote" implicitly, as a side effect of the very first push, rather
+           than as a separate explicit step. Every later `push()` against the same working
+           directory takes the normal `updateContribution` path, exactly like today. This is a
+           deliberate simplification of the git model, chosen specifically so that `create()`
+           itself never has to call `createContribution` with placeholder content just to get a
+           handle to import--it stays purely local (see `create()`'s docstring) until the user has
+           real content ready to push.
+
+        Raises:
+            FileNotFoundError: if this working directory hasn't been created/imported yet.
             CgContributionManagerError: if `puzzle_type` isn't set, or a merge is in progress.
         """
         if self.merge_in_progress:
             raise CgContributionManagerError(
                     "A merge is in progress (see `cg contribution merge continue`/`abort`)--"
-                    "resolve or abort it before committing."
+                    "resolve or abort it before pushing."
                 )
         view = self.load()
         if view.puzzle_type is None:
-            raise CgContributionManagerError("Cannot commit: puzzle_type is not set in contribution-data.json.")
+            raise CgContributionManagerError("Cannot push: puzzle_type is not set in contribution-data.json.")
+
+        # Canonicalize tests/'s ordinal directory names before snapshotting data_dir below: this
+        # commit's tree becomes server's new tip verbatim (see the write_tree_from_worktree() call
+        # further down), and server's *next* tree (built fresh from a later fetch()/import_(), via
+        # _materialize_data()--always canonical) would otherwise show a spurious diff/conflict
+        # against a non-canonical layout committed here, even when the actual test content never
+        # changed. Content-preserving (only directory names change)--see
+        # test_cases_dir.renormalize_test_case_dirs.
+        renormalize_test_case_dirs(self.tests_dir)
 
         repo = self.git_repo
         server_sha = repo.resolve_ref(SERVER_BRANCH_NAME)
-        if server_sha is None:
-            raise FileNotFoundError(f"{self.git_dir} has no {SERVER_BRANCH_NAME} branch--nothing to commit against.")
-        current_metadata = _trailers_to_metadata(repo.read_trailers(server_sha))
-        contribution_id = current_metadata.contribution_id
-        prev_version = current_metadata.version
+        first_push = server_sha is None
+        # No prior server state to compare a cover image's hash against on a first push--the
+        # empty metadata below just always fails that comparison, forcing a fresh upload, same as
+        # any other cover change.
+        current_metadata = (
+                CgContributionCommitMetadata(contribution_id="", version=0) if server_sha is None
+                else _trailers_to_metadata(repo.read_trailers(server_sha))
+            )
 
         cover_path = self.data_dir / COVER_IMAGE_FILE_NAME
         cover_binary_id: int | None
@@ -588,18 +745,24 @@ class CgContributionManager:
         local_data, _ = _read_local_data(self.data_dir, view.data)
         data = dataclasses.replace(local_data, cover_binary_id=cover_binary_id)
 
-        result = await self.client.services.contribution.helper.update_contribution(
-                contribution_id,
-                view.puzzle_type,
-                data,
-                view.draft,
-                view.ready_for_moderation,
-                prev_version,
-            )
-        result = await self._refresh_active_version(result, contribution_id)
+        if first_push:
+            contribution_id = await self.client.services.contribution.helper.create_contribution(
+                    view.puzzle_type, data, view.draft, view.ready_for_moderation)
+            result = await self.client.services.contribution.find_contribution(contribution_id)
+            self._write_contribution_handle(contribution_id)
+        else:
+            result = await self.client.services.contribution.helper.update_contribution(
+                    current_metadata.contribution_id,
+                    view.puzzle_type,
+                    data,
+                    view.draft,
+                    view.ready_for_moderation,
+                    current_metadata.version,
+                )
+            result = await self._refresh_active_version(result, current_metadata.contribution_id)
 
         tree = repo.write_tree_from_worktree()
-        server_sha = self._record_server_commit(
+        new_server_sha = self._record_server_commit(
                 repo, tree, result, cover_bytes, f"Push to server (version {result.last_version.version})")
         # main's ref moves directly onto server's new commit (not a separate sibling commit with
         # matching content)--deliberately, so `git merge-base main server` still equals server's
@@ -609,8 +772,13 @@ class CgContributionManager:
         # changed" even though content-wise nothing has, confirmed by direct testing. Uses
         # reset_index_to() rather than a raw update_ref(), so the real index (never touched by
         # write_tree_from_worktree()'s scratch-index tree build) stays in sync with main's new
-        # tip too--otherwise a later real `git merge` (merge_start()) reads a stale index.
-        repo.reset_index_to(server_sha)
+        # tip too--otherwise a later real `git merge` (merge_start()) reads a stale index. On a
+        # first push specifically, this also means any *local-only* history main had before the
+        # push (e.g. commits made via `cg contribution git` while drafting) stops being reachable
+        # from main's new tip--not deleted, just no longer part of main's ancestry, recoverable via
+        # the reflog for as long as it lasts. Same tradeoff already accepted everywhere else this
+        # class resets main's ref directly instead of preserving lineage; not special-cased here.
+        repo.reset_index_to(new_server_sha)
         return result
 
     async def _refresh_active_version(self, result: CgContribution, contribution_id: CgContributionId) -> CgContribution:
@@ -636,7 +804,7 @@ class CgContributionManager:
             if attempt + 1 < _ACTIVE_VERSION_POLL_MAX_ATTEMPTS:
                 await asyncio.sleep(_ACTIVE_VERSION_POLL_INTERVAL_SECONDS)
         logger.warning(
-                "commit(): active_version for contribution %r is still %s (expected %s) after "
+                "push(): active_version for contribution %r is still %s (expected %s) after "
                 "%d findContribution attempts; using it anyway.",
                 contribution_id, refreshed.active_version, target_version, _ACTIVE_VERSION_POLL_MAX_ATTEMPTS,
             )
@@ -763,7 +931,7 @@ class CgContributionManager:
            *not* a new commit with matching content either: a sibling commit here would leave
            `git merge-base main server` stuck at the old sync point instead of advancing to
            server's tip, making the next `rebase()`/`merge_start()` wrongly see "local changed"
-           even though nothing would be, confirmed by direct testing--see `commit()`'s docstring
+           even though nothing would be, confirmed by direct testing--see `push()`'s docstring
            for the same reasoning). Any local commits `main` had are not deleted, just no longer
            reachable from `main` itself--recoverable via `main`'s reflog for as long as it lasts.
            Unlike `rebase()`, doesn't check whether local actually diverged first--always
@@ -811,10 +979,18 @@ class CgContributionManager:
               merge (`CgMergeStartStatus.UP_TO_DATE`).
            3. Otherwise, a real `git merge server` against the working tree. If it completes
               cleanly (including a trivial fast-forward), git has already committed the result--
-              `merge_in_progress` is `False` again, nothing more to do. If it stops with
-              conflicts, `text_conflicts`/`binary_conflicts` (split by content--see
-              `_looks_like_text`) list the affected paths; resolve them (by hand, or `cg
+              `merge_in_progress` is `False` again, nothing more to do (except renormalizing
+              `tests/`'s directory layout--see below--and re-generating the solution symlink).
+              If it stops with conflicts, `text_conflicts`/`binary_conflicts` (split by content--
+              see `_looks_like_text`) list the affected paths; resolve them (by hand, or `cg
               contribution merge interactive`) and run `merge_continue()`.
+
+           A clean merge's own auto-commit (from git itself) can leave `tests/`'s ordinal
+           directories in a non-canonical layout (e.g. both sides added test cases using
+           different numbering)--see `push()`'s docstring for why that matters for a stable
+           round trip with `server`. So a clean merge here also renormalizes `tests/` and folds
+           any resulting rename into that same commit via `restage_and_amend_if_dirty()`, rather
+           than leaving it for the next `push()` to silently fix up.
 
         Raises:
             FileNotFoundError: if this working directory has never been imported/committed.
@@ -832,6 +1008,9 @@ class CgContributionManager:
 
         clean = repo.merge_branch(SERVER_BRANCH_NAME)
         if clean:
+            renormalize_test_case_dirs(self.tests_dir)
+            repo.restage_and_amend_if_dirty()
+            _refresh_solution_symlink(self.contribution_dir, self.load().data.solution_language)
             return CgMergeStartResult(status=CgMergeStartStatus.STARTED)
 
         conflicts = repo.status_conflicts()
@@ -848,9 +1027,15 @@ class CgContributionManager:
 
     def merge_continue(self) -> None:
         """Finish an in-progress merge: stage everything (refusing first if a still-unmerged path
-           still has a leftover `<<<<<<<` marker--see `CgGitRepo.merge_continue`) and commit.
-           Refreshes the solution symlink afterward (a resolved `contribution-data.json` conflict
-           may have changed `solution_language`).
+           still has a leftover `<<<<<<<` marker--see `CgGitRepo.merge_continue`) and commit, then
+           renormalize `tests/`'s ordinal directory layout--see `push()`'s docstring for why
+           that matters for a stable round trip with `server`--folding any resulting rename into
+           that same merge commit via `restage_and_amend_if_dirty()` (done *after* the merge
+           commit exists, deliberately: renaming a conflicted-but-still-unresolved path before
+           git's own unmerged-index-stage bookkeeping is resolved and committed would confuse
+           `status_conflicts()`, which looks paths up by their pre-rename name). Refreshes the
+           solution symlink afterward (a resolved `contribution-data.json` conflict may have
+           changed `solution_language`).
 
         Raises:
             CgContributionManagerError: if no merge is in progress, or (wrapping git's own error)
@@ -858,10 +1043,13 @@ class CgContributionManager:
         """
         if not self.merge_in_progress:
             raise CgContributionManagerError("No merge in progress (run `cg contribution merge` to start one).")
+        repo = self.git_repo
         try:
-            self.git_repo.merge_continue()
+            repo.merge_continue()
         except CgGitError as e:
             raise CgContributionManagerError(str(e)) from e
+        renormalize_test_case_dirs(self.tests_dir)
+        repo.restage_and_amend_if_dirty()
         _refresh_solution_symlink(self.contribution_dir, self.load().data.solution_language)
 
     def merge_abort(self) -> None:
@@ -877,18 +1065,27 @@ class CgContributionManager:
         self.git_repo.merge_abort()
         _refresh_solution_symlink(self.contribution_dir, self.load().data.solution_language)
 
-    # --- revert ------------------------------------------------------------------------------
+    # --- discard_local -------------------------------------------------------------------------
 
-    def revert(self) -> CgContributionView:
-        """Revert this working directory's content to match `server`'s current tip exactly--
-           purely local, no network access at all. Resets both the index and working tree (via
-           `CgGitRepo.checkout_all`, i.e. `git read-tree --reset -u`--`git checkout <ref> -- .`
-           would *not* remove a file that exists locally but not in `server`'s tree, confirmed by
-           direct testing), without moving `main`'s ref or creating a commit--if `main` had local
-           commits beyond the last sync, this discards them from the working tree too (matching
-           the old `revert()`'s "match the last synced state exactly" contract), but they remain
+    def discard_local(self) -> CgContributionView:
+        """Discard local edits: reset this working directory's content to match `server`'s
+           current tip exactly--purely local, no network access at all (unlike
+           `merge_discard_local()`, which `fetch()`es fresh first--this uses whatever `server`
+           already has). Resets both the index and working tree (via `CgGitRepo.checkout_all`,
+           i.e. `git read-tree --reset -u`--`git checkout <ref> -- .` would *not* remove a file
+           that exists locally but not in `server`'s tree, confirmed by direct testing), without
+           moving `main`'s ref or creating a commit--if `main` had local commits beyond the last
+           sync, this discards them from the working tree too (matching the old, since-renamed
+           `revert()`'s "match the last synced state exactly" contract), but they remain
            recoverable via `main`'s own history, since this never does a hard reset of the ref
            itself.
+
+           Named to match `merge_discard_local()`/`merge_discard_server()`'s existing "discard"
+           vocabulary (all three answer "throw away one side and take the other," differing only
+           in whether a merge is in progress and whether they fetch first)--deliberately not
+           `revert()` (the original name), which collides with real git's very different meaning
+           (a new commit that undoes a past one, preserving history)--and not bare `discard()`,
+           which reads as "discard the whole contribution" rather than "discard my local edits."
 
         Raises:
             FileNotFoundError: if this working directory has never been imported/committed.
@@ -897,11 +1094,75 @@ class CgContributionManager:
         if self.merge_in_progress:
             raise CgContributionManagerError(
                     "A merge is in progress (see `cg contribution merge continue`/`abort`)--"
-                    "resolve or abort it before reverting."
+                    "resolve or abort it before discarding local edits."
                 )
         repo = self.git_repo
         if repo.resolve_ref(SERVER_BRANCH_NAME) is None:
-            raise FileNotFoundError(f"{self.git_dir} has no {SERVER_BRANCH_NAME} branch--nothing to revert to.")
+            raise FileNotFoundError(f"{self.git_dir} has no {SERVER_BRANCH_NAME} branch--nothing to discard to.")
         repo.checkout_all(SERVER_BRANCH_NAME)
         _refresh_solution_symlink(self.contribution_dir, self.load().data.solution_language)
         return self.load()
+
+    # --- delete --------------------------------------------------------------------------------
+
+    async def delete(self, *, keep_local: bool = False, keep_server: bool = False) -> None:
+        """Delete this contribution from the server (`Contribution/deleteContribution`--
+           unrecoverable), then remove this entire working directory (the default)--or, with
+           `keep_local`, detach it instead: drop the `server`/`version-data` branches and reset
+           `contribution.json`'s `contribution_handle` back to `None`, leaving a purely local
+           working directory in exactly the state `create()` would have left it in, ready for its
+           *current* content to be pushed as a brand new contribution on the next `push()` (see
+           `push()`'s create-vs-update docstring)--e.g. for using an existing contribution as a
+           template for a new one.
+
+           `keep_server` skips the server-side deletion entirely (nothing sent to
+           `deleteContribution`) and just removes this working directory--for when you only want
+           to stop tracking a contribution locally without touching it on the server. Mutually
+           exclusive with `keep_local` (together they'd mean "delete nothing," which isn't a
+           `delete()` at all).
+
+           `main` and its commit history (including anything reachable only via the old
+           `server`/`version-data` branches, by SHA, until a real `git gc` eventually collects it)
+           are left untouched by `keep_local`; only the branches/identity that pointed at the
+           now-deleted contribution are affected.
+
+           No confirmation prompt here--that's the CLI's job (`cg contribution delete`), not this
+           class's (matches every other method here: no interactive behavior, ever).
+
+        Raises:
+            FileNotFoundError: if this working directory has never been created/imported, or (
+                                unless `keep_server`) has no server-side contribution yet
+                                (`create()`d but never successfully `push()`d--nothing to delete
+                                server-side).
+            CgContributionManagerError: if a merge is in progress, or both `keep_local` and
+                                         `keep_server` are set.
+        """
+        if keep_local and keep_server:
+            raise CgContributionManagerError(
+                    "keep_local and keep_server are mutually exclusive--together they'd mean "
+                    "deleting nothing at all."
+                )
+        if self.merge_in_progress:
+            raise CgContributionManagerError(
+                    "A merge is in progress (see `cg contribution merge continue`/`abort`)--"
+                    "resolve or abort it before deleting."
+                )
+        repo = self.git_repo
+        if not keep_server:
+            server_sha = repo.resolve_ref(SERVER_BRANCH_NAME)
+            if server_sha is None:
+                raise FileNotFoundError(
+                        f"{self.git_dir} has no {SERVER_BRANCH_NAME} branch--nothing to delete "
+                        "server-side (this working directory was create()d but never "
+                        "successfully pushed). Pass keep_server=True to just remove the local "
+                        "working directory."
+                    )
+            metadata = _trailers_to_metadata(repo.read_trailers(server_sha))
+            await self.client.services.contribution.delete_contribution(metadata.contribution_id)
+
+        if keep_local:
+            repo.delete_ref(f"refs/heads/{SERVER_BRANCH_NAME}")
+            repo.delete_ref(f"refs/heads/{VERSION_DATA_BRANCH_NAME}")
+            self._write_contribution_handle(None)
+        else:
+            shutil.rmtree(self.contribution_dir)

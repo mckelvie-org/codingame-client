@@ -17,6 +17,7 @@ from ....common.protocol.contribution import (
     CgContribution,
     CgContributionData,
     CgContributionId,
+    CgDeleteContributionResult,
     CgPendingContribution,
     CgPuzzleType,
 )
@@ -151,6 +152,67 @@ class CgAsyncContributionServiceHelper(CgAsyncServiceHelper["CgAsyncContribution
         )
         deadline = None if max_wait_seconds <= 0 else time.monotonic() + max_wait_seconds
         return await self._poll_until_committed(contribution_id, prev_version, deadline, contribution_data)
+
+    async def create_contribution(
+                self,
+                puzzle_type: CgPuzzleType,
+                contribution_data: CgContributionData,
+                draft: bool,
+                ready_for_moderation: bool,
+                codingamer_id: int | None = None,
+                *,
+                strip_test_final_eols: bool = True,
+            ) -> CgContributionId:
+        """Create a brand new contribution, adding data normalization (but, deliberately, no
+           524 retry--see below) on top of the plain `CgAsyncContributionService.create_contribution`.
+
+           Unlike `update_contribution`, there is no `prev_version`-style idempotency check the
+           server can use to reject a duplicate resubmission, and no existing `contribution_id`
+           to poll `find_contribution` against if a request times out at Cloudflare's edge (the
+           same `status_code == 524` scenario `update_contribution` recovers from by polling)--so
+           blindly retrying here could create a second, duplicate contribution instead of
+           recovering from one. This method therefore does NOT catch/retry on 524; it just logs
+           an error making that risk explicit and re-raises, leaving the decision (retry and risk
+           a duplicate, or go check `cg api contribution get-all-pending-contributions`/the
+           CodinGame site first) to the caller.
+
+        Args:
+            puzzle_type, contribution_data, draft, ready_for_moderation, codingamer_id:
+                See `CgAsyncContributionService.create_contribution`.
+            strip_test_final_eols:
+                If True (the default), submit a normalized copy of `contribution_data` with a
+                single trailing '\\n' stripped from each test case's input/output text, if
+                present. `contribution_data` itself is never mutated.
+
+        Returns:
+            The new contribution's opaque public handle (`CgContributionId`).
+
+        Raises:
+            CgAuthenticationError:
+                If the session is not authenticated and cannot implicitly login, or if
+                `codingamer_id` is not provided and no codingamer ID can be resolved from the
+                session's credentials.
+            CgAsyncClientHttpError:
+                If a transport error occurs, if the response content could not be decoded at all,
+                if the status code is not 2xx, or if the decoded content is not a str. In
+                particular, a 524 is NOT retried--see above--and is raised like any other error.
+        """
+        if strip_test_final_eols:
+            contribution_data = self._normalize_contribution_data(contribution_data)
+        try:
+            return await self.service.create_contribution(
+                    puzzle_type, contribution_data, draft, ready_for_moderation, codingamer_id)
+        except CgAsyncClientHttpError as e:
+            if e.status_code == 524:
+                logger.error(
+                    "create_contribution: got HTTP 524; the contribution may or may not have "
+                    "actually been created server-side. NOT retrying automatically (unlike "
+                    "update_contribution, there's no prev_version-style check to prevent a retry "
+                    "from creating a *second*, duplicate contribution)--check "
+                    "get_all_pending_contributions/the CodinGame site before deciding whether to "
+                    "resubmit.",
+                )
+            raise
 
 
 class CgAsyncContributionService(CgAsyncService):
@@ -362,3 +424,95 @@ class CgAsyncContributionService(CgAsyncService):
                         prev_version,
                     ])
         return CgContribution.from_dict(raw_result)
+
+    async def create_contribution(
+                self,
+                puzzle_type: CgPuzzleType,
+                contribution_data: CgContributionData,
+                draft: bool,
+                ready_for_moderation: bool,
+                codingamer_id: int | None = None,
+            ) -> CgContributionId:
+        """Create a brand new contribution.
+
+           A thin wrapper over the raw API--no retries and no normalization of
+           `contribution_data` are performed here (see
+           `CgAsyncContributionServiceHelper.create_contribution`,
+           `self.helper.create_contribution`, for a version that layers data normalization on top
+           of this method--but deliberately not 524 retry; see that method's docstring for why).
+           Argument order/shape mirrors `update_contribution`, minus `contribution_id`/
+           `prev_version` (there's no existing contribution yet, and thus nothing to reference).
+
+           The response is just the new contribution's opaque public handle (a bare JSON string),
+           unlike `update_contribution`'s full `CgContribution`--call `find_contribution(handle)`
+           afterward for the rest (e.g. `id`, `last_version`).
+
+        Args:
+            puzzle_type:          The type of the contribution, e.g. "PUZZLE_INOUT".
+            contribution_data:    The new contribution's initial content.
+            draft:                Whether this version is a private, unpublished draft.
+            ready_for_moderation: Whether the contribution is being formally submitted for
+                                  moderation (requiring 3 moderator upvotes and fewer than 3
+                                  downvotes before the moderation window expires).
+            codingamer_id:        The authoring codingamer's numeric ID. If not provided,
+                                  defaults to the logged-in codingamer's ID.
+
+        Returns:
+            The new contribution's opaque public handle (`CgContributionId`).
+
+        Raises:
+            CgAuthenticationError:
+                If the session is not authenticated and cannot implicitly login, or if
+                `codingamer_id` is not provided and no codingamer ID can be resolved from the
+                session's credentials.
+            CgAsyncClientHttpError:
+                If a transport error occurs, if the response content could not be decoded at all,
+                if the status code is not 2xx, or if the decoded content is not a str.
+        """
+        if codingamer_id is None:
+            await self.require_authenticate()
+            codingamer_id = self.client.codingamer_id
+            if codingamer_id is None:
+                raise CgAuthenticationError()
+        raw_result = await self.service_request(
+                "createContribution",
+                [codingamer_id, puzzle_type, contribution_data.to_dict(), draft, ready_for_moderation])
+        return cast(str, raw_result)
+
+    async def delete_contribution(
+                self,
+                contribution_id: CgContributionId,
+                codingamer_id: int | None = None,
+            ) -> CgDeleteContributionResult:
+        """Delete a contribution.
+
+           Argument shape (`[codingamerId, contributionId]`), by analogy with
+           `update_contribution`/`create_contribution` (both `codingamerId`-first)--confirmed
+           live (2026-07-29) against a disposable draft contribution created via
+           `create_contribution` for the purpose.
+
+        Args:
+            contribution_id: The opaque contribution ID (see `CgContributionId`) to delete.
+            codingamer_id:   The authoring codingamer's numeric ID. If not provided, defaults to
+                             the logged-in codingamer's ID.
+
+        Returns:
+            A `CgDeleteContributionResult` (an action ID and a success flag).
+
+        Raises:
+            CgAuthenticationError:
+                If the session is not authenticated and cannot implicitly login, or if
+                `codingamer_id` is not provided and no codingamer ID can be resolved from the
+                session's credentials.
+            CgAsyncClientHttpError:
+                If a transport error occurs, if the response content could not be decoded at all,
+                if the status code is not 2xx, or if the decoded content is not a dict.
+        """
+        if codingamer_id is None:
+            await self.require_authenticate()
+            codingamer_id = self.client.codingamer_id
+            if codingamer_id is None:
+                raise CgAuthenticationError()
+        raw_result = await self.service_request_to_dict(
+                "deleteContribution", [codingamer_id, contribution_id])
+        return CgDeleteContributionResult.from_dict(raw_result)

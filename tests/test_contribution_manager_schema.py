@@ -73,6 +73,22 @@ def test_identity_git_dir_in_data_defaults_to_false() -> None:
     assert identity.git_dir_in_data is False
 
 
+def test_identity_contribution_handle_defaults_to_none() -> None:
+    """A `create()`d-but-never-successfully-`push()`d working directory has no server-side
+       contribution yet--see `CgContributionManager.push()`'s docstring."""
+    identity = CgContributionIdentity(schema_version=CONTRIBUTION_SCHEMA_VERSION)
+    assert identity.contribution_handle is None
+
+
+def test_identity_with_none_handle_round_trips_through_json(tmp_path: Path) -> None:
+    identity = CgContributionIdentity(schema_version=CONTRIBUTION_SCHEMA_VERSION, git_dir_in_data=True)
+    path = tmp_path / "contribution.json"
+    identity.save(path)
+    reloaded = CgContributionIdentity.load(path)
+    assert reloaded == identity
+    assert reloaded.contribution_handle is None
+
+
 # --- CgContributionView ----------------------------------------------------------------------
 
 

@@ -778,6 +778,45 @@ class CgCli(CliBase):
                        help="The authoring codingamer's numeric ID. Defaults to the logged-in codingamer's ID.")
         return handler
 
+    @cli_command("Create a brand new contribution. A JSON-serialized CgContributionData object "
+                 "is read from stdin.")
+    async def cmd_api__contribution__create_contribution(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            puzzle_type: str = self.args.puzzle_type
+            draft: bool = self.args.draft
+            ready_for_moderation: bool = self.args.ready_for_moderation
+            codingamer_id: int | None = self.args.codingamer_id
+            contribution_data = CgContributionData.loads(sys.stdin.read())
+            client = await self.get_client()
+            handle = await client.services.contribution.create_contribution(
+                    puzzle_type, contribution_data, draft, ready_for_moderation, codingamer_id)
+            print(json.dumps(handle))
+        p = cmd.get_parser()
+        p.add_argument("puzzle_type", type=str, metavar="PUZZLE-TYPE",
+                       help="The type of the contribution, e.g. 'PUZZLE_INOUT'.")
+        p.add_argument("--draft", default=False, action="store_true",
+                       help="Create as a private, unpublished draft. Defaults to false.")
+        p.add_argument("--ready-for-moderation", default=False, action="store_true",
+                       help="Formally submit for moderation. Defaults to false.")
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="The authoring codingamer's numeric ID. Defaults to the logged-in codingamer's ID.")
+        return handler
+
+    @cli_command("Delete a contribution.")
+    async def cmd_api__contribution__delete_contribution(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_id: str = self.args.contribution_id
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            result = await client.services.contribution.delete_contribution(contribution_id, codingamer_id)
+            print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("contribution_id", type=str, metavar="CONTRIBUTION-ID",
+                       help="Opaque contribution ID string of the contribution to delete.")
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="The authoring codingamer's numeric ID. Defaults to the logged-in codingamer's ID.")
+        return handler
+
     @cli_command("ClashOfCode service commands.")
     @cli_command("ClashOfCode service commands.")
     async def cmd_api__clash_of_code(self, cmd: CliCommand[Self]) -> OptCmdFunc:
@@ -1411,6 +1450,37 @@ class CgCli(CliBase):
                             "seconds. Defaults to 0, meaning wait indefinitely.")
         return handler
 
+    @cli_command("Create a brand new contribution, with test-case data normalization (but "
+                 "deliberately no 524 retry--see CgAsyncContributionServiceHelper.create_contribution). "
+                 "A JSON-serialized CgContributionData object is read from stdin.")
+    async def cmd_api_helper__contribution__create_contribution(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            puzzle_type: str = self.args.puzzle_type
+            draft: bool = self.args.draft
+            ready_for_moderation: bool = self.args.ready_for_moderation
+            codingamer_id: int | None = self.args.codingamer_id
+            strip_test_final_eols: bool = self.args.strip_test_final_eols
+            contribution_data = CgContributionData.loads(sys.stdin.read())
+            client = await self.get_client()
+            handle = await client.services.contribution.helper.create_contribution(
+                    puzzle_type, contribution_data, draft, ready_for_moderation, codingamer_id,
+                    strip_test_final_eols=strip_test_final_eols)
+            print(json.dumps(handle))
+        p = cmd.get_parser()
+        p.add_argument("puzzle_type", type=str, metavar="PUZZLE-TYPE",
+                       help="The type of the contribution, e.g. 'PUZZLE_INOUT'.")
+        p.add_argument("--draft", default=False, action="store_true",
+                       help="Create as a private, unpublished draft. Defaults to false.")
+        p.add_argument("--ready-for-moderation", default=False, action="store_true",
+                       help="Formally submit for moderation. Defaults to false.")
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="The authoring codingamer's numeric ID. Defaults to the logged-in codingamer's ID.")
+        p.add_argument("--no-strip-test-final-eols", dest="strip_test_final_eols",
+                       default=True, action="store_false",
+                       help="Don't strip a single trailing newline from each test case's input/output text "
+                            "before submitting. By default, this normalization is applied.")
+        return handler
+
     @cli_command("Contribution working directory commands--manage a local, possibly-uncommitted "
                  "working view of a single contribution, backed by a real git repo (see "
                  "codingame_client.contribution_manager.manager for the main/server/version-data "
@@ -1454,18 +1524,66 @@ class CgCli(CliBase):
                        help="New directory to create the working directory in. Must not already exist.")
         return handler
 
-    @cli_command("Push this working directory's content to the server via updateContribution "
-                 "(with 524 retry/polling and test-case data normalization), then update `server`/"
-                 "`version-data` to reflect the result and fast-forward `main` to match.")
-    async def cmd_contribution__commit(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+    @cli_command("Initialize a brand new, *purely local* contribution working directory--no "
+                 "network access, no server-side contribution created yet (unlike `cg "
+                 "contribution import`, which always starts from one that already exists). Seeds "
+                 "minimal placeholder statement/difficulty/test-case content (the server rejects "
+                 "a title-only submission), with contribution-data.json's draft/"
+                 "readyForModeration defaulted to private-draft (true/false)--edit any of this "
+                 "via the usual sidecar files/contribution-data.json before your first `cg "
+                 "contribution push`, which is what actually calls createContribution (using "
+                 "whatever draft/readyForModeration are set to at that point, exactly like any "
+                 "other push--nothing about the first push is special-cased or locked down) and "
+                 "records the resulting handle; every push after that is a normal update. "
+                 "DIRECTORY must not already exist. Ignores --contribution-dir.")
+    async def cmd_contribution__create(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            directory: Path = self.args.directory
+            title: str | None = self.args.title
+            puzzle_type: str = self.args.puzzle_type
+            if directory.exists():
+                raise CliError(
+                        f"Directory already exists: {directory}. `cg contribution create` only "
+                        "creates a new working directory; remove it first, or use `cg "
+                        "contribution import` if a contribution already exists server-side."
+                    )
+            if title is None:
+                title = f"Example puzzle {directory.name}"
+            client = await self.get_client()
+            manager = CgContributionManager(directory, client)
+            working = await manager.create(title=title, puzzle_type=puzzle_type)
+            self.eprint(f"Initialized a new local-only contribution working directory at {directory}")
+            self.eprint("  (not yet pushed to the server)")
+            self.eprint(f"  title: {working.data.title!r}")
+            self.eprint(f"  puzzleType: {working.puzzle_type!r}")
+            self.eprint("  (seeded with placeholder statement/difficulty/test cases--edit, then "
+                         "`cg contribution push` to create it on the server)")
+        p = cmd.get_parser()
+        p.add_argument("directory", type=Path, metavar="DIRECTORY",
+                       help="New directory to create the working directory in. Must not already exist.")
+        p.add_argument("title", type=str, nargs="?", default=None, metavar="TITLE",
+                       help="Title for the new contribution. Defaults to 'Example puzzle <DIRECTORY's last path "
+                            "component>'.")
+        p.add_argument("--puzzle-type", "-t", type=str, default="PUZZLE_INOUT", metavar="PUZZLE-TYPE",
+                       help="The type of the contribution. Defaults to 'PUZZLE_INOUT'.")
+        return handler
+
+    @cli_command("Push this working directory's content to the server (with 524 retry/polling and "
+                 "test-case data normalization), then update `server`/`version-data` to reflect "
+                 "the result and fast-forward `main` to match. If this working directory has "
+                 "never been pushed before (created via `cg contribution create`), this *first* "
+                 "push calls createContribution instead of updateContribution and records the "
+                 "resulting handle into contribution.json--every push after that is a normal "
+                 "update. See CgContributionManager.push's docstring for the full story.")
+    async def cmd_contribution__push(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             contribution_dir: Path | None = self.args.contribution_dir
             resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
             client = await self.get_client(require_credentials=True)
             manager = CgContributionManager(resolved_dir, client)
-            result = await manager.commit()
+            result = await manager.push()
             self.eprint(
-                    f"Committed {resolved_dir} -> contribution {result.public_handle!r}, "
+                    f"Pushed {resolved_dir} -> contribution {result.public_handle!r}, "
                     f"version {result.last_version.version}"
                 )
         return handler
@@ -1481,16 +1599,96 @@ class CgCli(CliBase):
             print(f"Contribution directory: {found}")
         return handler
 
-    @cli_command("Revert this working directory's content to match server's current tip exactly, "
-                 "discarding local edits. Purely local--no network access, unlike `cg contribution "
+    @cli_command("Discard local edits: reset this working directory's content to match server's "
+                 "current tip exactly. Purely local--no network access, unlike `cg contribution "
                  "merge discard-local`, which re-fetches from the server first.")
-    async def cmd_contribution__revert(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+    async def cmd_contribution__discard_local(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             contribution_dir: Path | None = self.args.contribution_dir
             resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
             manager = CgContributionManager(resolved_dir, await self.get_client())
-            working = manager.revert()
-            self.eprint(f"{resolved_dir}: reverted to match server (title: {working.data.title!r}).")
+            working = manager.discard_local()
+            self.eprint(f"{resolved_dir}: discarded local edits, now matches server (title: {working.data.title!r}).")
+        return handler
+
+    @cli_command("Delete this contribution from the server (unrecoverable) and, by default, "
+                 "remove this entire working directory too. Pass --keep-local to instead detach: "
+                 "drop the server/version-data git branches and reset contribution.json so the "
+                 "*same* local content is ready to become a brand new contribution on the next "
+                 "push--e.g. to use an existing contribution as a template/starting point for a "
+                 "new one. Pass --keep-server to do the opposite: leave the server-side "
+                 "contribution untouched and just remove the local working directory. "
+                 "Destructive--prompts for confirmation unless --force is given; requires "
+                 "--force outright if stdin/stdout aren't a terminal.")
+    async def cmd_contribution__delete(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            keep_local: bool = self.args.keep_local
+            keep_server: bool = self.args.keep_server
+            force: bool = self.args.force
+            if keep_local and keep_server:
+                raise CliError(
+                        "--keep-local and --keep-server are mutually exclusive--together they'd "
+                        "mean deleting nothing at all."
+                    )
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            manager = CgContributionManager(resolved_dir, await self.get_client(require_credentials=True))
+            metadata = manager.server_metadata()
+            if metadata is None and not keep_server:
+                raise CliError(
+                        f"{resolved_dir} has no server-side contribution yet (never successfully "
+                        "pushed)--nothing to delete. Pass --keep-server to just remove the local "
+                        "working directory."
+                    )
+            title = manager.load().data.title
+            if not force:
+                if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                    raise CliError(
+                            "Refusing to delete without confirmation: stdin/stdout aren't a "
+                            "terminal. Pass --force to proceed non-interactively."
+                        )
+                if keep_server:
+                    action = "remove ONLY the local working directory--the server-side contribution is kept, untouched"
+                elif keep_local:
+                    action = "detach it (server deleted, local files kept)"
+                else:
+                    action = "PERMANENTLY DELETE it (server *and* local files)"
+                print(f"About to {action}:")
+                print(f"  directory: {resolved_dir}")
+                if metadata is None:
+                    print(f"  title: {title!r} (never pushed--nothing server-side)")
+                else:
+                    print(f"  contribution: {metadata.contribution_id!r} (version {metadata.version}, title {title!r})")
+                reply = input("Type DELETE (all caps) to confirm, or anything else to cancel: ")
+                if reply != "DELETE":
+                    raise CliError("Confirmation did not match--aborted, nothing was deleted.")
+            await manager.delete(keep_local=keep_local, keep_server=keep_server)
+            if keep_local:
+                assert metadata is not None  # keep_server (the only way metadata could be None) is excluded above
+                self.eprint(
+                        f"{resolved_dir}: contribution {metadata.contribution_id!r} deleted from "
+                        "the server; local working directory detached and ready for a new push."
+                    )
+            elif keep_server:
+                self.eprint(f"{resolved_dir}: local working directory removed; the server-side contribution was left untouched.")
+            else:
+                assert metadata is not None  # keep_server (the only way metadata could be None) is excluded above
+                self.eprint(
+                        f"{resolved_dir}: contribution {metadata.contribution_id!r} and the "
+                        "local working directory have both been deleted."
+                    )
+        p = cmd.get_parser()
+        p.add_argument("--keep-local", default=False, action="store_true",
+                       help="Delete server-side only; keep and detach the local working "
+                            "directory (ready to become a new contribution on the next push). "
+                            "Mutually exclusive with --keep-server.")
+        p.add_argument("--keep-server", default=False, action="store_true",
+                       help="Remove only the local working directory; leave the server-side "
+                            "contribution untouched (just stop tracking it locally). Mutually "
+                            "exclusive with --keep-local.")
+        p.add_argument("--force", "-f", default=False, action="store_true",
+                       help="Skip the interactive confirmation prompt. Required if stdin/stdout "
+                            "aren't a terminal.")
         return handler
 
     @cli_command("Renumber tests/'s ordinal directories to a clean, sequential, zero-padded sort "
@@ -1793,8 +1991,14 @@ class CgCli(CliBase):
         # get_parser() (which only auto-constructs when self.parser is still None) so this
         # replaces it cleanly rather than fighting it.
         parent_subparsers = cmd.get_parent_subparsers_action()
+        # help=cmd.help would pass None straight through here (no @cli_command(help=...) was
+        # given, just the positional description), which argparse renders as *no* one-line
+        # summary in the parent's subcommand list--unlike the framework's own get_parser(), this
+        # hand-built add_parser() call doesn't fall back to the description for us, so it must be
+        # done explicitly.
+        help_text = cmd.description if cmd.help is None else cmd.help
         parser = parent_subparsers.add_parser(
-                cmd.short_name, description=cmd.description, help=cmd.help,
+                cmd.short_name, description=cmd.description, help=help_text,
                 prefix_chars="\x00", add_help=False,
             )
         cmd.set_parser(parser)
@@ -1916,7 +2120,7 @@ class CgCli(CliBase):
         p.add_argument("contribution_dir", type=Path, metavar="DIR",
                        help="Directory to use as the default contribution working directory--used "
                             "whenever --contribution-dir isn't given and CG_CONTRIBUTION_DIR isn't "
-                            "set (see `cg contribution import`/`cg contribution commit`).")
+                            "set (see `cg contribution import`/`cg contribution push`).")
         return handler
 
     @cli_command("Delete a settings.json value.")

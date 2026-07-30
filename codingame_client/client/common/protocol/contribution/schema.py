@@ -310,6 +310,20 @@ class CgValidateAction(JSONWizardX):
 
 
 @dataclass
+class CgDeleteContributionResult(JSONWizardX):
+    """The response to deleteContribution."""
+
+    action_id: int
+    """Opaque identifier for the (apparently asynchronous, like `CgValidateAction`) deletion
+       action."""
+
+    result: bool
+    """Whether the deletion succeeded."""
+
+    extra_data: CatchAll = field(default_factory=dict)
+
+
+@dataclass
 class CgContribution(JSONWizardX):
     """The complete response to findContribution. Also the response shape for updateContribution
        (see `CgAsyncContributionService.update_contribution`)--but see `active_version` and
@@ -507,6 +521,6 @@ __all__ = [
     "CgContribution", "CgContributionData", "CgContributionStatusChange",
     "CgContributionStatusHistoryEntry", "CgContributionVersion", "CgTestCase",
     "CgMarkdown", "CgHtml", "CgStubGenerator", "CgTopic", "CgContributionId", "CgPuzzleType",
-    "CgPendingContribution", "CgSolutionLanguage", "CgValidateAction",
+    "CgPendingContribution", "CgSolutionLanguage", "CgValidateAction", "CgDeleteContributionResult",
     "cg_extension_to_solution_language", "cg_solution_language_to_extension",
 ]

@@ -1,9 +1,10 @@
 """Local working-directory management for CodinGame contributions (puzzles)--a real git working
    directory (`data/`), backed by a remote server rather than a git remote.
 
-   See `CgContributionManager` for `import_`/`commit`/`rebase`/`fetch`/`merge_start`/
-   `merge_continue`/`merge_abort`/`merge_discard_local`/`merge_discard_server`/`revert`--its module
-   docstring covers the `main`/`server`/`version-data` branch design in full; `codingame_client.
+   See `CgContributionManager` for `import_`/`create`/`push`/`rebase`/`fetch`/`merge_start`/
+   `merge_continue`/`merge_abort`/`merge_discard_local`/`merge_discard_server`/`discard_local`/
+   `delete`--its module docstring covers the `main`/`server`/`version-data` branch design in full,
+   and `push()`'s covers the create-vs-update duality hidden behind that one method; `codingame_client.
    contribution_manager.schema` for the working directory's own manifest files
    (`CgContributionIdentity`/`CgContributionView`); `codingame_client.contribution_manager.
    contribution_commit_data` for `CgContributionCommitMetadata` (the git-trailer-backed remote

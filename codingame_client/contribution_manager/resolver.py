@@ -100,7 +100,7 @@ def resolve_contribution_dir(
        If `allow_default` is True and no directory can be found, falls back to `start_dir` (or the
        current directory)--useful for commands like `cg contribution import` that are happy to
        treat "nothing found" as "use the current directory as the new working directory".
-       `commit()`-style callers, where there must already be a working directory, should leave
+       `push()`-style callers, where there must already be a working directory, should leave
        this False.
 
     Raises:

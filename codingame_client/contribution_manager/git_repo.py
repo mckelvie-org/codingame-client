@@ -148,11 +148,21 @@ class CgGitRepo:
     def update_ref(self, ref: str, sha: str) -> None:
         self._run(["update-ref", ref, sha])
 
+    def delete_ref(self, ref: str) -> None:
+        """Delete `ref` (e.g. `refs/heads/server`) if it exists--a no-op if it doesn't. The
+           underlying commit objects aren't pruned (no `gc`/`prune` is ever run by this class), so
+           anything only reachable through the deleted ref remains locally inspectable by SHA
+           (or via tags--`delete_ref` never touches those) until a real `git gc` eventually
+           collects it."""
+        if self.resolve_ref(ref) is None:
+            return
+        self._run(["update-ref", "-d", ref])
+
     def reset_index_to(self, sha: str) -> None:
         """Move the branch `HEAD` currently points at (always `main`, by construction) to `sha`,
            and reset the real index to match its tree--leaving the working tree untouched (`git
            reset <sha>`, a "mixed" reset). Used after directly building a commit whose tree
-           already matches what's on disk (`import_()`/`commit()`, both of which build their tree
+           already matches what's on disk (`import_()`/`push()`, both of which build their tree
            via a scratch index--see `write_tree_from_dir`--that never touches the real index at
            all). Without this, the real index is left stale (empty, for a fresh repo) relative to
            `main`'s new tip; that doesn't matter for anything routed through `checkout_all()`
@@ -250,10 +260,30 @@ class CgGitRepo:
         result = self._run(["rev-parse", "HEAD"])
         return result.stdout.decode("utf-8").strip()
 
+    def restage_and_amend_if_dirty(self) -> bool:
+        """If the real working tree has any uncommitted changes relative to `HEAD` (staged or
+           not), stage all of them and fold them into `HEAD`'s existing commit (`add -A && commit
+           --amend --no-edit`)--parents (so a merge commit's two parents survive intact) and
+           message are both left untouched, only the tree changes. Used right after a merge
+           commit (auto-committed by a clean `git merge`, or just made by `merge_continue()`) to
+           fold in a content-preserving `renormalize_test_case_dirs()` cleanup, so it doesn't need
+           its own separate commit. A no-op (returns False) if nothing changed.
+
+        Returns:
+            Whether anything was actually amended.
+        """
+        status = self._run(["status", "--porcelain"]).stdout
+        if not status.strip():
+            return False
+        self._run(["add", "-A"])
+        self._run(["commit", "--amend", "--no-edit"])
+        return True
+
     def checkout_all(self, ref: str) -> None:
         """Reset the index, the working tree, *and* remove untracked files/directories, so the
            working tree ends up matching `ref`'s content *exactly*--without moving `HEAD` or
-           creating a commit. Used by `revert()`/`rebase()`'s fast-forward/`merge_discard_local()`.
+           creating a commit. Used by `discard_local()`/`rebase()`'s fast-forward/
+           `merge_discard_local()`.
 
            Two things confirmed necessary by direct testing, not just one: `read-tree --reset -u`
            (rather than `checkout <ref> -- .`, which only adds/updates paths present in `ref`, and

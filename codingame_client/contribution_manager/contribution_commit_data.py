@@ -75,7 +75,7 @@ class CgContributionCommitMetadata(JSONWizardX):
 
     version: int = 0
     """The server version number--passed to `updateContribution`'s idempotency check on the next
-       `commit()`."""
+       `push()`."""
 
     cover_binary_id: int | None = None
     """The binary ID of the cover image as of this commit (`None` if it has none)."""

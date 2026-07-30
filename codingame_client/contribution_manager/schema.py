@@ -45,23 +45,29 @@ CONTRIBUTION_SCHEMA_VERSION = 1
 @dataclass
 class CgContributionIdentity(JSONWizardX):
     """The `contribution.json` manifest: global identity for a contribution working directory,
-       constant for its lifetime (never changes across `import_`/`commit`/`merge`/etc.--unlike
-       everything else in the working directory, this is not tied to any specific commit/version)."""
+       constant for its lifetime (never changes across `import_`/`push`/`merge`/etc.--unlike
+       everything else in the working directory, this is not tied to any specific commit/version).
+
+       Exception: `contribution_handle` itself transitions exactly once, from `None` to a real
+       value, the first time `CgContributionManager.push()` succeeds against a working directory
+       created via `create()` rather than `import_()`--see `push()`'s docstring for why."""
 
     schema_version: int
     """The on-disk format version this working directory was written in--see
        `CONTRIBUTION_SCHEMA_VERSION`."""
 
-    contribution_handle: CgContributionId
-    """The opaque contribution ID (`CgContribution.public_handle`) this working directory tracks.
-       The one fact rehydration (see `CgContributionManager.import_`) actually needs--everything
-       else about prior git history is either present (git-dir found where recorded) or, if not,
-       deliberately not reconstructed, just re-fetched fresh."""
-
     # `extra_data` is deliberately the first field with a default, same rationale as
     # `CgContributionView.extra_data` below: dataclass_wizard 1.0.0 mis-binds any defaulted field
     # positioned immediately before it (silently, no error) to the CatchAll's own value.
     extra_data: CatchAll = field(default_factory=dict)
+
+    contribution_handle: CgContributionId | None = None
+    """The opaque contribution ID (`CgContribution.public_handle`) this working directory
+       tracks--`None` if it was `create()`d and has never been successfully `push()`d yet (there's
+       no server-side contribution to have a handle for). The one fact rehydration (see
+       `CgContributionManager.import_`) actually needs, when set--everything else about prior git
+       history is either present (git-dir found where recorded) or, if not, deliberately not
+       reconstructed, just re-fetched fresh."""
 
     git_dir_in_data: bool = False
     """Where this working directory's git-dir lives, decided once at creation time and never
@@ -76,7 +82,7 @@ class CgContributionIdentity(JSONWizardX):
 @dataclass
 class CgContributionView(JSONWizardX):
     """The `contribution-data.json` manifest: the content of `data/`--everything needed to
-       `commit()` it, or to compare it against `main`/`server` at any other commit via `git diff`.
+       `push()` it, or to compare it against `main`/`server` at any other commit via `git diff`.
 
        `data` is a working version of `CgContributionData`, with several fields deliberately kept
        always-empty by convention (not schema-enforced) because their real content lives in
@@ -104,7 +110,7 @@ class CgContributionView(JSONWizardX):
 
     puzzle_type: CgPuzzleType | None = None
     """The contribution type, e.g. "PUZZLE_INOUT". A required top-level parameter to
-       `updateContribution`--must be set before `commit()` can succeed."""
+       `updateContribution`--must be set before `push()` can succeed."""
 
     draft: bool = True
     """Whether the version being committed is a private draft. A required top-level parameter to

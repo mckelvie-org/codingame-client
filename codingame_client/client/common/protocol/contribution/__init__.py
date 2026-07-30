@@ -11,6 +11,7 @@ from .schema import (
     CgContributionStatusChange,
     CgContributionStatusHistoryEntry,
     CgContributionVersion,
+    CgDeleteContributionResult,
     CgHtml,
     CgMarkdown,
     CgPendingContribution,
@@ -29,5 +30,6 @@ __all__ = [
     "CgContributionStatusHistoryEntry", "CgContributionVersion", "CgTestCase",
     "CgMarkdown", "CgHtml", "CgStubGenerator", "CgTopic", "CgContributionId",
     "CgPendingContribution", "CgPuzzleType", "CgSolutionLanguage", "CgValidateAction",
+    "CgDeleteContributionResult",
     "cg_extension_to_solution_language", "cg_solution_language_to_extension",
 ]

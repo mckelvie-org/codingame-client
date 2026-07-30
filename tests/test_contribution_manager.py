@@ -1,5 +1,5 @@
 """Unit tests for codingame_client.contribution_manager.manager.CgContributionManager
-   (`import_`/`commit`/`fetch`/`rebase`/`merge_discard_local`/`merge_discard_server`/`revert`/
+   (`import_`/`push`/`fetch`/`rebase`/`merge_discard_local`/`merge_discard_server`/`discard_local`/
    `merge_start`/`merge_continue`/`merge_abort`), against a fake, duck-typed client
    (services.contribution, servlets.file_servlet, servlets.file_upload)--no real
    CgAsyncClient/network involved. Real git subprocess calls run against `tmp_path`.
@@ -22,6 +22,7 @@ from codingame_client.client.common.protocol.contribution import (
     CgContribution,
     CgContributionData,
     CgContributionVersion,
+    CgDeleteContributionResult,
     CgTestCase,
 )
 from codingame_client.client.common.raw_client import CgDownloadFileResult, CgUploadFileResult, compute_content_hash
@@ -66,6 +67,18 @@ def _make_full_data(
         )
 
 
+def _make_two_pair_data(**kwargs: Any) -> CgContributionData:
+    """`_make_full_data()`, with a second local/validator pair appended--so `tests/` has two
+       ordinal directories ("01"/"02") instead of one, letting a test remove just one of them
+       and leave a renumbering gap to detect."""
+    data = _make_full_data(**kwargs)
+    extra = [
+            _make_test_case("Case B", "5", "6", is_test=True, is_validator=False),
+            _make_test_case("Case B", "7", "8", is_test=False, is_validator=True),
+        ]
+    return dataclasses.replace(data, test_cases=[*data.test_cases, *extra])
+
+
 def _make_contribution(
             data: CgContributionData, *,
             public_handle: str = "handle-1",
@@ -102,18 +115,39 @@ class _FakeContributionHelper:
             })
         return self._service.update_result
 
+    async def create_contribution(
+                self, puzzle_type: str, contribution_data: CgContributionData,
+                draft: bool, ready_for_moderation: bool, codingamer_id: int | None = None,
+                **kwargs: Any,
+            ) -> str:
+        self._service.create_calls.append({
+                "puzzle_type": puzzle_type, "contribution_data": contribution_data,
+                "draft": draft, "ready_for_moderation": ready_for_moderation,
+            })
+        return self._service.create_result
+
 
 class _FakeContributionService:
-    def __init__(self, find_result: CgContribution, update_result: CgContribution | None = None) -> None:
+    def __init__(
+                self, find_result: CgContribution, update_result: CgContribution | None = None,
+                create_result: str = "new-handle",
+            ) -> None:
         self.find_result = find_result
         self.update_result = update_result if update_result is not None else find_result
+        self.create_result = create_result
         self.update_calls: list[dict[str, Any]] = []
+        self.create_calls: list[dict[str, Any]] = []
+        self.delete_calls: list[str] = []
         self.find_call_count = 0
         self.helper = _FakeContributionHelper(self)
 
     async def find_contribution(self, contribution_id: str, arg2: bool = True) -> CgContribution:
         self.find_call_count += 1
         return self.find_result
+
+    async def delete_contribution(self, contribution_id: str, codingamer_id: int | None = None) -> CgDeleteContributionResult:
+        self.delete_calls.append(contribution_id)
+        return CgDeleteContributionResult(action_id=1, result=True)
 
 
 class _FakeServices:
@@ -325,6 +359,25 @@ async def test_import_rehydrates_when_git_dir_missing_but_content_present(tmp_pa
     assert repo.resolve_ref("main") == repo.resolve_ref("server")
 
 
+async def test_import_rehydration_renormalizes_non_canonical_test_case_dirs(tmp_path: Path) -> None:
+    """Rehydration snapshots whatever's already on disk (preserved from the outer clone)
+       verbatim--if that layout isn't already canonical, this commit would permanently encode it,
+       causing the same spurious-diff risk as an un-renormalized push()--see manager.import_()'s
+       docstring."""
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, _, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+    (manager.tests_dir / "01").rename(manager.tests_dir / "05")  # simulate a non-canonical layout
+
+    shutil.rmtree(manager.git_dir.parent)
+    await manager.import_("handle-1")
+
+    assert not (manager.tests_dir / "05").exists()
+    assert (manager.tests_dir / "01").is_dir()
+
+
 async def test_reimport_with_language_change_regenerates_symlink(tmp_path: Path) -> None:
     data = _make_full_data(solution_language="Python3")
     contribution = _make_contribution(data)
@@ -347,10 +400,124 @@ async def test_reimport_with_language_change_regenerates_symlink(tmp_path: Path)
     assert (tmp_path / "solution.py").is_symlink()
 
 
-# --- commit ------------------------------------------------------------------------------
+# --- create --------------------------------------------------------------------------------
 
 
-async def test_commit_requires_puzzle_type(tmp_path: Path) -> None:
+async def test_create_is_purely_local_with_no_contribution_handle_yet(tmp_path: Path) -> None:
+    """create() never touches the network--no server-side contribution exists until the first
+       push()--see manager.push()'s docstring for the create-vs-update duality this sets up."""
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, service, file_servlet, file_upload = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+
+    view = await manager.create(title="My Puzzle")
+
+    assert service.create_calls == []
+    assert service.find_call_count == 0
+    assert file_servlet.calls == []
+    assert file_upload.calls == []
+
+    assert view.data.title == "My Puzzle"
+    # seeded placeholder content--confirmed live that a title-only payload gets refused by the
+    # server on push(), so create() must leave something minimally valid on disk.
+    assert (tmp_path / "data" / "statement.cgmd").read_text()
+    assert view.puzzle_type == "PUZZLE_INOUT"
+    identity = manager.load_identity()
+    assert identity is not None
+    assert identity.contribution_handle is None
+
+    repo = manager.git_repo
+    assert repo.resolve_ref("main") is not None  # a real local commit exists
+    assert repo.resolve_ref("server") is None  # but nothing server-side yet
+    assert manager.server_metadata() is None
+
+
+async def test_create_accepts_custom_puzzle_type(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, _, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+
+    view = await manager.create(title="My Puzzle", puzzle_type="PUZZLE_OPTI")
+
+    assert view.puzzle_type == "PUZZLE_OPTI"
+
+
+async def test_push_after_create_calls_create_contribution_and_records_the_handle(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data, public_handle="created-handle-1", version=1)
+    client, service, _, _ = _make_fake_client(contribution)
+    service.create_result = "created-handle-1"
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.create(title="My Puzzle")
+
+    result = await manager.push()
+
+    assert len(service.create_calls) == 1
+    call = service.create_calls[0]
+    assert call["puzzle_type"] == "PUZZLE_INOUT"
+    assert call["contribution_data"].title == "My Puzzle"
+    # always a private draft, never submitted for moderation--not caller-configurable at create()
+    # time; reflects contribution-data.json's own draft/ready_for_moderation flags at push() time.
+    assert call["draft"] is True
+    assert call["ready_for_moderation"] is False
+    assert service.update_calls == []  # the first push is a create, never an update
+
+    assert result.public_handle == "created-handle-1"
+    identity = manager.load_identity()
+    assert identity is not None
+    assert identity.contribution_handle == "created-handle-1"
+    repo = manager.git_repo
+    assert repo.resolve_ref("main") == repo.resolve_ref("server")
+    metadata = manager.server_metadata()
+    assert metadata is not None
+    assert metadata.version == 1
+    assert metadata.contribution_id == "created-handle-1"
+
+
+async def test_push_after_create_uses_update_contribution_on_second_push(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data, public_handle="created-handle-1", version=1)
+    updated = _make_contribution(data, public_handle="created-handle-1", version=2)
+    client, service, _, _ = _make_fake_client(contribution, update_result=updated)
+    service.create_result = "created-handle-1"
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.create(title="My Puzzle")
+    await manager.push()
+
+    (tmp_path / "data" / "statement.cgmd").write_text("A real statement now\n")
+    service.find_result = updated
+
+    result = await manager.push()
+
+    assert len(service.create_calls) == 1  # unchanged--still just the one, from the first push
+    assert len(service.update_calls) == 1
+    assert service.update_calls[0]["contribution_id"] == "created-handle-1"
+    assert service.update_calls[0]["prev_version"] == 1
+    assert result.last_version.version == 2
+    metadata = manager.server_metadata()
+    assert metadata is not None
+    assert metadata.version == 2
+
+
+async def test_create_refuses_if_directory_already_tracks_a_contribution(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+
+    with pytest.raises(CgContributionManagerError):
+        await manager.create(title="Another Puzzle")
+
+    assert service.create_calls == []  # refused before ever calling createContribution
+
+
+# --- push ------------------------------------------------------------------------------
+
+
+async def test_push_requires_puzzle_type(tmp_path: Path) -> None:
     data = _make_full_data()
     contribution = _make_contribution(data)
     client, _, _, _ = _make_fake_client(contribution)
@@ -359,18 +526,18 @@ async def test_commit_requires_puzzle_type(tmp_path: Path) -> None:
     manager.save(dataclasses.replace(view, puzzle_type=None))
 
     with pytest.raises(CgContributionManagerError):
-        await manager.commit()
+        await manager.push()
 
 
-async def test_commit_requires_a_prior_import(tmp_path: Path) -> None:
+async def test_push_requires_a_prior_import(tmp_path: Path) -> None:
     view = CgContributionView(puzzle_type="PUZZLE_INOUT", data=CgContributionData(title="x"))
     manager = CgContributionManager(tmp_path, object())  # type: ignore[arg-type]
     manager.save(view)
     with pytest.raises(FileNotFoundError):
-        await manager.commit()
+        await manager.push()
 
 
-async def test_commit_reuses_cover_binary_id_when_content_unchanged(tmp_path: Path) -> None:
+async def test_push_reuses_cover_binary_id_when_content_unchanged(tmp_path: Path) -> None:
     data = _make_full_data()
     contribution = _make_contribution(data)
     updated = _make_contribution(data, version=4)
@@ -378,7 +545,7 @@ async def test_commit_reuses_cover_binary_id_when_content_unchanged(tmp_path: Pa
     manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
     await manager.import_("handle-1")
 
-    result = await manager.commit()
+    result = await manager.push()
 
     assert result.last_version.version == 4
     assert len(service.update_calls) == 1
@@ -393,7 +560,7 @@ async def test_commit_reuses_cover_binary_id_when_content_unchanged(tmp_path: Pa
     assert repo.resolve_ref("main") == repo.resolve_ref("server")
 
 
-async def test_commit_reuploads_cover_when_content_changed(tmp_path: Path) -> None:
+async def test_push_reuploads_cover_when_content_changed(tmp_path: Path) -> None:
     data = _make_full_data()
     contribution = _make_contribution(data)
     updated = _make_contribution(data, version=4)
@@ -402,13 +569,13 @@ async def test_commit_reuploads_cover_when_content_changed(tmp_path: Path) -> No
     await manager.import_("handle-1")
     (tmp_path / "data" / "cover.png").write_bytes(b"changed-bytes")
 
-    await manager.commit()
+    await manager.push()
 
     assert len(file_upload.calls) == 1
     assert service.update_calls[0]["contribution_data"].cover_binary_id == 777
 
 
-async def test_commit_reflects_edited_sidecar_files(tmp_path: Path) -> None:
+async def test_push_reflects_edited_sidecar_files(tmp_path: Path) -> None:
     data = _make_full_data()
     contribution = _make_contribution(data)
     updated = _make_contribution(data, version=4)
@@ -417,7 +584,7 @@ async def test_commit_reflects_edited_sidecar_files(tmp_path: Path) -> None:
     await manager.import_("handle-1")
     (tmp_path / "data" / "statement.cgmd").write_text("Edited statement\n")
 
-    await manager.commit()
+    await manager.push()
 
     submitted = service.update_calls[0]["contribution_data"]
     assert submitted.statement == "Edited statement\n"
@@ -425,7 +592,7 @@ async def test_commit_reflects_edited_sidecar_files(tmp_path: Path) -> None:
     assert submitted.solution == "print('hi')\n"
 
 
-async def test_commit_passes_view_puzzle_type_and_flags(tmp_path: Path) -> None:
+async def test_push_passes_view_puzzle_type_and_flags(tmp_path: Path) -> None:
     data = _make_full_data()
     contribution = _make_contribution(data, draft=False, ready_for_moderation=True)
     updated = _make_contribution(data, version=4)
@@ -435,7 +602,7 @@ async def test_commit_passes_view_puzzle_type_and_flags(tmp_path: Path) -> None:
     assert view.draft is False
     assert view.ready_for_moderation is True
 
-    await manager.commit()
+    await manager.push()
 
     call = service.update_calls[0]
     assert call["puzzle_type"] == "PUZZLE_INOUT"
@@ -444,7 +611,7 @@ async def test_commit_passes_view_puzzle_type_and_flags(tmp_path: Path) -> None:
     assert call["prev_version"] == 3
 
 
-async def test_commit_refuses_while_merge_in_progress(tmp_path: Path) -> None:
+async def test_push_refuses_while_merge_in_progress(tmp_path: Path) -> None:
     data = _make_full_data()
     contribution = _make_contribution(data)
     client, service, _, _ = _make_fake_client(contribution)
@@ -453,13 +620,13 @@ async def test_commit_refuses_while_merge_in_progress(tmp_path: Path) -> None:
     await _start_conflicting_merge(manager, service, data)
 
     with pytest.raises(CgContributionManagerError):
-        await manager.commit()
+        await manager.push()
 
 
 # --- active_version refresh (updateContribution's response can report it stale) -----------
 
 
-async def test_commit_refreshes_stale_active_version_via_find_contribution(tmp_path: Path) -> None:
+async def test_push_refreshes_stale_active_version_via_find_contribution(tmp_path: Path) -> None:
     data = _make_full_data()
     contribution = _make_contribution(data)  # version=3, active_version=3
     stale_update_result = dataclasses.replace(_make_contribution(data, version=4), active_version=3)
@@ -469,12 +636,12 @@ async def test_commit_refreshes_stale_active_version_via_find_contribution(tmp_p
 
     service.find_result = _make_contribution(data, version=4)  # active_version=4
 
-    result = await manager.commit()
+    result = await manager.push()
 
     assert result.active_version == 4
 
 
-async def test_commit_gives_up_refreshing_after_max_attempts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_push_gives_up_refreshing_after_max_attempts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def no_sleep(seconds: float) -> None:
         return None
     monkeypatch.setattr("codingame_client.contribution_manager.manager.asyncio.sleep", no_sleep)
@@ -488,9 +655,30 @@ async def test_commit_gives_up_refreshing_after_max_attempts(tmp_path: Path, mon
 
     service.find_result = stale_update_result
 
-    result = await manager.commit()
+    result = await manager.push()
 
     assert result.active_version == 3  # gave up, still stale--but didn't hang or raise
+
+
+async def test_push_renormalizes_non_canonical_test_case_dirs(tmp_path: Path) -> None:
+    """A push()'d tree becomes server's new tip verbatim--if tests/'s ordinal directory names
+       aren't canonical when that happens, a later fetch() (always canonical, via
+       _materialize_data()) would show a spurious diff against this commit even with identical
+       test content. See manager.push()'s docstring."""
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    updated = _make_contribution(data, version=4)
+    client, service, _, _ = _make_fake_client(contribution, update_result=updated)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+    (manager.tests_dir / "01").rename(manager.tests_dir / "05")  # simulate a non-canonical layout
+
+    await manager.push()
+
+    assert not (manager.tests_dir / "05").exists()
+    assert (manager.tests_dir / "01").is_dir()
+    repo = manager.git_repo
+    assert repo.diff_name_status("main", "server") == []  # no lingering path-only divergence
 
 
 # --- fetch ---------------------------------------------------------------------------------
@@ -734,10 +922,10 @@ async def test_merge_discard_server_refuses_while_merge_in_progress(tmp_path: Pa
         await manager.merge_discard_server()
 
 
-# --- revert --------------------------------------------------------------------------------
+# --- discard_local --------------------------------------------------------------------------------
 
 
-async def test_revert_discards_local_edits_and_untracked_files_without_network(tmp_path: Path) -> None:
+async def test_discard_local_discards_local_edits_and_untracked_files_without_network(tmp_path: Path) -> None:
     data = _make_full_data()
     contribution = _make_contribution(data)
     client, service, _, file_servlet = _make_fake_client(contribution)
@@ -748,7 +936,7 @@ async def test_revert_discards_local_edits_and_untracked_files_without_network(t
     find_calls_before = service.find_call_count
     file_servlet.calls.clear()
 
-    view = manager.revert()
+    view = manager.discard_local()
 
     assert (tmp_path / "data" / "statement.cgmd").read_text() == "The statement\n"
     assert not (tmp_path / "data" / "stray_untracked_file.txt").exists()
@@ -758,13 +946,13 @@ async def test_revert_discards_local_edits_and_untracked_files_without_network(t
     assert (tmp_path / "solution.py").is_symlink()  # symlink regenerated
 
 
-async def test_revert_requires_a_prior_import(tmp_path: Path) -> None:
+async def test_discard_local_requires_a_prior_import(tmp_path: Path) -> None:
     manager = CgContributionManager(tmp_path, object())  # type: ignore[arg-type]
     with pytest.raises(FileNotFoundError):
-        manager.revert()
+        manager.discard_local()
 
 
-async def test_revert_refuses_while_merge_in_progress(tmp_path: Path) -> None:
+async def test_discard_local_refuses_while_merge_in_progress(tmp_path: Path) -> None:
     data = _make_full_data()
     contribution = _make_contribution(data)
     client, service, _, _ = _make_fake_client(contribution)
@@ -772,17 +960,17 @@ async def test_revert_refuses_while_merge_in_progress(tmp_path: Path) -> None:
     await manager.import_("handle-1")
     await _start_conflicting_merge(manager, service, data)
     with pytest.raises(CgContributionManagerError):
-        manager.revert()
+        manager.discard_local()
 
 
-async def test_revert_preserves_identity(tmp_path: Path) -> None:
+async def test_discard_local_preserves_identity(tmp_path: Path) -> None:
     data = _make_full_data()
     contribution = _make_contribution(data)
     client, _, _, _ = _make_fake_client(contribution)
     manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
     await manager.import_("handle-1")
 
-    manager.revert()
+    manager.discard_local()
 
     identity = manager.load_identity()
     assert identity is not None
@@ -914,6 +1102,35 @@ async def test_merge_start_keeps_local_cover_on_binary_conflict(tmp_path: Path) 
     assert (tmp_path / "data" / "cover.png").read_bytes() == local_cover  # kept local
 
 
+async def test_merge_start_clean_merge_renormalizes_test_case_dirs(tmp_path: Path) -> None:
+    """A clean merge (git's own auto-commit, no conflicts) can still leave tests/ with a
+       renumbering gap if the two sides' non-conflicting changes touch different ordinals--e.g.
+       here, local removes ordinal "01" (Case A) while remote independently edits an unrelated
+       field, leaving only "02" (Case B) on disk after the merge. See manager.merge_start()'s
+       docstring for why this needs fixing up as part of the same commit."""
+    data = _make_two_pair_data()
+    contribution = _make_contribution(data)
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+    assert (manager.tests_dir / "01").is_dir()
+    assert (manager.tests_dir / "02").is_dir()
+
+    shutil.rmtree(manager.tests_dir / "01")  # locally remove Case A, leaving only "02"
+    manager.git_repo.commit_worktree("remove Case A locally")
+
+    new_data = _make_two_pair_data(statement="Server edit")  # unrelated remote change--tests/ untouched
+    service.find_result = _make_contribution(new_data, version=4)
+
+    result = await manager.merge_start()
+
+    assert result.status == CgMergeStartStatus.STARTED
+    assert not manager.merge_in_progress  # clean merge, auto-committed
+    assert (manager.tests_dir / "01").is_dir()  # "02" renumbered down to "01"
+    assert not (manager.tests_dir / "02").exists()
+    assert (tmp_path / "data" / "statement.cgmd").read_text() == "Server edit\n"
+
+
 async def test_merge_start_leaves_solution_symlink_untouched_while_conflicted(tmp_path: Path) -> None:
     """`solution.py` lives at `contribution_dir`'s root, *outside* `data/` (git's work tree)--so
        an in-progress merge (which only ever touches paths inside `data/`) can't affect it either
@@ -980,6 +1197,35 @@ async def test_merge_continue_refuses_when_markers_remain(tmp_path: Path) -> Non
         manager.merge_continue()
 
 
+async def test_merge_continue_renormalizes_test_case_dirs(tmp_path: Path) -> None:
+    """Same renumbering-gap scenario as the clean-merge test, but this time forced through an
+       actual text conflict (so merge_continue() itself, not merge_start()'s auto-commit path,
+       is what needs to renormalize/fold in the fix--see manager.merge_continue()'s docstring for
+       why the renormalize has to happen *after* the merge commit exists)."""
+    data = _make_two_pair_data()
+    contribution = _make_contribution(data)
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+
+    shutil.rmtree(manager.tests_dir / "01")  # locally remove Case A, leaving only "02"
+    (tmp_path / "data" / "statement.cgmd").write_text("Local edit\n")
+    manager.git_repo.commit_worktree("remove Case A locally, edit statement")
+
+    new_data = _make_two_pair_data(statement="Server edit")  # conflicts with the local statement edit
+    service.find_result = _make_contribution(new_data, version=4)
+    result = await manager.merge_start()
+    assert "statement.cgmd" in result.text_conflicts
+    assert manager.merge_in_progress
+
+    (tmp_path / "data" / "statement.cgmd").write_text("Resolved by hand\n")
+    manager.merge_continue()
+
+    assert not manager.merge_in_progress
+    assert (manager.tests_dir / "01").is_dir()  # "02" renumbered down to "01"
+    assert not (manager.tests_dir / "02").exists()
+
+
 async def test_merge_continue_succeeds_once_markers_resolved(tmp_path: Path) -> None:
     data = _make_full_data()
     contribution = _make_contribution(data)
@@ -1037,3 +1283,128 @@ async def test_merge_abort_restores_pre_merge_state(tmp_path: Path) -> None:
     # before the merge attempt even began; merge_abort() only undoes the merge attempt against
     # main, not that prior fetch (see CgContributionManager.merge_abort's docstring).
     assert metadata.version == 4
+
+
+# --- delete ----------------------------------------------------------------------------------
+
+
+async def test_delete_removes_the_local_directory_by_default(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+
+    await manager.delete()
+
+    assert service.delete_calls == ["handle-1"]
+    assert not tmp_path.exists()
+
+
+async def test_delete_keep_local_detaches_and_resets_identity(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+
+    await manager.delete(keep_local=True)
+
+    assert service.delete_calls == ["handle-1"]
+    assert tmp_path.exists()
+    assert (tmp_path / "data" / "statement.cgmd").read_text() == "The statement\n"  # content preserved
+
+    identity = manager.load_identity()
+    assert identity is not None
+    assert identity.contribution_handle is None
+
+    repo = manager.git_repo
+    assert repo.resolve_ref("main") is not None  # main's own history untouched
+    assert repo.resolve_ref("server") is None
+    assert repo.resolve_ref("version-data") is None
+    assert manager.server_metadata() is None
+
+
+async def test_delete_keep_local_then_push_creates_a_new_contribution(tmp_path: Path) -> None:
+    """The "fork/template" workflow: use an existing contribution's content as a starting point
+       for a brand new one, without touching the original (except deleting it here, since this
+       reuses the same working directory--a real templating workflow would `import_` into a fresh
+       directory instead, then never call `delete()` on the original at all)."""
+    data = _make_full_data()
+    contribution = _make_contribution(data, public_handle="old-handle")
+    new_handle_contribution = _make_contribution(data, public_handle="new-handle-1", version=1)
+    client, service, _, _ = _make_fake_client(contribution)
+    service.create_result = "new-handle-1"
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("old-handle")
+
+    await manager.delete(keep_local=True)
+    service.find_result = new_handle_contribution
+
+    result = await manager.push()
+
+    assert service.delete_calls == ["old-handle"]
+    assert len(service.create_calls) == 1
+    assert service.update_calls == []
+    assert result.public_handle == "new-handle-1"
+    identity = manager.load_identity()
+    assert identity is not None
+    assert identity.contribution_handle == "new-handle-1"
+
+
+async def test_delete_refuses_if_never_pushed(tmp_path: Path) -> None:
+    client = object()
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.create(title="My Puzzle")
+
+    with pytest.raises(FileNotFoundError):
+        await manager.delete()
+
+
+async def test_delete_refuses_while_merge_in_progress(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+    await _start_conflicting_merge(manager, service, data)
+
+    with pytest.raises(CgContributionManagerError):
+        await manager.delete()
+
+
+async def test_delete_keep_server_leaves_server_untouched(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+
+    await manager.delete(keep_server=True)
+
+    assert service.delete_calls == []  # deleteContribution never called
+    assert not tmp_path.exists()
+
+
+async def test_delete_keep_server_works_even_if_never_pushed(tmp_path: Path) -> None:
+    client = object()
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.create(title="My Puzzle")
+
+    await manager.delete(keep_server=True)  # doesn't raise, and never touches self.client
+
+    assert not tmp_path.exists()
+
+
+async def test_delete_keep_local_and_keep_server_are_mutually_exclusive(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+
+    with pytest.raises(CgContributionManagerError):
+        await manager.delete(keep_local=True, keep_server=True)
+
+    assert service.delete_calls == []
+    assert tmp_path.exists()
