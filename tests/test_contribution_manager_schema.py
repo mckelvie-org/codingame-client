@@ -1,7 +1,6 @@
 """Unit tests for codingame_client.contribution_manager.schema (CgContributionIdentity,
    CgContributionView) and codingame_client.contribution_manager.contribution_commit_data
-   (CgContributionCommitData): round-tripping through their JSON files, and the
-   contribution_id/prev_version convenience properties on the latter.
+   (CgContributionCommitMetadata, redact_commit_contribution).
 
 These are pure/local tests--no network--so they run under the default `pdm run test` invocation.
 """
@@ -16,7 +15,7 @@ from codingame_client.client.common.protocol.contribution import (
     CgContributionVersion,
 )
 from codingame_client.contribution_manager.contribution_commit_data import (
-    CgContributionCommitData,
+    CgContributionCommitMetadata,
     redact_commit_contribution,
 )
 from codingame_client.contribution_manager.schema import (
@@ -60,11 +59,18 @@ def _make_contribution(*, public_handle: str = "handle-123", version: int = 3, c
 
 
 def test_identity_round_trips_through_json(tmp_path: Path) -> None:
-    identity = CgContributionIdentity(schema_version=CONTRIBUTION_SCHEMA_VERSION, contribution_handle="the-handle")
+    identity = CgContributionIdentity(
+            schema_version=CONTRIBUTION_SCHEMA_VERSION, contribution_handle="the-handle", git_dir_in_data=True,
+        )
     path = tmp_path / "contribution.json"
     identity.save(path)
     reloaded = CgContributionIdentity.load(path)
     assert reloaded == identity
+
+
+def test_identity_git_dir_in_data_defaults_to_false() -> None:
+    identity = CgContributionIdentity(schema_version=CONTRIBUTION_SCHEMA_VERSION, contribution_handle="the-handle")
+    assert identity.git_dir_in_data is False
 
 
 # --- CgContributionView ----------------------------------------------------------------------
@@ -90,38 +96,28 @@ def test_view_has_sensible_defaults() -> None:
     assert view.puzzle_type is None
 
 
-# --- CgContributionCommitData / redact_commit_contribution -------------------------------------
+# --- CgContributionCommitMetadata / redact_commit_contribution ---------------------------------
 
 
-def test_commit_data_round_trips_through_json(tmp_path: Path) -> None:
-    commit_data = CgContributionCommitData(
-            contribution=redact_commit_contribution(_make_contribution()),
-            cover_binary_id=555,
-            cover_binary_hash="abc123",
+def test_commit_metadata_round_trips_through_json(tmp_path: Path) -> None:
+    metadata = CgContributionCommitMetadata(
+            contribution_id="the-handle", version=5, cover_binary_id=555, cover_binary_hash="abc123",
         )
-    path = tmp_path / "contribution-version-data.json"
-    commit_data.save(path)
-    reloaded = CgContributionCommitData.load(path)
-    assert reloaded == commit_data
+    path = tmp_path / "metadata.json"
+    metadata.save(path)
+    reloaded = CgContributionCommitMetadata.load(path)
+    assert reloaded == metadata
 
 
-def test_commit_data_contribution_id_and_prev_version() -> None:
-    commit_data = CgContributionCommitData(
-            contribution=redact_commit_contribution(_make_contribution(public_handle="the-handle", version=5)),
-        )
-    assert commit_data.contribution_id == "the-handle"
-    assert commit_data.prev_version == 5
-
-
-def test_commit_data_cover_fields_default_to_none() -> None:
-    commit_data = CgContributionCommitData(contribution=redact_commit_contribution(_make_contribution()))
-    assert commit_data.cover_binary_id is None
-    assert commit_data.cover_binary_hash is None
+def test_commit_metadata_cover_fields_default_to_none() -> None:
+    metadata = CgContributionCommitMetadata(contribution_id="the-handle", version=5)
+    assert metadata.cover_binary_id is None
+    assert metadata.cover_binary_hash is None
 
 
 def test_redact_nulls_all_content_and_flags_including_cover_binary_id() -> None:
-    """cover_binary_id is tracked as its own explicit CgContributionCommitData field instead (see
-       manager._materialize_view)--the embedded CgContribution is redacted with no exceptions."""
+    """cover_binary_id is tracked as its own explicit `CgContributionCommitMetadata` field (git
+       trailer) instead--the embedded `CgContribution` is redacted with no exceptions."""
     original = _make_contribution(cover_binary_id=555)
     redacted = redact_commit_contribution(original)
 

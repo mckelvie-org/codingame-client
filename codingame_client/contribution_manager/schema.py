@@ -1,22 +1,16 @@
-"""The two working-directory manifest files that aren't a `CgContributionCommitData`
-   (`codingame_client.contribution_manager.contribution_commit_data`):
+"""The working-directory root's own manifest (`contribution.json`) and the per-view content
+   manifest inside `data/` (`contribution-data.json`):
 
-   - `contribution.json` (`CgContributionIdentity`): global identity, lives only at the working
-     directory's own root (a sibling of `data/`, never inside it). Never part of any materialized
-     view--not propagated to `.meta/last_committed/` or `.meta/merge/local/`, never diffed, never
-     touched by merge machinery. Its presence is what identifies a directory as a contribution
-     working directory at all; most commands (especially the merge state machine) only need this
-     file to be valid, never `contribution-data.json`.
+   - `contribution.json` (`CgContributionIdentity`): global identity plus the (effectively
+     constant, once decided) location of this working directory's git-dir--see
+     `codingame_client.contribution_manager.manager`'s module docstring for the `--git-dir`/
+     `--work-tree` layout this supports. Lives only at the working directory's own root (a sibling
+     of `data/`, never inside it, and never itself git-tracked as part of `data/`'s content). Its
+     presence is what identifies a directory as a contribution working directory at all.
 
-   - `contribution-data.json` (`CgContributionView`): the actual per-view materialized content,
-     inside a view's `data/` subdirectory (see
-     `codingame_client.contribution_manager.layout.DATA_SUBDIR_NAME`)--present in every
-     materialized view: the working directory's own `data/`, `.meta/last_committed/data/`,
-     `.meta/remote/data/`, and `.meta/merge/local/data/`. Fully diffable, ordinary JSON--if it
-     conflicts during a merge, it gets `diff3` conflict markers like any other text file, same as
-     everything else; that's safe specifically because `contribution.json` lives outside `data/`
-     entirely, so nothing that needs to keep working mid-merge (the merge state machine itself)
-     depends on this file being valid JSON.
+   - `contribution-data.json` (`CgContributionView`): the actual content manifest, inside `data/`
+     (see `codingame_client.contribution_manager.layout.DATA_SUBDIR_NAME`)--part of `data/`'s
+     ordinary git-tracked content, diffed/merged by real git like everything else there.
 """
 
 from __future__ import annotations
@@ -59,17 +53,30 @@ class CgContributionIdentity(JSONWizardX):
        `CONTRIBUTION_SCHEMA_VERSION`."""
 
     contribution_handle: CgContributionId
-    """The opaque contribution ID (`CgContribution.public_handle`) this working directory tracks."""
+    """The opaque contribution ID (`CgContribution.public_handle`) this working directory tracks.
+       The one fact rehydration (see `CgContributionManager.import_`) actually needs--everything
+       else about prior git history is either present (git-dir found where recorded) or, if not,
+       deliberately not reconstructed, just re-fetched fresh."""
 
+    # `extra_data` is deliberately the first field with a default, same rationale as
+    # `CgContributionView.extra_data` below: dataclass_wizard 1.0.0 mis-binds any defaulted field
+    # positioned immediately before it (silently, no error) to the CatchAll's own value.
     extra_data: CatchAll = field(default_factory=dict)
+
+    git_dir_in_data: bool = False
+    """Where this working directory's git-dir lives, decided once at creation time and never
+       re-derived afterward (so a git project appearing around this directory *after* creation
+       can't cause the git-dir location to be miscomputed for a repo that already exists at a
+       fixed spot): `True` -> nested inside `data/` (at `data/.meta/.contribution-git/`, chosen
+       when nothing else was already tracking this location); `False` -> external, at
+       `<contribution_dir>/.meta/.contribution-git/` (chosen when this directory was already
+       inside another git repository at creation time). See `manager`'s module docstring."""
 
 
 @dataclass
 class CgContributionView(JSONWizardX):
-    """The `contribution-data.json` manifest: the materialized content of one view of a
-       contribution (the working directory's own local edits, `.meta/last_committed/`'s cached
-       base, or a `.meta/merge/` snapshot)--everything needed to `commit()` this view, or to
-       compare it against another view.
+    """The `contribution-data.json` manifest: the content of `data/`--everything needed to
+       `commit()` it, or to compare it against `main`/`server` at any other commit via `git diff`.
 
        `data` is a working version of `CgContributionData`, with several fields deliberately kept
        always-empty by convention (not schema-enforced) because their real content lives in

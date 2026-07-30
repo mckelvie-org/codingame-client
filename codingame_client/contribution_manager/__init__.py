@@ -1,33 +1,41 @@
-"""Local working-directory management for CodinGame contributions (puzzles)--analogous to a git
-   working directory backed by a remote repo.
+"""Local working-directory management for CodinGame contributions (puzzles)--a real git working
+   directory (`data/`), backed by a remote server rather than a git remote.
 
-   See `CgContributionManager` for `import_`/`commit`/`rebase`/`merge_start`/`merge_continue`/
-   `merge_abort`/`merge_discard_local`/`merge_discard_server`/`revert`; `codingame_client.
+   See `CgContributionManager` for `import_`/`commit`/`rebase`/`fetch`/`merge_start`/
+   `merge_continue`/`merge_abort`/`merge_discard_local`/`merge_discard_server`/`revert`--its module
+   docstring covers the `main`/`server`/`version-data` branch design in full; `codingame_client.
    contribution_manager.schema` for the working directory's own manifest files
    (`CgContributionIdentity`/`CgContributionView`); `codingame_client.contribution_manager.
-   contribution_commit_data` for `CgContributionCommitData` (remote commit metadata present in
-   server-originated views); `codingame_client.contribution_manager.tree_diff` for 2-way/3-way
-   directory comparison; `codingame_client.contribution_manager.merge_tools` for external
-   diff/merge tool integration; and `codingame_client.contribution_manager.resolver` for how a
-   contribution directory is located.
+   contribution_commit_data` for `CgContributionCommitMetadata` (the git-trailer-backed remote
+   commit metadata) and `redact_commit_contribution`; `codingame_client.contribution_manager.
+   git_repo` for the low-level git plumbing wrapper; and `codingame_client.contribution_manager.
+   resolver` for how a contribution directory is located.
 """
 
 from __future__ import annotations
 
 from .contribution_commit_data import (
     CONTRIBUTION_COMMIT_DATA_FILE_NAME,
-    CgContributionCommitData,
+    CgContributionCommitMetadata,
     redact_commit_contribution,
 )
+from .git_repo import CgGitError, CgGitRepo, init_repo, is_inside_existing_repo
 from .layout import (
     COVER_IMAGE_FILE_NAME,
     DATA_SUBDIR_NAME,
-    LAST_COMMITTED_SUBDIR_NAME,
-    MERGE_LOCAL_SUBDIR_NAME,
-    MERGE_SUBDIR_NAME,
+    GIT_METADATA_SUBDIR_NAME,
+    GITIGNORE_FILE_NAME,
+    MAIN_BRANCH_NAME,
     META_SUBDIR_NAME,
-    REMOTE_SUBDIR_NAME,
+    SERVER_BRANCH_NAME,
+    SERVER_TAG_PREFIX,
     SOLUTION_FILE_NAME,
+    TRAILER_CONTRIBUTION_ID,
+    TRAILER_COVER_BINARY_HASH,
+    TRAILER_COVER_BINARY_ID,
+    TRAILER_VERSION,
+    VERSION_DATA_BRANCH_NAME,
+    VERSION_DATA_TAG_PREFIX,
 )
 from .manager import (
     CONSTRAINTS_FILE_NAME,
@@ -40,12 +48,6 @@ from .manager import (
     CgMergeStartResult,
     CgMergeStartStatus,
     CgRebaseStatus,
-)
-from .merge_tools import (
-    DEFAULT_MERGE_TOOL,
-    MERGE_TOOL_COMMANDS,
-    CgMergeToolNotFoundError,
-    launch_merge_tool,
 )
 from .resolver import (
     CG_CONTRIBUTION_DIR_ENV_VAR,
@@ -73,17 +75,6 @@ from .test_cases_dir import (
     normalize_test_title,
     renormalize_test_case_dirs,
 )
-from .tree_diff import (
-    ThreeWayEntry,
-    TwoWayEntry,
-    compute_diff3_merge,
-    diff_three_trees,
-    diff_two_trees,
-    looks_like_text,
-    read_view_files,
-    render_three_way_diff,
-    render_two_way_diff,
-)
 
 __all__ = [
     "CgContributionManager",
@@ -96,7 +87,7 @@ __all__ = [
     "CONTRIBUTION_IDENTITY_FILE_NAME",
     "CONTRIBUTION_DATA_FILE_NAME",
     "CONTRIBUTION_SCHEMA_VERSION",
-    "CgContributionCommitData",
+    "CgContributionCommitMetadata",
     "CONTRIBUTION_COMMIT_DATA_FILE_NAME",
     "redact_commit_contribution",
     "STATEMENT_FILE_NAME",
@@ -107,11 +98,22 @@ __all__ = [
     "SOLUTION_FILE_NAME",
     "COVER_IMAGE_FILE_NAME",
     "DATA_SUBDIR_NAME",
-    "LAST_COMMITTED_SUBDIR_NAME",
-    "REMOTE_SUBDIR_NAME",
     "META_SUBDIR_NAME",
-    "MERGE_SUBDIR_NAME",
-    "MERGE_LOCAL_SUBDIR_NAME",
+    "GIT_METADATA_SUBDIR_NAME",
+    "GITIGNORE_FILE_NAME",
+    "MAIN_BRANCH_NAME",
+    "SERVER_BRANCH_NAME",
+    "VERSION_DATA_BRANCH_NAME",
+    "SERVER_TAG_PREFIX",
+    "VERSION_DATA_TAG_PREFIX",
+    "TRAILER_CONTRIBUTION_ID",
+    "TRAILER_VERSION",
+    "TRAILER_COVER_BINARY_ID",
+    "TRAILER_COVER_BINARY_HASH",
+    "CgGitError",
+    "CgGitRepo",
+    "init_repo",
+    "is_inside_existing_repo",
     "CgContributionDirNotFoundError",
     "find_contribution_dir",
     "resolve_contribution_dir",
@@ -127,17 +129,4 @@ __all__ = [
     "import_test_cases",
     "commit_test_cases",
     "renormalize_test_case_dirs",
-    "TwoWayEntry",
-    "ThreeWayEntry",
-    "diff_two_trees",
-    "diff_three_trees",
-    "looks_like_text",
-    "read_view_files",
-    "render_two_way_diff",
-    "render_three_way_diff",
-    "compute_diff3_merge",
-    "DEFAULT_MERGE_TOOL",
-    "MERGE_TOOL_COMMANDS",
-    "CgMergeToolNotFoundError",
-    "launch_merge_tool",
 ]

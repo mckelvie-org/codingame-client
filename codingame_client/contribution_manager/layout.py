@@ -1,8 +1,7 @@
-"""Filename/directory-name constants for a contribution working directory's on-disk layout,
-   shared across `codingame_client.contribution_manager` submodules. Kept separate from
-   `manager.py` (which owns the logic that uses these) specifically to avoid a circular import:
-   `tree_diff.py` needs some of these names, and `manager.py` needs `tree_diff.py`'s comparison
-   functions for the merge state machine.
+"""Filename/directory-name constants for a contribution working directory's on-disk layout, plus
+   the git branch/tag/trailer naming for the git repo backing `data/` (see
+   `codingame_client.contribution_manager.git_repo`/`manager`)--shared across
+   `codingame_client.contribution_manager` submodules.
 """
 
 from __future__ import annotations
@@ -16,11 +15,18 @@ __all__ = [
     "SOLUTION_FILE_NAME",
     "COVER_IMAGE_FILE_NAME",
     "DATA_SUBDIR_NAME",
-    "LAST_COMMITTED_SUBDIR_NAME",
-    "REMOTE_SUBDIR_NAME",
     "META_SUBDIR_NAME",
-    "MERGE_SUBDIR_NAME",
-    "MERGE_LOCAL_SUBDIR_NAME",
+    "GIT_METADATA_SUBDIR_NAME",
+    "GITIGNORE_FILE_NAME",
+    "MAIN_BRANCH_NAME",
+    "SERVER_BRANCH_NAME",
+    "VERSION_DATA_BRANCH_NAME",
+    "SERVER_TAG_PREFIX",
+    "VERSION_DATA_TAG_PREFIX",
+    "TRAILER_CONTRIBUTION_ID",
+    "TRAILER_VERSION",
+    "TRAILER_COVER_BINARY_ID",
+    "TRAILER_COVER_BINARY_HASH",
 ]
 
 STATEMENT_FILE_NAME = "statement.cgmd"
@@ -30,45 +36,61 @@ CONSTRAINTS_FILE_NAME = "constraints.cgmd"
 STUB_GENERATOR_FILE_NAME = "stub_generator.cgstub"
 
 SOLUTION_FILE_NAME = "solution.src"
-"""The one real solution file, in every materialized view, regardless of language--never varies.
-   Deliberately not `.txt`: editors that infer syntax highlighting from a shebang line (e.g. VS
-   Code) only bother for extensions they don't already recognize as plain text--`.txt` forces
-   plain text with no highlighting, `.src` lets the shebang win. A convenience symlink
-   `solution.<ext>` -> `data/solution.src` is additionally maintained at the working directory's
-   own root (never inside `data/`, never in any view under `.meta/`) for the common case where the
+"""The one real solution file--never varies. Deliberately not `.txt`: editors that infer syntax
+   highlighting from a shebang line (e.g. VS Code) only bother for extensions they don't already
+   recognize as plain text--`.txt` forces plain text with no highlighting, `.src` lets the shebang
+   win. A convenience symlink `solution.<ext>` -> `data/solution.src` is additionally maintained
+   at the working directory's own root (never inside `data/`) for the common case where the
    language *is* known; it's disposable/regeneratable."""
 
 COVER_IMAGE_FILE_NAME = "cover.png"
 
 DATA_SUBDIR_NAME = "data"
-"""Every materialized view's actual diffable content (sidecar files, `solution.src`, `cover.png`,
-   `tests/`, `contribution-data.json`) lives under a `data/` subdirectory of the view's root--never
-   directly in the root itself. This keeps `data/` *purely* diffable content with no exceptions
-   (nothing to exclude--see `tree_diff.py`): the view root itself is reserved for whatever
-   non-diffable bookkeeping is specific to that kind of view (`contribution.json` for the working
-   directory root, `contribution-version-data.json` for `.meta/last_committed/`/`.meta/remote/`,
-   the `solution.<ext>` convenience symlink for the working directory root)--or nothing at all, for
-   `.meta/merge/local/`, which has no bookkeeping file of its own."""
-
-LAST_COMMITTED_SUBDIR_NAME = "last_committed"
-"""Cached base (last-synced) materialized view, nested under `.meta/` (i.e.
-   `.meta/last_committed/`)--internal bookkeeping, not something a user edits directly."""
-
-REMOTE_SUBDIR_NAME = "remote"
-"""Cached current-server-state materialized view, nested under `.meta/` (i.e. `.meta/remote/`)--
-   refreshed by `cg contribution fetch`/`rebase`/`merge start`, and by `diff --remote` unless
-   `--cached` is given. Persistent (unlike the old merge-only `.meta/merge/base|remote/` copies it
-   replaces) so it can be inspected/diffed without a merge in progress, and frozen for the
-   duration of any merge (nothing may refresh it while one is--see
-   `CgContributionManager.merge_in_progress`)."""
+"""The actual contribution content (sidecar files, `solution.src`, `cover.png`, `tests/`,
+   `contribution-data.json`) lives under a `data/` subdirectory of the working directory root--
+   this is also the git working tree for the `main` branch (see `git_repo`/`manager`). The working
+   directory root itself holds only `contribution.json` (identity), the `solution.<ext>`
+   convenience symlink, and `.meta/` (bookkeeping)."""
 
 META_SUBDIR_NAME = ".meta"
-"""Container for internal, always-gitignored bookkeeping state: `last_committed/` (the cached
-   base), `remote/` (the cached current server state), and `merge/` (present only while a merge
-   is in progress)."""
+"""Container for internal bookkeeping--specifically `.contribution-git/` (see
+   `GIT_METADATA_SUBDIR_NAME`), when this working directory's git-dir lives outside `data/` (see
+   `manager.CgContributionManager.git_dir`). Lives as a sibling of `data/` in that case, or nested
+   inside `data/` (i.e. `data/.meta/`) when the git-dir lives *inside* `data/` instead--either way,
+   always paired with a `.gitignore` (see `GITIGNORE_FILE_NAME`) in its immediate parent, so it's
+   never accidentally picked up by whatever project ends up tracking `data/`."""
 
-MERGE_SUBDIR_NAME = "merge"
-"""Presence of `.meta/merge/` indicates a merge is in progress; see
-   `CgContributionManager.merge_start`/`merge_continue`/`merge_abort`."""
+GIT_METADATA_SUBDIR_NAME = ".contribution-git"
+"""Name of the actual git-dir directory (objects/refs/HEAD/index/config) under `META_SUBDIR_NAME`.
+   Deliberately not named `.git`--see `manager`'s module docstring for why nothing inside `data/`
+   may ever carry a literal `.git` marker."""
 
-MERGE_LOCAL_SUBDIR_NAME = "local"
+GITIGNORE_FILE_NAME = ".gitignore"
+"""Written (containing just `.meta/`) at creation time, in whichever directory directly contains
+   `META_SUBDIR_NAME`, so `.meta/`'s contents (our own internal git plumbing state) can never end
+   up tracked by whatever outer project comes to track the rest of that directory, now or later."""
+
+MAIN_BRANCH_NAME = "main"
+"""The user's own working line--see `manager`'s module docstring."""
+
+SERVER_BRANCH_NAME = "server"
+"""Mirrors known server state--see `manager`'s module docstring. Its tip is always "the current
+   remote"; `git merge-base main server` is always "the last synced point"."""
+
+VERSION_DATA_BRANCH_NAME = "version-data"
+"""Orphan branch, one commit per server version, holding only `contribution-version-data.json`--
+   see `contribution_commit_data`."""
+
+SERVER_TAG_PREFIX = "server."
+"""`server.<version>` tags a `SERVER_BRANCH_NAME` commit by the server version it represents."""
+
+VERSION_DATA_TAG_PREFIX = "version-data."
+"""`version-data.<version>` tags a `VERSION_DATA_BRANCH_NAME` commit the same way."""
+
+TRAILER_CONTRIBUTION_ID = "Cg-Contribution-Id"
+TRAILER_VERSION = "Cg-Version"
+TRAILER_COVER_BINARY_ID = "Cg-Cover-Binary-Id"
+TRAILER_COVER_BINARY_HASH = "Cg-Cover-Binary-Hash"
+"""Git trailer keys on every `SERVER_BRANCH_NAME` commit--see
+   `contribution_commit_data.CgContributionCommitMetadata`, which is the single canonical shape
+   these are built from/parsed back into."""

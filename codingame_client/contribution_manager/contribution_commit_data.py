@@ -1,23 +1,19 @@
-"""`contribution-version-data.json` (`CgContributionCommitData`): remote commit metadata for a
-   materialized view that originated from the server (`findContribution`/`updateContribution`)--
-   `.meta/last_committed/` and `.meta/remote/`. Lives at the *view's root*, as a sibling of `data/`
-   (see `codingame_client.contribution_manager.layout.DATA_SUBDIR_NAME`)--never inside `data/`
-   itself, and never present in the working directory root or in `.meta/merge/local/` (a plain
-   snapshot of local edits, not something the server ever returned, so it has no commit data of
-   its own).
+"""Remote commit metadata for the git repo backing `data/` (see `manager`/`git_repo`)--split two
+   ways, both built from a `CgContribution` at the moment it's fetched/pushed:
 
-   Deliberately just the real `CgContribution` type--rather than a parallel schema tracking only
-   the handful of fields (`public_handle`, `last_version.version`, `active_version`) actually
-   consumed today--so nothing needs to change here if a future need for some other field shows up.
-   It contains *only* remote commit metadata, never diff-relevant content: every field that maps
-   onto the sibling `data/contribution-data.json` (see
-   `codingame_client.contribution_manager.manager.CgContributionView`)--including
-   `cover_binary_id`, tracked here instead as its own explicit field--is redacted to an empty
-   placeholder before saving.
+   - `CgContributionCommitMetadata`: the handful of fast facts (contribution ID, version, cover
+     binary ID/hash) needed often and cheaply--written as git trailers on every `server`-branch
+     commit (see `codingame_client.contribution_manager.layout`'s `TRAILER_*` constants), so a
+     `server`-branch commit is self-describing without needing to look anywhere else.
 
-   Excluded from diffing entirely by construction--diffing only ever looks at a view's `data/`
-   subdirectory (see `tree_diff`), and this file lives outside it--it's bookkeeping, not diffable
-   content, and not user-editable.
+   - `contribution-version-data.json` (built via `redact_commit_contribution`): the *complete*
+     redacted `CgContribution`, committed onto the `version-data` orphan branch, one commit per
+     server version--kept as a full snapshot rather than a narrower schema (deliberately, same
+     rationale as before this was git-backed) so nothing here needs to change if some future need
+     for another field shows up. Every field that's duplicated in `CgContributionView`/
+     `contribution-data.json`--the diffable content living in `data/`--is redacted to an empty
+     placeholder first, including `cover_binary_id` (tracked instead as its own
+     `CgContributionCommitMetadata` field/trailer).
 """
 
 from __future__ import annotations
@@ -30,14 +26,13 @@ from ..common.dataclass_wizard_x import CatchAll, JSONWizardX
 
 __all__ = [
     "CONTRIBUTION_COMMIT_DATA_FILE_NAME",
-    "CgContributionCommitData",
+    "CgContributionCommitMetadata",
     "redact_commit_contribution",
 ]
 
 CONTRIBUTION_COMMIT_DATA_FILE_NAME = "contribution-version-data.json"
-"""Name of the remote-commit-metadata manifest file, at the root of any materialized view that
-   originated from the server--a sibling of that view's `data/` subdirectory (which holds the
-   corresponding `contribution-data.json`), never inside it."""
+"""Name of the single file committed onto the `version-data` branch (see
+   `codingame_client.contribution_manager.layout.VERSION_DATA_BRANCH_NAME`) at each server version."""
 
 
 def redact_commit_contribution(contribution: CgContribution) -> CgContribution:
@@ -45,7 +40,7 @@ def redact_commit_contribution(contribution: CgContribution) -> CgContribution:
        `CgContributionView`/`contribution-data.json` redacted to an empty placeholder--`draft`,
        `ready_for_moderation`, `contribution_type` (top-level), and `last_version.data` (the full
        content payload, including `cover_binary_id`--tracked separately as
-       `CgContributionCommitData.cover_binary_id` instead)--plus `last_version.statement_html`,
+       `CgContributionCommitMetadata.cover_binary_id` instead)--plus `last_version.statement_html`,
        which is never needed at all (purely derivative, see its own docstring)."""
     cleaned_version = dataclasses.replace(
             contribution.last_version,
@@ -64,36 +59,31 @@ def redact_commit_contribution(contribution: CgContribution) -> CgContribution:
 
 
 @dataclass
-class CgContributionCommitData(JSONWizardX):
-    """The `contribution-version-data.json` manifest: remote commit metadata only--a redacted
-       `CgContribution` (see `redact_commit_contribution`), the cover image's binary ID as of this
-       commit, and the locally-computed cover-image content hash (the source of truth for
-       cover-image identity against the *local* working copy--see `CgContribution.cover_binary_id`
-       for why the ID alone isn't enough there)."""
+class CgContributionCommitMetadata(JSONWizardX):
+    """The four fast facts about a `server`-branch commit--built from a `CgContribution` at fetch/
+       push time, and the single canonical shape both directions of git trailer conversion
+       (`layout.TRAILER_*` keys) go through, so there's one definition instead of hand-rolling
+       trailer keys ad hoc at each call site."""
 
-    contribution: CgContribution
-    """The server's `CgContribution`, redacted--see `redact_commit_contribution`. Use
-       `.public_handle` for the contribution ID and `.last_version.version` for the version
-       number this commit data is for."""
-
+    # `extra_data` is deliberately the first field with a default: dataclass_wizard 1.0.0 mis-binds
+    # any defaulted field positioned immediately before it (silently, no error) to the CatchAll's
+    # own value. Keeping it first among the defaulted fields makes that impossible.
     extra_data: CatchAll = field(default_factory=dict)
 
+    contribution_id: CgContributionId = ""
+    """The opaque contribution ID (`CgContribution.public_handle`)."""
+
+    version: int = 0
+    """The server version number--passed to `updateContribution`'s idempotency check on the next
+       `commit()`."""
+
     cover_binary_id: int | None = None
-    """The binary ID of the cover image as of this commit (`None` if it has none). Tracked here
-       rather than left in `contribution.last_version.data` (which is otherwise fully redacted)
-       since it's remote commit metadata, not diffable content--the same category as
-       `public_handle`/`version`, just specific to the cover image."""
+    """The binary ID of the cover image as of this commit (`None` if it has none)."""
 
     cover_binary_hash: str | None = None
     """The SHA256 (hex) content hash of the cover image identified by `cover_binary_id` (`None` if
-       there is none)."""
-
-    @property
-    def contribution_id(self) -> CgContributionId:
-        """The opaque contribution ID (`CgContribution.public_handle`) this commit data is for."""
-        return self.contribution.public_handle
-
-    @property
-    def prev_version(self) -> int:
-        """The version number to pass to `updateContribution`'s idempotency check."""
-        return self.contribution.last_version.version
+       there is none)--the source of truth for cover-image identity against the *local* working
+       copy (see `CgContribution.cover_binary_id` for why the ID alone isn't enough there). Always
+       computed by the caller (from the actual cover bytes) alongside `redact_commit_contribution`,
+       not derivable from a `CgContribution` alone--so there's no `from_contribution()` convenience
+       constructor here; callers build this directly with all four fields at hand."""
