@@ -17,6 +17,7 @@ from codingame_client.contribution_manager.test_cases_dir import (
     CgTestCaseFileMeta,
     commit_test_cases,
     import_test_cases,
+    list_local_test_cases,
     normalize_test_title,
     renormalize_test_case_dirs,
 )
@@ -257,3 +258,65 @@ def test_renormalize_noop_on_missing_or_empty_dir(tmp_path: Path) -> None:
     empty.mkdir()
     renormalize_test_case_dirs(empty)  # must not raise
     assert list(empty.iterdir()) == []
+
+
+# --- list_local_test_cases ---------------------------------------------------------------------
+
+
+def test_list_local_missing_tests_dir_returns_empty_list(tmp_path: Path) -> None:
+    assert list_local_test_cases(tmp_path / "does-not-exist") == []
+
+
+def test_list_local_returns_one_entry_per_side(tmp_path: Path) -> None:
+    tests_dir = tmp_path / "tests"
+    local_tc = _tc("Case A", "in-local\n", "out-local\n", is_test=True, is_validator=False)
+    validator_tc = _tc("Case A", "in-validator\n", "out-validator\n", is_test=False, is_validator=True)
+    import_test_cases([local_tc, validator_tc], tests_dir)
+
+    entries = list_local_test_cases(tests_dir)
+
+    assert [(e.ordinal, e.side) for e in entries] == [("01", "local"), ("01", "validator")]
+    assert entries[0].title == "Case A"
+    assert entries[0].input_text == "in-local\n"
+    assert entries[0].output_text == "out-local\n"
+    assert entries[0].input_file.is_file()
+    assert entries[1].input_text == "in-validator\n"
+
+
+def test_list_local_omits_missing_side(tmp_path: Path) -> None:
+    tests_dir = tmp_path / "tests"
+    local_only = _tc("Local only", "in\n", "out\n", is_test=True, is_validator=False)
+    import_test_cases([local_only], tests_dir)
+
+    entries = list_local_test_cases(tests_dir)
+
+    assert len(entries) == 1
+    assert entries[0].side == "local"
+
+
+def test_list_local_output_file_can_be_overwritten_and_reread(tmp_path: Path) -> None:
+    tests_dir = tmp_path / "tests"
+    local_tc = _tc("Case A", "in\n", "stale\n", is_test=True, is_validator=False)
+    import_test_cases([local_tc], tests_dir)
+    entries = list_local_test_cases(tests_dir)
+
+    entries[0].output_file.write_text("fresh\n", encoding="utf-8")
+
+    reread = list_local_test_cases(tests_dir)
+    assert reread[0].output_text == "fresh\n"
+
+
+def test_list_local_natural_sorts_ordinals(tmp_path: Path) -> None:
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    for name, title in [("1", "First"), ("2a", "Inserted"), ("10", "Tenth")]:
+        d = tests_dir / name / normalize_test_title(title)
+        d.mkdir(parents=True)
+        CgTestCaseFileMeta(title=title).save(d / TEST_META_FILE_NAME)
+        (d / LOCAL_SUBDIR_NAME).mkdir()
+        (d / LOCAL_SUBDIR_NAME / "input.txt").write_text("in\n")
+        (d / LOCAL_SUBDIR_NAME / "output.txt").write_text("out\n")
+
+    entries = list_local_test_cases(tests_dir)
+
+    assert [e.title for e in entries] == ["First", "Inserted", "Tenth"]

@@ -12,10 +12,13 @@ import pytest
 
 from codingame_client.config.cg_config import CgConfigData
 from codingame_client.config.resolver import CgConfig
+from codingame_client.contribution_manager.layout import DATA_SUBDIR_NAME, SOLUTION_FILE_NAME
 from codingame_client.contribution_manager.resolver import (
     CG_CONTRIBUTION_DIR_ENV_VAR,
+    CgContributionDirInferenceError,
     CgContributionDirNotFoundError,
     find_contribution_dir,
+    infer_contribution_dir,
     resolve_contribution_dir,
 )
 from codingame_client.contribution_manager.schema import CONTRIBUTION_IDENTITY_FILE_NAME
@@ -114,3 +117,52 @@ def test_resolve_allow_default_falls_back_to_start_dir(tmp_path: Path) -> None:
 def test_resolve_allow_default_still_prefers_a_real_match(tmp_path: Path) -> None:
     (tmp_path / CONTRIBUTION_IDENTITY_FILE_NAME).write_text("{}")
     assert resolve_contribution_dir(start_dir=tmp_path, allow_default=True) == tmp_path
+
+
+# --- infer_contribution_dir -------------------------------------------------------------------
+
+
+def _make_contribution_dir(root: Path) -> Path:
+    data_dir = root / DATA_SUBDIR_NAME
+    data_dir.mkdir(parents=True)
+    (root / CONTRIBUTION_IDENTITY_FILE_NAME).write_text("{}")
+    (data_dir / SOLUTION_FILE_NAME).write_text("print('hi')\n")
+    return root
+
+
+def test_infer_from_solution_src_directly(tmp_path: Path) -> None:
+    contribution_dir = _make_contribution_dir(tmp_path / "contribution")
+    assert infer_contribution_dir(contribution_dir / DATA_SUBDIR_NAME / SOLUTION_FILE_NAME) == contribution_dir
+
+
+def test_infer_from_symlink_inside_contribution_dir(tmp_path: Path) -> None:
+    contribution_dir = _make_contribution_dir(tmp_path / "contribution")
+    link = contribution_dir / "solution.py"
+    link.symlink_to(Path(DATA_SUBDIR_NAME) / SOLUTION_FILE_NAME)
+    assert infer_contribution_dir(link) == contribution_dir
+
+
+def test_infer_from_symlink_entirely_outside_the_contribution_dir(tmp_path: Path) -> None:
+    contribution_dir = _make_contribution_dir(tmp_path / "contribution")
+    elsewhere = tmp_path / "some" / "unrelated" / "place"
+    elsewhere.mkdir(parents=True)
+    link = elsewhere / "my_solution.py"
+    link.symlink_to(contribution_dir / DATA_SUBDIR_NAME / SOLUTION_FILE_NAME)
+    assert infer_contribution_dir(link) == contribution_dir
+
+
+def test_infer_refuses_a_file_not_named_solution_src(tmp_path: Path) -> None:
+    contribution_dir = _make_contribution_dir(tmp_path / "contribution")
+    other_file = contribution_dir / DATA_SUBDIR_NAME / "not-the-solution.txt"
+    other_file.write_text("irrelevant")
+    with pytest.raises(CgContributionDirInferenceError):
+        infer_contribution_dir(other_file)
+
+
+def test_infer_refuses_without_contribution_json_at_the_inferred_root(tmp_path: Path) -> None:
+    data_dir = tmp_path / "not-a-contribution" / DATA_SUBDIR_NAME
+    data_dir.mkdir(parents=True)
+    solution_file = data_dir / SOLUTION_FILE_NAME
+    solution_file.write_text("print('hi')\n")
+    with pytest.raises(CgContributionDirInferenceError):
+        infer_contribution_dir(solution_file)

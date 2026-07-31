@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .layout import DATA_SUBDIR_NAME, SOLUTION_FILE_NAME
 from .schema import CONTRIBUTION_IDENTITY_FILE_NAME
 
 if TYPE_CHECKING:
@@ -19,8 +20,10 @@ __all__ = [
     "CG_CONTRIBUTION_DIR_ENV_VAR",
     "DEFAULT_CONTRIBUTION_SUBDIR_NAME",
     "CgContributionDirNotFoundError",
+    "CgContributionDirInferenceError",
     "find_contribution_dir",
     "resolve_contribution_dir",
+    "infer_contribution_dir",
 ]
 
 CG_CONTRIBUTION_DIR_ENV_VAR = "CG_CONTRIBUTION_DIR"
@@ -113,3 +116,35 @@ def resolve_contribution_dir(
     if allow_default:
         return Path(start_dir).resolve() if start_dir is not None else Path.cwd()
     raise CgContributionDirNotFoundError()
+
+
+class CgContributionDirInferenceError(Exception):
+    """Raised by `infer_contribution_dir` when `target_file` doesn't resolve into a contribution
+       working directory."""
+
+
+def infer_contribution_dir(target_file: Path | str) -> Path:
+    """Infer a contribution working directory's root from a solution file somewhere within it--
+       see `codingame_client.puzzle_manager.resolver.infer_puzzle_dir`'s docstring for the full
+       rationale (identical here, just `contribution.json` instead of `puzzle.json`): the only
+       two things ever promised about `target_file` are that a debugger's breakpoints bind to
+       whatever path was actually open in the editor, and that resolving every symlink in it
+       always eventually lands on `data/solution.src`--so this isn't a search, it's two fixed
+       path segments up from the fully-resolved `target_file`.
+
+    Raises:
+        CgContributionDirInferenceError: if `target_file`, once fully resolved, isn't
+                                          `.../data/solution.src`, or `contribution.json` isn't
+                                          present at the inferred root.
+    """
+    resolved = Path(target_file).resolve()
+    if resolved.name != SOLUTION_FILE_NAME or resolved.parent.name != DATA_SUBDIR_NAME:
+        raise CgContributionDirInferenceError(
+                f"{target_file} does not resolve to a {DATA_SUBDIR_NAME}/{SOLUTION_FILE_NAME} "
+                "file--not part of a contribution working directory."
+            )
+    root = resolved.parent.parent
+    if not (root / CONTRIBUTION_IDENTITY_FILE_NAME).is_file():
+        raise CgContributionDirInferenceError(
+                f"{root} has no {CONTRIBUTION_IDENTITY_FILE_NAME}--not a contribution working directory.")
+    return root

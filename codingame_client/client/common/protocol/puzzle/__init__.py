@@ -9,6 +9,7 @@ from ..schema import CgSolutionLanguage
 from .schema import (
     CgFollowingCodingamer,
     CgFollowingPuzzleProgress,
+    CgGeneratedPuzzleSession,
     CgLanguageCertification,
     CgPuzzleMinimalProgress,
     CgPuzzleOfTheWeek,
@@ -16,7 +17,8 @@ from .schema import (
 )
 
 __all__ = [
-    "CgFollowingCodingamer", "CgFollowingPuzzleProgress", "CgLanguageCertification",
-    "CgLastActivityPuzzle", "CgPuzzleFeedback", "CgPuzzleMinimalProgress", "CgPuzzleOfTheWeek",
-    "CgPuzzleTopicNode", "CgSolutionLanguage", "CgSolvedPuzzlesByLanguage",
+    "CgFollowingCodingamer", "CgFollowingPuzzleProgress", "CgGeneratedPuzzleSession",
+    "CgLanguageCertification", "CgLastActivityPuzzle", "CgPuzzleFeedback",
+    "CgPuzzleMinimalProgress", "CgPuzzleOfTheWeek", "CgPuzzleTopicNode", "CgSolutionLanguage",
+    "CgSolvedPuzzlesByLanguage",
 ]

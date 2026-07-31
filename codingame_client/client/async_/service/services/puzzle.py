@@ -11,6 +11,7 @@ from json_data_types import JsonData, JsonDict
 from ....common.protocol.last_activities import CgLastActivityPuzzle
 from ....common.protocol.puzzle import (
     CgFollowingPuzzleProgress,
+    CgGeneratedPuzzleSession,
     CgPuzzleMinimalProgress,
     CgPuzzleOfTheWeek,
     CgSolvedPuzzlesByLanguage,
@@ -228,3 +229,49 @@ class CgAsyncPuzzleService(CgAsyncService):
         raw_puzzle = await self.service_request_to_dict(
                 "findProgressByPrettyId", [pretty_id, codingamer_id])
         return CgLastActivityPuzzle.from_dict(raw_puzzle)
+
+    async def generate_session_from_puzzle_pretty_id(
+                self,
+                puzzle_pretty_id: str,
+                codingamer_id: int | None = None,
+                arg3: bool = False,
+            ) -> str:
+        """Get (or create) the codingamer's test session handle for a puzzle, by the puzzle's
+           pretty ID (e.g. "literary-alfabet-soupe"--see `CgTestSessionPuzzle.pretty_id`).
+
+           This is the API that resolves "which puzzle" into "which test session" before calling
+           `TestSession/startTestSession`--i.e. the entry point for solving a puzzle by pretty ID
+           rather than already having a `test_session_handle` in hand (e.g. from
+           `CgLastActivityPuzzle`). Confirmed live (2026-07-30) to return the *same* handle across
+           repeated calls for the same codingamer/puzzle--i.e. a per-user singleton test session,
+           safely reusable/cacheable rather than needing to be re-derived on every use.
+
+           `arg3`'s purpose is unknown; only observed as `False`.
+
+        Args:
+            puzzle_pretty_id: The puzzle's pretty ID/slug.
+            codingamer_id:    The codingamer to get/create the session for. If not provided,
+                               defaults to the logged-in codingamer's ID.
+            arg3:              Third positional argument to the underlying API call. Purpose
+                               unknown; defaults to False.
+
+        Returns:
+            The test session handle (see `CgAsyncTestSessionService.start_test_session`).
+
+        Raises:
+            CgAuthenticationError:
+                If the session is not authenticated and cannot implicitly login, or if
+                `codingamer_id` is not provided and no codingamer ID can be resolved from the
+                session's credentials.
+            CgAsyncClientHttpError:
+                If a transport error occurs, if the response content could not be decoded at all,
+                if the status code is not 2xx, or if the decoded content is not a dict.
+        """
+        if codingamer_id is None:
+            await self.require_authenticate()
+            codingamer_id = self.client.codingamer_id
+            if codingamer_id is None:
+                raise CgAuthenticationError()
+        raw_result = await self.service_request_to_dict(
+                "generateSessionFromPuzzlePrettyId", [codingamer_id, puzzle_pretty_id, arg3])
+        return CgGeneratedPuzzleSession.from_dict(raw_result).handle

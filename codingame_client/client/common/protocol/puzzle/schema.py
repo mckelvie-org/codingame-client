@@ -285,8 +285,28 @@ class CgFollowingPuzzleProgress(JSONWizardX):
         self._last_activity = CgEpochMillis.upcast(value)
 
 
+@dataclass
+class CgGeneratedPuzzleSession(JSONWizardX):
+    """The response to Puzzle/generateSessionFromPuzzlePrettyId. Confirmed live (2026-07-30):
+       *not* a bare handle string, despite that being all that's actually needed downstream (see
+       `CgAsyncPuzzleService.generate_session_from_puzzle_pretty_id`, which unwraps this to just
+       `handle` for callers)."""
+
+    handle: str
+    """The test session handle--pass to `TestSession/startTestSession`."""
+
+    extra_data: CatchAll = field(default_factory=dict)
+
+    report_ready: bool | None = None
+    """Unclear precise semantics; observed `False` in the only example so far."""
+
+    direct: bool | None = None
+    """Unclear precise semantics; observed `False` in the only example so far--possibly related
+       to `CgTestSession.direct`."""
+
+
 __all__ = [
-    "CgFollowingCodingamer", "CgFollowingPuzzleProgress", "CgLanguageCertification",
-    "CgPuzzleMinimalProgress", "CgPuzzleOfTheWeek",
+    "CgFollowingCodingamer", "CgFollowingPuzzleProgress", "CgGeneratedPuzzleSession",
+    "CgLanguageCertification", "CgPuzzleMinimalProgress", "CgPuzzleOfTheWeek",
     "CgSolvedPuzzlesByLanguage",
 ]

@@ -63,6 +63,11 @@ class CgSettingsData(JSONWizardX):
        directory at the time it's consulted) or absolute; `~` is expanded. See
        `CgSettings.contribution_dir` for the resolved value."""
 
+    puzzle_dir: str | None = None
+    """Default puzzle working directory (see `codingame_client.puzzle_manager`), used when one
+       isn't given explicitly and `CG_PUZZLE_DIR` isn't set. Same resolution rules as
+       `contribution_dir`--see `CgSettings.puzzle_dir` for the resolved value."""
+
 
 @dataclass
 class CgSettings:
@@ -104,6 +109,16 @@ class CgSettings:
             return None
         return Path(self.raw_data.contribution_dir).expanduser().resolve()
 
+    @property
+    def puzzle_dir(self) -> Path | None:
+        """The configured default puzzle working directory, resolved to an absolute path (relative
+           values resolved against the current directory, `~` expanded), or None if not set. Same
+           "no further fallback" contract as `contribution_dir`--see
+           `codingame_client.puzzle_manager.resolver`."""
+        if self.raw_data.puzzle_dir is None:
+            return None
+        return Path(self.raw_data.puzzle_dir).expanduser().resolve()
+
     def save(self) -> None:
         """Write `raw_data` back to `settings_file`."""
         write_settings(self.raw_data, self.settings_file)
@@ -115,6 +130,7 @@ class CgSettings:
             "settingsFile": str(self.settings_file),
             "defaultProfile": self.default_profile,
             "contributionDir": str(self.contribution_dir) if self.contribution_dir is not None else None,
+            "puzzleDir": str(self.puzzle_dir) if self.puzzle_dir is not None else None,
             "rawSettings": self.raw_data.to_dict(),
         }
 

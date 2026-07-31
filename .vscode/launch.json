@@ -1,6 +1,80 @@
 {
   "version": "0.2.0",
+  "inputs": [
+    {
+      "id": "cgPuzzleTestIndex",
+      "type": "pickString",
+      "description": "CG puzzle test case index to run against (regenerate this list after `cg puzzle import`/`repair` downloads a different puzzle's tests)",
+      "options": [
+        { "label": "1: Don Quixote", "value": "1" },
+        { "label": "2: Les Misérables", "value": "2" },
+        { "label": "3: Den grimme ælling", "value": "3" },
+        { "label": "4: Pride and Prejudice", "value": "4" },
+        { "label": "5: Nils Holgerssons underbara resa genom Sverige", "value": "5" },
+        { "label": "6: Die Verwandlung", "value": "6" },
+        { "label": "7: Moby-Dick; or, The Whale", "value": "7" },
+        { "label": "8: Canne al vento", "value": "8" }
+      ]
+    },
+    {
+      "id": "cgContributionOrdinal",
+      "type": "pickString",
+      "description": "CG contribution test case ordinal to run against (regenerate this list after tests/ changes)",
+      "options": [
+        { "label": "01: Problem statement example", "value": "01" },
+        { "label": "02: Up-to-date check and partial rebuild", "value": "02" },
+        { "label": "03: Single rule with no actions", "value": "03" },
+        { "label": "04: Up-to-date ages", "value": "04" },
+        { "label": "05: Multiple required targets", "value": "05" },
+        { "label": "06: No-action intermediates and unused rules", "value": "06" },
+        { "label": "07: Multiple targets with identical prerequisites", "value": "07" },
+        { "label": "08: Built-in macros and comments", "value": "08" },
+        { "label": "09: Multi-target rule with same-age staleness", "value": "09" },
+        { "label": "10: Same target in multiple rules", "value": "10" },
+        { "label": "11: Large partial rebuild", "value": "11" },
+        { "label": "12: Cycle detection", "value": "12" },
+        { "label": "13: Unreachable cycle detection", "value": "13" },
+        { "label": "14: All rebuild features combined", "value": "14" },
+        { "label": "15: Multiple action lines per rule", "value": "15" },
+        { "label": "16: Kitchen sink", "value": "16" }
+      ]
+    },
+    {
+      "id": "cgContributionSide",
+      "type": "pickString",
+      "description": "CG contribution test case side",
+      "options": [
+        "local",
+        "validator"
+      ]
+    }
+  ],
   "configurations": [
+    {
+      "name": "CG Puzzle: Debug solution against test case",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "codingame_client.puzzle_manager.debug",
+      "args": [
+        "${file}",
+        "${input:cgPuzzleTestIndex}"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "CG Contribution: Debug solution against test case",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "codingame_client.contribution_manager.debug",
+      "args": [
+        "${file}",
+        "${input:cgContributionOrdinal}",
+        "${input:cgContributionSide}"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
     {
       "name": "Python: Current File",
       "type": "debugpy",

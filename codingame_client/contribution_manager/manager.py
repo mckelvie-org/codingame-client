@@ -57,8 +57,9 @@ from ..client.common.protocol.contribution import (
     CgPuzzleType,
     CgTestCase,
 )
-from ..client.common.protocol.schema import cg_solution_language_to_extension
+from ..client.common.protocol.schema import CgSolutionLanguage, cg_solution_language_to_extension
 from ..client.common.raw_client import compute_content_hash
+from ..test_runner import DEFAULT_RUN_TIMEOUT_SECONDS, outputs_match, run_solution_locally
 from .contribution_commit_data import (
     CONTRIBUTION_COMMIT_DATA_FILE_NAME,
     CgContributionCommitMetadata,
@@ -94,7 +95,14 @@ from .schema import (
     CgContributionIdentity,
     CgContributionView,
 )
-from .test_cases_dir import TESTS_SUBDIR_NAME, commit_test_cases, import_test_cases, renormalize_test_case_dirs
+from .test_cases_dir import (
+    TESTS_SUBDIR_NAME,
+    CgContributionLocalTestCase,
+    commit_test_cases,
+    import_test_cases,
+    list_local_test_cases,
+    renormalize_test_case_dirs,
+)
 
 __all__ = [
     "STATEMENT_FILE_NAME",
@@ -108,6 +116,8 @@ __all__ = [
     "CgRebaseStatus",
     "CgMergeStartStatus",
     "CgMergeStartResult",
+    "CgContributionLocalTestResult",
+    "CgContributionLocalTestFailedError",
     "CgContributionManager",
 ]
 
@@ -178,6 +188,72 @@ class CgMergeStartResult:
        hand if you want the server's version instead."""
 
 
+@dataclasses.dataclass(frozen=True)
+class CgContributionLocalTestResult:
+    """The outcome of running `data/solution.src` against one local `tests/` test case--see
+       `CgContributionManager.run_local_test`."""
+
+    ordinal: str
+    """The test case's ordinal directory name (see `CgContributionLocalTestCase.ordinal`)."""
+
+    side: str
+    """Either `"local"` or `"validator"`."""
+
+    title: str
+    """The test case's real title."""
+
+    passed: bool
+    """In compare mode: whether the run completed without crashing/timing out and its stdout
+       matched `expected_output`. In update mode: whether the run completed without crashing/
+       timing out at all (a crashed/timed-out run is never used to overwrite `output.txt`--there's
+       nothing good to accept as the new baseline)."""
+
+    updated: bool
+    """Whether `output.txt` was actually overwritten from this run (update mode only--always
+       False in compare mode, and False even in update mode if the run crashed/timed out)."""
+
+    input: str
+    """The test case's input, exactly as fed to the solution's stdin."""
+
+    expected_output: str
+    """Compare mode: the test case's `output.txt` content as read before this run. Update mode:
+       the same content this run just wrote to `output.txt` (i.e. `actual_output`)--so this field
+       always means "whatever `output.txt` reads as immediately after this result", in both
+       modes."""
+
+    actual_output: str
+    """What the solution actually wrote to stdout."""
+
+    stderr: str
+    """What the solution wrote to stderr (not itself a failure condition, but useful context when
+       a test does fail)."""
+
+    timed_out: bool
+    """Whether the run was killed for exceeding its timeout rather than running to completion."""
+
+    returncode: int
+    """The subprocess's exit code (0 means it ran without crashing; meaningless--always -1--when
+       `timed_out` is True, same as `CgLocalRunResult.returncode`). -1 when `exception` is set
+       instead (the run never even got this far)."""
+
+    exception: str | None = None
+    """Set by a caller (not by `run_local_test` itself, which raises rather than returning a
+       result if something goes genuinely wrong) when a batch runner catches and continues past an
+       unexpected exception for this one test case--see `cg contribution play-local`."""
+
+
+class CgContributionLocalTestFailedError(CgContributionManagerError):
+    """Raised by `CgContributionManager.run_local_test` callers (not by `run_local_test` itself,
+       which reports one test at a time) to summarize a batch where at least one test case failed.
+       Carries every result (not just the failing ones) via `.results`."""
+
+    def __init__(self, results: list[CgContributionLocalTestResult]) -> None:
+        self.results = results
+        failed = [r for r in results if not r.passed]
+        summary = ", ".join(f"{r.ordinal} {r.side} ({r.title})" for r in failed)
+        super().__init__(f"{len(failed)}/{len(results)} local test case(s) failed: {summary}")
+
+
 def _ensure_trailing_newline(text: str) -> str:
     """See `test_cases_dir._ensure_trailing_newline`--same rationale, used here for the other
        sidecar text files (statement.cgmd, solution.src, etc.)."""
@@ -202,15 +278,25 @@ def _read_sidecar(path: Path) -> str | None:
     return path.read_text(encoding="utf-8")
 
 
+def _ordinal_matches(requested: str, actual: str) -> bool:
+    """Whether a user-supplied ordinal (e.g. `"1"`) refers to an on-disk ordinal directory (e.g.
+       `"01"`)--exact string match always counts; if both sides are purely numeric, numeric
+       equality counts too (so zero-padding doesn't have to be typed out), but a non-numeric
+       ordinal like `"05a"` must be typed exactly."""
+    if requested == actual:
+        return True
+    return requested.isdigit() and actual.isdigit() and int(requested) == int(actual)
+
+
 def _refresh_solution_symlink(contribution_dir: Path, solution_language: str | None) -> None:
     """Remove any existing `solution.<ext>` convenience symlink at `contribution_dir`'s root, then
-       recreate one pointing at `data/solution.src` if that file actually exists and
-       `solution_language` maps to a known extension. Never touches `solution.src` itself."""
+       recreate one pointing at `data/solution.src` if `solution_language` maps to a known
+       extension. Never touches `solution.src` itself, and doesn't require it to already exist--
+       `create()` relies on this to still point the user at the right filename/extension even
+       before they've written anything there yet (a dangling symlink until they do)."""
     for path in contribution_dir.glob("solution.*"):
         if path.is_symlink() and path.name != SOLUTION_FILE_NAME:
             path.unlink()
-    if not (contribution_dir / DATA_SUBDIR_NAME / SOLUTION_FILE_NAME).is_file():
-        return
     extension = cg_solution_language_to_extension(solution_language) if solution_language else None
     if extension is None:
         return
@@ -218,6 +304,25 @@ def _refresh_solution_symlink(contribution_dir: Path, solution_language: str | N
     if link_name == SOLUTION_FILE_NAME:
         return
     (contribution_dir / link_name).symlink_to(f"{DATA_SUBDIR_NAME}/{SOLUTION_FILE_NAME}")
+
+
+def _minimal_valid_contribution_data(title: str) -> CgContributionData:
+    """The smallest `CgContributionData` confirmed live to be accepted by `createContribution`--a
+       title-only payload 500s (confirmed live 2026-07-29); the server needs a non-empty
+       statement/difficulty and at least one test/validator pair too, nothing else. Two distinct
+       uses: `create()`'s own local starting scaffold (layers a language-specific solution stub on
+       top--see there), and `push()`'s throwaway, in-memory-only, never-written-to-disk stub
+       contribution for a first push's `createContribution` call (title correct, everything else
+       irrelevant--no cover, no solution--see `push()`'s docstring for why)."""
+    return CgContributionData(
+            title=title,
+            statement="TODO: write the problem statement.",
+            difficulty="easy",
+            test_cases=[
+                    CgTestCase(title="Test 1", test_in="1", test_out="1", is_test=True, is_validator=False, need_validation=True),
+                    CgTestCase(title="Validator 1", test_in="1", test_out="1", is_test=False, is_validator=True, need_validation=True),
+                ],
+        )
 
 
 def _write_meta_gitignore(parent_dir: Path) -> None:
@@ -377,6 +482,10 @@ class CgContributionManager:
     def tests_dir(self) -> Path:
         return self.data_dir / TESTS_SUBDIR_NAME
 
+    @property
+    def solution_file(self) -> Path:
+        return self.data_dir / SOLUTION_FILE_NAME
+
     def _git_dir_for(self, git_dir_in_data: bool) -> Path:
         root = self.data_dir if git_dir_in_data else self.contribution_dir
         return root / META_SUBDIR_NAME / GIT_METADATA_SUBDIR_NAME
@@ -504,14 +613,16 @@ class CgContributionManager:
            plus the corresponding `version-data` commit. Writes `contribution.json` (deciding and
            recording `git_dir_in_data`) if this is a fresh working directory.
 
-           Also doubles as the *rehydration* entry point: if `contribution.json` and `data/`
-           already exist (e.g. from cloning an outer project that tracks them) but the git-dir
-           itself is missing (e.g. because it was deliberately outer-gitignored), this re-runs the
-           same initialization *without* overwriting `data/`'s already-on-disk content for `main`--
-           only `server`/`version-data` are seeded fresh from the current server state. There's no
+           Also doubles as one of `repair()`'s two modes: if `contribution.json` and `data/`
+           already exist (e.g. from cloning an outer project that tracks them, or a corrupted/
+           manually-deleted git-dir) but the git-dir itself is missing, this re-runs the same
+           initialization *without* overwriting `data/`'s already-on-disk content for `main`--only
+           `server`/`version-data` are seeded fresh from the current server state. There's no
            attempt to reconstruct the *true* historical sync point in this case--nothing durable
            survives to reconstruct it from; `main` and `server` simply start sharing a root again,
-           from right now.
+           from right now. See `repair()`'s docstring for the other mode (no `contribution_handle`
+           yet at all--this method doesn't handle that one, since it always needs a real
+           `contribution_id` to fetch).
 
         Raises:
             CgContributionManagerError: if this directory already tracks a *different*
@@ -524,7 +635,7 @@ class CgContributionManager:
                     f"{identity.contribution_handle!r}; refusing to import {contribution_id!r} "
                     "into the same directory."
                 )
-        rehydrating = identity is not None
+        repairing = identity is not None
         git_dir_in_data = identity.git_dir_in_data if identity is not None else not is_inside_existing_repo(self.contribution_dir)
         git_dir = self._git_dir_for(git_dir_in_data)
         if git_dir.is_dir():
@@ -543,7 +654,7 @@ class CgContributionManager:
             download = await self.client.servlets.file_servlet(data.cover_binary_id)
             cover_bytes = download.content
 
-        if not rehydrating:
+        if not repairing:
             _materialize_data(
                     self.data_dir,
                     puzzle_type=contribution.contribution_type,
@@ -558,9 +669,9 @@ class CgContributionManager:
             self._save_identity(contribution_id, git_dir_in_data=git_dir_in_data)
             _refresh_solution_symlink(self.contribution_dir, data.solution_language)
 
-        if rehydrating:
+        if repairing:
             # Unlike the fresh-import path above (which built data/ itself, via
-            # _materialize_data()--always normalized), rehydration snapshots whatever's already
+            # _materialize_data()--always normalized), repairing snapshots whatever's already
             # on disk, preserved as-is from the outer clone. If that on-disk tests/ layout isn't
             # already in the canonical ordinal-dirname form (e.g. it came from an older tool, or
             # from local edits that inserted/reordered directories), this commit's tree would
@@ -576,9 +687,67 @@ class CgContributionManager:
         repo.set_head(MAIN_BRANCH_NAME)
 
         tree = repo.write_tree_from_worktree()
-        message = "Rehydrate from server" if rehydrating else "Import from server"
+        message = "Repair from server" if repairing else "Import from server"
         server_sha = self._record_server_commit(repo, tree, contribution, cover_bytes, f"{message} (version {version.version})")
         repo.reset_index_to(server_sha)
+
+        return self.load()
+
+    async def repair(self) -> CgContributionView:
+        """Reconstruct this working directory's git-dir from scratch, without disturbing `data/`'s
+           already-on-disk content--for recovering from a missing or corrupted `.meta/`/git-dir
+           (e.g. an outer project clone that deliberately didn't bring the git-dir along--see the
+           module docstring--or the git-dir having been manually deleted/corrupted).
+
+           Two modes, chosen automatically from `contribution.json`'s `contribution_handle`:
+
+           - Set (this working directory has already been `push()`d/`import_()`d before): re-bases
+             off the server--delegates to `import_()`'s own repair mode, which re-fetches current
+             server state fresh to seed `server`/`version-data`'s first commit, while `main`'s
+             first commit is built from `data/`'s current on-disk content, preserved as-is. No
+             attempt is made to reconstruct the *true* historical sync point--nothing durable
+             survives to reconstruct it from.
+           - Not set (this working directory was `create()`d but never successfully `push()`d):
+             purely local, no network access at all--just re-establishes `main`'s initial commit
+             from `data/`'s current on-disk content, the same way `create()` itself would, but
+             preserving what's already there instead of overwriting it with placeholder content.
+             No `server`/`version-data` branches are created; there's no server-side contribution
+             yet to base them on.
+
+        Raises:
+            FileNotFoundError: if this working directory has never been created/imported at all
+                                (no `contribution.json`), or if `data/` itself is missing (nothing
+                                on disk to repair/preserve).
+            CgContributionManagerError: if the git-dir already exists (nothing to repair).
+        """
+        identity = self.load_identity()
+        if identity is None:
+            raise FileNotFoundError(
+                    f"{self.identity_file} does not exist--nothing to repair (this working "
+                    "directory has never been created/imported)."
+                )
+        if identity.contribution_handle is not None:
+            return await self.import_(identity.contribution_handle)
+
+        # Never pushed--purely local reconstruction, no network access, mirroring create()'s own
+        # git-init/commit steps but preserving data/'s current on-disk content instead of
+        # overwriting it with placeholder content.
+        git_dir = self._git_dir_for(identity.git_dir_in_data)
+        if git_dir.is_dir():
+            raise CgContributionManagerError(f"{git_dir} already exists--nothing to repair.")
+        if not self.data_dir.is_dir():
+            raise FileNotFoundError(f"{self.data_dir} does not exist--nothing to repair from.")
+
+        if identity.git_dir_in_data:
+            _write_meta_gitignore(self.data_dir)
+        else:
+            _write_meta_gitignore(self.contribution_dir)
+        renormalize_test_case_dirs(self.tests_dir)  # see import_()'s repair mode for why
+
+        init_repo(git_dir, self.data_dir)
+        repo = CgGitRepo(git_dir, self.data_dir)
+        repo.set_head(MAIN_BRANCH_NAME)
+        repo.commit_worktree("Initial local content (repaired, not yet pushed to the server)")
 
         return self.load()
 
@@ -587,6 +756,7 @@ class CgContributionManager:
                 *,
                 title: str,
                 puzzle_type: CgPuzzleType = "PUZZLE_INOUT",
+                language: str = "Python3",
             ) -> CgContributionView:
         """Initialize a brand new, *purely local* contribution working directory--no network
            access at all (`async` only for interface consistency with every other method here),
@@ -611,16 +781,25 @@ class CgContributionManager:
            `main` directly onto a freshly-built commit rather than preserving prior lineage).
 
            Refuses upfront if this directory already looks like a contribution working directory
-           in any way--unlike `import_()`, there's no legitimate "rehydration" case here: a *brand
-           new* contribution can't already have a matching `contribution.json`/git-dir from some
-           earlier session, so any pre-existing state here means something is wrong, not something
-           to press on through.
+           in any way--`create()` itself has no repair mode: a *brand new* contribution can't
+           already have a matching `contribution.json`/git-dir from some earlier session, so any
+           pre-existing state here means something is wrong, not something to press on through. If
+           `contribution.json` exists but the git-dir is missing/corrupted (e.g. this directory
+           was already `create()`d, possibly even already `push()`d), use `repair()` instead.
 
         Args:
             title:       The new contribution's title.
             puzzle_type: The type of the contribution. Defaults to "PUZZLE_INOUT" (a standard
                          noninteractive solo puzzle--the only type this package's contribution
                          manager has been exercised against).
+            language:    The reference solution's language (see `CgSolutionLanguage`). Defaults
+                         to "Python3". Always gets the `solution.<ext>` convenience symlink (see
+                         `_refresh_solution_symlink`) if `language` maps to a known extension--but
+                         `data/solution.src` itself (the symlink's target) is only pre-populated
+                         with a real stub for "Python3"; for any other language, the symlink is
+                         left dangling until you write `data/solution.src` yourself (there's no
+                         reasonable one-stub-fits-all placeholder across languages, unlike
+                         Python's trivial read-and-echo solution for the seeded test cases).
 
         Raises:
             CgContributionManagerError: if this directory already tracks a contribution, or a
@@ -641,21 +820,16 @@ class CgContributionManager:
                     "to create a new contribution into a directory in this inconsistent state."
                 )
 
-        # See push()'s docstring: createContribution has been confirmed live to 500 on a
-        # title-only payload--the server apparently requires a non-empty statement/difficulty and
-        # at least one test/validator pair to accept a new contribution at all. So this seeds the
-        # minimal placeholder content confirmed to be accepted, all obviously named/marked for the
-        # user to replace via ordinary local edits, rather than exposing a pile of statement/
-        # test-case flags on `cg contribution create` just to satisfy this.
-        data = CgContributionData(
-                title=title,
-                statement="TODO: write the problem statement.",
-                difficulty="easy",
-                test_cases=[
-                        CgTestCase(title="Test 1", test_in="1", test_out="1", is_test=True, is_validator=False, need_validation=True),
-                        CgTestCase(title="Validator 1", test_in="1", test_out="1", is_test=False, is_validator=True, need_validation=True),
-                    ],
-            )
+        # Both the seeded test and validator case are test_in="1"/test_out="1" (see
+        # _minimal_valid_contribution_data)--a solution that just echoes its input back trivially
+        # passes both. Only written for Python: there's no equivalent one-size-fits-all trivial
+        # stub worth hardcoding per language, and an empty `data/solution.src` isn't meaningfully
+        # better than no file at all (the symlink itself--see _refresh_solution_symlink--already
+        # tells the user exactly where to put their code, for every language, regardless of this).
+        is_python = cg_solution_language_to_extension(language) == "py"
+        solution = "n = input()\nprint(n)\n" if is_python else None
+        data = dataclasses.replace(
+                _minimal_valid_contribution_data(title), solution_language=language, solution=solution)
         _materialize_data(
                 self.data_dir, puzzle_type=puzzle_type, draft=True, ready_for_moderation=False,
                 data=data, cover_bytes=None, git_dir_in_data=git_dir_in_data,
@@ -672,7 +846,7 @@ class CgContributionManager:
 
         return self.load()
 
-    async def push(self) -> CgContribution:
+    async def push(self, *, direct_create: bool = False) -> CgContribution:
         """Push this working directory's content to the server, updating `server`/`version-data`
            to reflect the result on success, then auto-committing `main` to match (its content
            already matches what was just pushed, by construction).
@@ -681,9 +855,8 @@ class CgContributionManager:
            `git push` always requires an already-configured remote (`git remote add`/`git push -u`
            first)--pushing establishes no new identity, it only updates one that already exists.
            This method is different: if this working directory has never been pushed before (i.e.
-           it was built via `create()`, not `import_()`, and no `push()` has succeeded yet--
-           detected via `server` branch not existing), it calls `createContribution` instead of
-           `updateContribution`, and on success writes the new contribution's handle into
+           it was built via `create()`, not `import_()`, and no `push()` has succeeded yet), it
+           establishes a contribution on the server first, and on success writes its handle into
            `contribution.json` (`CgContributionIdentity.contribution_handle`, previously `None`)--
            establishing the "remote" implicitly, as a side effect of the very first push, rather
            than as a separate explicit step. Every later `push()` against the same working
@@ -693,9 +866,58 @@ class CgContributionManager:
            handle to import--it stays purely local (see `create()`'s docstring) until the user has
            real content ready to push.
 
+           **The first push is itself two API calls, not one--`direct_create` opts back into the
+           single-call version.** `createContribution`, unlike `updateContribution`, has no
+           `prevVersion`-style idempotency check--if a request succeeds server-side but the
+           response is lost (timeout, network error, and especially the same Cloudflare/524 origin
+           timeout `CgAsyncContributionServiceHelper.update_contribution` already has to recover
+           from for *heavy* content), there is no reliable way to learn the resulting handle, and
+           blindly retrying risks a genuine duplicate contribution. This risk scales with the size/
+           complexity of what's being validated--exactly what a first push often has a lot of
+           (hand-written test suites, or, worse, an entire test suite carried over via `delete(
+           keep_local=True)`'s "use an existing contribution as a template" workflow). So by
+           default, the first push doesn't send the real content to `createContribution` at all:
+           1. `createContribution` is called with a minimal, throwaway, in-memory-only stub (real
+              title, otherwise just enough to be accepted--see
+              `_minimal_valid_contribution_data`--always a private draft, never for moderation, no
+              cover)--small and fast enough that a 524 here is unlikely in the first place.
+           2. The returned handle is written into `contribution.json` *immediately*, before doing
+              anything else with it--so if step 3 below fails, a retried `push()` sees
+              `contribution_handle` already set and raises (see the next paragraph) rather than
+              risking another `createContribution` call.
+           3. A commit representing that stub (not the real content) becomes `server`'s first
+              commit, via the same plumbing `fetch()` uses to build a tree without touching `main`.
+           4. The *real* content is then submitted the normal way--a plain `updateContribution`
+              call, version 1 -> 2, with `CgAsyncContributionServiceHelper`'s existing 524-retry/
+              polling already protecting it via `prevVersion`. If this step itself fails/times out,
+              the fix is exactly the same as any other failed push: just run `push()` again.
+
+           Passing `direct_create=True` skips all of that and calls `createContribution` once,
+           directly, with the real content--the original, simpler behavior, for callers confident
+           their first push is small/fast enough not to need the extra round trip.
+
+           The create-vs-update decision is made from `contribution.json`'s `contribution_handle`
+           (`None` => first push), *not* from whether the `server` git branch happens to exist--
+           those two can disagree, and when they do, `contribution.json` is authoritative: e.g. an
+           outer project clone whose git-dir was deliberately not brought along (see `repair()`'s
+           docstring) has a real `contribution_handle` but no `server` branch *yet*, and someone
+           could always delete/corrupt the git-dir by hand. Trusting "`server` branch missing" as
+           "never pushed" in either case would call `createContribution` *again* for a contribution
+           that already exists--a duplicate, not a recoverable mistake. So if `contribution_handle`
+           is already set but `server` still doesn't resolve, this raises instead of guessing--see
+           `Raises` below.
+
+        Args:
+            direct_create: Skip the minimal-stub-first safety step on a first push, and call
+                            `createContribution` once, directly, with the real content--see above.
+                            Ignored (has no effect) on anything but a first push.
+
         Raises:
             FileNotFoundError: if this working directory hasn't been created/imported yet.
-            CgContributionManagerError: if `puzzle_type` isn't set, or a merge is in progress.
+            CgContributionManagerError: if `puzzle_type` isn't set, if a merge is in progress, or
+                                         if `contribution.json` already has a `contribution_handle`
+                                         but this working directory's git repo has no `server`
+                                         branch (run `repair()` first--see above).
         """
         if self.merge_in_progress:
             raise CgContributionManagerError(
@@ -715,16 +937,52 @@ class CgContributionManager:
         # test_cases_dir.renormalize_test_case_dirs.
         renormalize_test_case_dirs(self.tests_dir)
 
+        identity = self.load_identity()
+        assert identity is not None  # merge_in_progress above already required a loadable git_dir
+        first_push = identity.contribution_handle is None
+
         repo = self.git_repo
         server_sha = repo.resolve_ref(SERVER_BRANCH_NAME)
-        first_push = server_sha is None
-        # No prior server state to compare a cover image's hash against on a first push--the
-        # empty metadata below just always fails that comparison, forcing a fresh upload, same as
-        # any other cover change.
-        current_metadata = (
-                CgContributionCommitMetadata(contribution_id="", version=0) if server_sha is None
-                else _trailers_to_metadata(repo.read_trailers(server_sha))
-            )
+        if not first_push and server_sha is None:
+            raise CgContributionManagerError(
+                    f"{self.identity_file} already tracks contribution "
+                    f"{identity.contribution_handle!r}, but this working directory's git repo has "
+                    f"no {SERVER_BRANCH_NAME} branch (missing/corrupted git-dir, or a freshly "
+                    "cloned outer project that hasn't been repaired yet)--call repair() (`cg "
+                    "contribution repair`) before pushing."
+                )
+
+        if first_push and not direct_create:
+            stub_data = _minimal_valid_contribution_data(view.data.title)
+            stub_handle = await self.client.services.contribution.helper.create_contribution(
+                    view.puzzle_type, stub_data, draft=True, ready_for_moderation=False)
+            self._write_contribution_handle(stub_handle)  # see the docstring--persisted before find_contribution
+            stub_contribution = await self.client.services.contribution.find_contribution(stub_handle)
+            with tempfile.TemporaryDirectory(prefix="cg-contribution-stub-") as tmp:
+                staging = Path(tmp)
+                _materialize_data(
+                        staging, puzzle_type=view.puzzle_type, draft=True, ready_for_moderation=False,
+                        data=stub_data, cover_bytes=None, git_dir_in_data=identity.git_dir_in_data,
+                    )
+                stub_tree = repo.write_tree_from_dir(staging)
+            server_sha = self._record_server_commit(
+                    repo, stub_tree, stub_contribution, None,
+                    f"Create placeholder on server (version {stub_contribution.last_version.version})",
+                )
+
+        # Only true if direct_create was requested--the stub step above (when it ran) already
+        # turned this into an ordinary update, same as any push against an existing contribution.
+        needs_direct_create = first_push and direct_create
+
+        # No prior server state to compare a cover image's hash against when creating (directly,
+        # or via the stub established above, which never has a cover either)--the empty metadata
+        # below just always fails that comparison, forcing a fresh upload, same as any other cover
+        # change.
+        if needs_direct_create:
+            current_metadata = CgContributionCommitMetadata(contribution_id="", version=0)
+        else:
+            assert server_sha is not None  # the raise above (or the stub step) already ensured this
+            current_metadata = _trailers_to_metadata(repo.read_trailers(server_sha))
 
         cover_path = self.data_dir / COVER_IMAGE_FILE_NAME
         cover_binary_id: int | None
@@ -745,7 +1003,7 @@ class CgContributionManager:
         local_data, _ = _read_local_data(self.data_dir, view.data)
         data = dataclasses.replace(local_data, cover_binary_id=cover_binary_id)
 
-        if first_push:
+        if needs_direct_create:
             contribution_id = await self.client.services.contribution.helper.create_contribution(
                     view.puzzle_type, data, view.draft, view.ready_for_moderation)
             result = await self.client.services.contribution.find_contribution(contribution_id)
@@ -1121,6 +1379,19 @@ class CgContributionManager:
            exclusive with `keep_local` (together they'd mean "delete nothing," which isn't a
            `delete()` at all).
 
+           A working directory that was `create()`d but never successfully `push()`d has no
+           server-side contribution at all (`contribution.json`'s `contribution_handle` is
+           `None`--the authoritative signal here, same as `push()`'s create-vs-update decision;
+           see that method's docstring for why this is trusted over the `server` git branch's
+           mere existence)--by default (neither `keep_local` nor `keep_server`), that's not an
+           error: there's simply nothing to send to `deleteContribution`, so this just removes the
+           local working directory, same as it would for any other directory. `keep_local` and
+           `keep_server` each DO require a real `contribution_handle` to exist, though, and raise
+           if not--both are explicit statements about server state (`keep_local`: "detach from the
+           thing I'm currently tracking"; `keep_server`: "leave the thing I'm currently tracking
+           alone") that don't make sense to honor silently as no-ops when there's nothing being
+           tracked yet.
+
            `main` and its commit history (including anything reachable only via the old
            `server`/`version-data` branches, by SHA, until a real `git gc` eventually collects it)
            are left untouched by `keep_local`; only the branches/identity that pointed at the
@@ -1130,10 +1401,9 @@ class CgContributionManager:
            class's (matches every other method here: no interactive behavior, ever).
 
         Raises:
-            FileNotFoundError: if this working directory has never been created/imported, or (
-                                unless `keep_server`) has no server-side contribution yet
-                                (`create()`d but never successfully `push()`d--nothing to delete
-                                server-side).
+            FileNotFoundError: if this working directory has never been created/imported, or (only
+                                with `keep_local` or `keep_server`) has no `contribution_handle`
+                                yet (`create()`d but never successfully `push()`d).
             CgContributionManagerError: if a merge is in progress, or both `keep_local` and
                                          `keep_server` are set.
         """
@@ -1147,22 +1417,153 @@ class CgContributionManager:
                     "A merge is in progress (see `cg contribution merge continue`/`abort`)--"
                     "resolve or abort it before deleting."
                 )
-        repo = self.git_repo
-        if not keep_server:
-            server_sha = repo.resolve_ref(SERVER_BRANCH_NAME)
-            if server_sha is None:
-                raise FileNotFoundError(
-                        f"{self.git_dir} has no {SERVER_BRANCH_NAME} branch--nothing to delete "
-                        "server-side (this working directory was create()d but never "
-                        "successfully pushed). Pass keep_server=True to just remove the local "
-                        "working directory."
-                    )
-            metadata = _trailers_to_metadata(repo.read_trailers(server_sha))
-            await self.client.services.contribution.delete_contribution(metadata.contribution_id)
+        identity = self.load_identity()
+        assert identity is not None  # merge_in_progress above already required a loadable git_dir
+        contribution_handle = identity.contribution_handle
+        if contribution_handle is None and keep_local:
+            raise FileNotFoundError(
+                    f"{self.identity_file} has no contribution_handle--nothing to detach from "
+                    "(this working directory was create()d but never successfully pushed)."
+                )
+        if contribution_handle is None and keep_server:
+            raise FileNotFoundError(
+                    f"{self.identity_file} has no contribution_handle--nothing server-side for "
+                    "keep_server to leave alone (this working directory was create()d but never "
+                    "successfully pushed). Omit keep_server to just remove the local working "
+                    "directory."
+                )
+        if contribution_handle is not None and not keep_server:
+            await self.client.services.contribution.delete_contribution(contribution_handle)
 
         if keep_local:
+            repo = self.git_repo
             repo.delete_ref(f"refs/heads/{SERVER_BRANCH_NAME}")
             repo.delete_ref(f"refs/heads/{VERSION_DATA_BRANCH_NAME}")
             self._write_contribution_handle(None)
         else:
             shutil.rmtree(self.contribution_dir)
+
+    # --- local test running -----------------------------------------------------------------
+
+    def list_local_tests(
+                self,
+                ordinals: list[str] | None = None,
+                *,
+                local: bool = True,
+                validator: bool = True,
+            ) -> list[CgContributionLocalTestCase]:
+        """Enumerate `tests/` (see `codingame_client.contribution_manager.test_cases_dir.
+           list_local_test_cases`), optionally filtered.
+
+        Args:
+            ordinals:  If given, only test cases whose ordinal matches one of these (by exact
+                       string match, or--if both sides are purely numeric--by numeric equality,
+                       so `"1"` matches ordinal directory `"01"`). Defaults to every ordinal.
+            local:     Include `"local"`-side test cases. Defaults to True.
+            validator: Include `"validator"`-side test cases. Defaults to True.
+
+        Returns:
+            Matching test cases, in the same order `list_local_test_cases` returns them.
+        """
+        test_cases = list_local_test_cases(self.tests_dir)
+        if ordinals is not None:
+            test_cases = [tc for tc in test_cases if any(_ordinal_matches(o, tc.ordinal) for o in ordinals)]
+        if not local:
+            test_cases = [tc for tc in test_cases if tc.side != "local"]
+        if not validator:
+            test_cases = [tc for tc in test_cases if tc.side != "validator"]
+        return test_cases
+
+    def run_local_test(
+                self,
+                test_case: CgContributionLocalTestCase,
+                solution_language: CgSolutionLanguage,
+                *,
+                update_expected: bool = False,
+                timeout: float = DEFAULT_RUN_TIMEOUT_SECONDS,
+            ) -> CgContributionLocalTestResult:
+        """Run `data/solution.src` against one local test case's input, entirely locally--no
+           network access at all--by shelling out to the appropriate interpreter/compiler as a
+           subprocess (see `codingame_client.test_runner.run_solution_locally`).
+
+           Never raises just because the test failed (crashed, timed out, or mismatched)--that's
+           reflected in the returned result's `passed`, for a caller running a batch of these to
+           collect and report on afterward (see `cg contribution play-local`, which is also where
+           "a test raising an unexpected exception" is caught and turned into a result with
+           `exception` set--this method itself doesn't do that, since it only ever runs one test).
+
+        Args:
+            test_case:         Which test case to run (see `list_local_tests`).
+            solution_language: The language to run `data/solution.src` as (see
+                                `CgContributionView.data.solution_language`).
+            update_expected:   If True, overwrite `test_case.output_file` with the solution's
+                                actual output instead of comparing against it--for accepting the
+                                solution's current behavior as the new known-good baseline. Only
+                                written if the run completed without crashing/timing out.
+            timeout:            Wall-clock timeout in seconds--see `codingame_client.test_runner.
+                                DEFAULT_RUN_TIMEOUT_SECONDS`.
+
+        Returns:
+            The outcome--see `CgContributionLocalTestResult`.
+
+        Raises:
+            CgLocalRunUnsupportedLanguageError: if `solution_language` isn't yet supported by
+                                                 `codingame_client.test_runner.
+                                                 run_solution_locally`.
+        """
+        run_result = run_solution_locally(
+                self.solution_file, solution_language, test_case.input_text, timeout=timeout)
+        ok = not run_result.timed_out and run_result.returncode == 0
+        if update_expected:
+            if ok:
+                test_case.output_file.write_text(run_result.output, encoding="utf-8")
+            expected_output = run_result.output if ok else test_case.output_text
+            return CgContributionLocalTestResult(
+                    ordinal=test_case.ordinal, side=test_case.side, title=test_case.title,
+                    passed=ok, updated=ok, input=test_case.input_text,
+                    expected_output=expected_output, actual_output=run_result.output,
+                    stderr=run_result.stderr, timed_out=run_result.timed_out,
+                    returncode=run_result.returncode,
+                )
+        passed = ok and outputs_match(run_result.output, test_case.output_text)
+        return CgContributionLocalTestResult(
+                ordinal=test_case.ordinal, side=test_case.side, title=test_case.title,
+                passed=passed, updated=False, input=test_case.input_text,
+                expected_output=test_case.output_text, actual_output=run_result.output,
+                stderr=run_result.stderr, timed_out=run_result.timed_out,
+                returncode=run_result.returncode,
+            )
+
+    def run_local_tests(
+                self,
+                test_cases: list[CgContributionLocalTestCase],
+                solution_language: CgSolutionLanguage,
+                *,
+                update_expected: bool = False,
+                timeout: float = DEFAULT_RUN_TIMEOUT_SECONDS,
+            ) -> list[CgContributionLocalTestResult]:
+        """Convenience batch wrapper around `run_local_test`: run every test case in `test_cases`
+           (e.g. from `list_local_tests`) and raise if any failed--for programmatic callers that
+           just want a pass/fail outcome without `cg contribution play-local`'s own interleaved
+           per-test console output (which needs its own loop, to catch and continue past an
+           unexpected exception for one test case rather than aborting the whole batch--see the
+           CLI command itself for that version).
+
+        Returns:
+            One `CgContributionLocalTestResult` per test case, in `test_cases`' order.
+
+        Raises:
+            CgLocalRunUnsupportedLanguageError: if `solution_language` isn't yet supported--
+                                                 raised immediately, from whichever test case hits
+                                                 it first (every other test case would fail
+                                                 identically, so this doesn't run the rest first).
+            CgContributionLocalTestFailedError: if any test case failed--carries every result via
+                                                 `.results`.
+        """
+        results = [
+                self.run_local_test(tc, solution_language, update_expected=update_expected, timeout=timeout)
+                for tc in test_cases
+            ]
+        if any(not r.passed for r in results):
+            raise CgContributionLocalTestFailedError(results)
+        return results

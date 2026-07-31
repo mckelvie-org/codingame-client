@@ -64,10 +64,10 @@ class CgContributionIdentity(JSONWizardX):
     contribution_handle: CgContributionId | None = None
     """The opaque contribution ID (`CgContribution.public_handle`) this working directory
        tracks--`None` if it was `create()`d and has never been successfully `push()`d yet (there's
-       no server-side contribution to have a handle for). The one fact rehydration (see
-       `CgContributionManager.import_`) actually needs, when set--everything else about prior git
-       history is either present (git-dir found where recorded) or, if not, deliberately not
-       reconstructed, just re-fetched fresh."""
+       no server-side contribution to have a handle for). Also the one fact that decides which of
+       `CgContributionManager.repair()`'s two modes applies, and (when set) the one fact that mode
+       actually needs--everything else about prior git history is either present (git-dir found
+       where recorded) or, if not, deliberately not reconstructed, just re-fetched fresh."""
 
     git_dir_in_data: bool = False
     """Where this working directory's git-dir lives, decided once at creation time and never

@@ -1,10 +1,11 @@
 """Local working-directory management for CodinGame contributions (puzzles)--a real git working
    directory (`data/`), backed by a remote server rather than a git remote.
 
-   See `CgContributionManager` for `import_`/`create`/`push`/`rebase`/`fetch`/`merge_start`/
-   `merge_continue`/`merge_abort`/`merge_discard_local`/`merge_discard_server`/`discard_local`/
-   `delete`--its module docstring covers the `main`/`server`/`version-data` branch design in full,
-   and `push()`'s covers the create-vs-update duality hidden behind that one method; `codingame_client.
+   See `CgContributionManager` for `import_`/`repair`/`create`/`push`/`rebase`/`fetch`/
+   `merge_start`/`merge_continue`/`merge_abort`/`merge_discard_local`/`merge_discard_server`/
+   `discard_local`/`delete`--its module docstring covers the `main`/`server`/`version-data` branch
+   design in full, `push()`'s covers the create-vs-update duality hidden behind that one method,
+   and `repair()`'s covers reconstructing a missing/corrupted git-dir; `codingame_client.
    contribution_manager.schema` for the working directory's own manifest files
    (`CgContributionIdentity`/`CgContributionView`); `codingame_client.contribution_manager.
    contribution_commit_data` for `CgContributionCommitMetadata` (the git-trailer-backed remote
@@ -44,6 +45,8 @@ from .manager import (
     OUTPUT_DESCRIPTION_FILE_NAME,
     STATEMENT_FILE_NAME,
     STUB_GENERATOR_FILE_NAME,
+    CgContributionLocalTestFailedError,
+    CgContributionLocalTestResult,
     CgContributionManager,
     CgContributionManagerError,
     CgMergeStartResult,
@@ -53,8 +56,10 @@ from .manager import (
 from .resolver import (
     CG_CONTRIBUTION_DIR_ENV_VAR,
     DEFAULT_CONTRIBUTION_SUBDIR_NAME,
+    CgContributionDirInferenceError,
     CgContributionDirNotFoundError,
     find_contribution_dir,
+    infer_contribution_dir,
     resolve_contribution_dir,
 )
 from .schema import (
@@ -69,10 +74,12 @@ from .test_cases_dir import (
     TEST_META_FILE_NAME,
     TESTS_SUBDIR_NAME,
     VALIDATOR_SUBDIR_NAME,
+    CgContributionLocalTestCase,
     CgContributionTestCaseError,
     CgTestCaseFileMeta,
     commit_test_cases,
     import_test_cases,
+    list_local_test_cases,
     normalize_test_title,
     renormalize_test_case_dirs,
 )
@@ -83,6 +90,10 @@ __all__ = [
     "CgRebaseStatus",
     "CgMergeStartStatus",
     "CgMergeStartResult",
+    "CgContributionLocalTestResult",
+    "CgContributionLocalTestFailedError",
+    "CgContributionLocalTestCase",
+    "list_local_test_cases",
     "CgContributionIdentity",
     "CgContributionView",
     "CONTRIBUTION_IDENTITY_FILE_NAME",
@@ -116,8 +127,10 @@ __all__ = [
     "init_repo",
     "is_inside_existing_repo",
     "CgContributionDirNotFoundError",
+    "CgContributionDirInferenceError",
     "find_contribution_dir",
     "resolve_contribution_dir",
+    "infer_contribution_dir",
     "CG_CONTRIBUTION_DIR_ENV_VAR",
     "DEFAULT_CONTRIBUTION_SUBDIR_NAME",
     "TESTS_SUBDIR_NAME",

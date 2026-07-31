@@ -338,7 +338,7 @@ async def test_import_refuses_if_git_repo_already_exists(tmp_path: Path) -> None
         await manager.import_("handle-1")
 
 
-async def test_import_rehydrates_when_git_dir_missing_but_content_present(tmp_path: Path) -> None:
+async def test_import_repairs_when_git_dir_missing_but_content_present(tmp_path: Path) -> None:
     """Simulates cloning an outer project that tracks contribution.json/data/ but not the git-dir
        itself (deliberately outer-gitignored)--see manager.py's import_() docstring."""
     data = _make_full_data()
@@ -359,8 +359,8 @@ async def test_import_rehydrates_when_git_dir_missing_but_content_present(tmp_pa
     assert repo.resolve_ref("main") == repo.resolve_ref("server")
 
 
-async def test_import_rehydration_renormalizes_non_canonical_test_case_dirs(tmp_path: Path) -> None:
-    """Rehydration snapshots whatever's already on disk (preserved from the outer clone)
+async def test_import_repair_mode_renormalizes_non_canonical_test_case_dirs(tmp_path: Path) -> None:
+    """Repair mode snapshots whatever's already on disk (preserved from the outer clone)
        verbatim--if that layout isn't already canonical, this commit would permanently encode it,
        causing the same spurious-diff risk as an un-renormalized push()--see manager.import_()'s
        docstring."""
@@ -386,7 +386,7 @@ async def test_reimport_with_language_change_regenerates_symlink(tmp_path: Path)
     await manager.import_("handle-1")
     assert (tmp_path / "solution.py").is_symlink()
 
-    shutil.rmtree(manager.git_dir.parent)  # force rehydration path (fresh init_repo, per above)
+    shutil.rmtree(manager.git_dir.parent)  # force repair mode (fresh init_repo, per above)
     new_data = _make_full_data(solution_language="Java", solution="class Main {}")
     contribution2 = _make_contribution(new_data, version=4)
     client2, _, _, _ = _make_fake_client(contribution2)
@@ -394,10 +394,85 @@ async def test_reimport_with_language_change_regenerates_symlink(tmp_path: Path)
 
     await manager2.import_("handle-1")
 
-    # Rehydration preserves data/'s on-disk content (the OLD Python3 solution.src)--this isn't a
+    # Repair mode preserves data/'s on-disk content (the OLD Python3 solution.src)--this isn't a
     # live re-fetch overwrite, so the symlink still reflects what was already there.
     assert (tmp_path / "data" / "solution.src").read_text() == "print('hi')\n"
     assert (tmp_path / "solution.py").is_symlink()
+
+
+# --- repair ----------------------------------------------------------------------------------
+
+
+async def test_repair_with_handle_delegates_to_import(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, _, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+    (tmp_path / "data" / "statement.cgmd").write_text("Local edit surviving the clone\n")
+
+    shutil.rmtree(manager.git_dir.parent)
+    assert not manager.git_dir.exists()
+
+    view = await manager.repair()
+
+    assert (tmp_path / "data" / "statement.cgmd").read_text() == "Local edit surviving the clone\n"
+    assert view.data.title == "My Puzzle"
+    repo = manager.git_repo
+    assert repo.resolve_ref("main") == repo.resolve_ref("server")
+    identity = manager.load_identity()
+    assert identity is not None
+    assert identity.contribution_handle == "handle-1"
+
+
+async def test_repair_without_handle_reconstructs_purely_local(tmp_path: Path) -> None:
+    """create()d, edited, but never pushed--repair() must reconstruct main from data/'s current
+       on-disk (edited) content, without any network access at all, and without establishing a
+       server branch (there's no server-side contribution yet to base one on)."""
+    client = object()
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.create(title="My Puzzle")
+    (tmp_path / "data" / "statement.cgmd").write_text("Edited before ever pushing\n")
+
+    shutil.rmtree(manager.git_dir.parent)
+    assert not manager.git_dir.exists()
+
+    view = await manager.repair()  # would raise if it ever touched client (a plain object())
+
+    assert (tmp_path / "data" / "statement.cgmd").read_text() == "Edited before ever pushing\n"
+    assert view.data.title == "My Puzzle"
+    identity = manager.load_identity()
+    assert identity is not None
+    assert identity.contribution_handle is None  # still never pushed
+    repo = manager.git_repo
+    assert repo.resolve_ref("main") is not None
+    assert repo.resolve_ref("server") is None
+
+
+async def test_repair_requires_prior_create_or_import(tmp_path: Path) -> None:
+    manager = CgContributionManager(tmp_path, object())  # type: ignore[arg-type]
+    with pytest.raises(FileNotFoundError):
+        await manager.repair()
+
+
+async def test_repair_refuses_if_git_dir_already_exists(tmp_path: Path) -> None:
+    client = object()
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.create(title="My Puzzle")
+
+    with pytest.raises(CgContributionManagerError):
+        await manager.repair()
+
+
+async def test_repair_without_handle_requires_data_dir(tmp_path: Path) -> None:
+    client = object()
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.create(title="My Puzzle")
+
+    shutil.rmtree(manager.data_dir)  # git_dir_in_data here, so this also removes the git-dir
+
+    with pytest.raises(FileNotFoundError):
+        await manager.repair()
 
 
 # --- create --------------------------------------------------------------------------------
@@ -444,25 +519,80 @@ async def test_create_accepts_custom_puzzle_type(tmp_path: Path) -> None:
     assert view.puzzle_type == "PUZZLE_OPTI"
 
 
-async def test_push_after_create_calls_create_contribution_and_records_the_handle(tmp_path: Path) -> None:
+async def test_create_default_language_is_python_with_a_working_stub(tmp_path: Path) -> None:
     data = _make_full_data()
-    contribution = _make_contribution(data, public_handle="created-handle-1", version=1)
-    client, service, _, _ = _make_fake_client(contribution)
+    contribution = _make_contribution(data)
+    client, _, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+
+    view = await manager.create(title="My Puzzle")
+
+    assert view.data.solution_language == "Python3"
+    assert (tmp_path / "data" / "solution.src").read_text() == "n = input()\nprint(n)\n"
+    assert (tmp_path / "solution.py").is_symlink()
+    assert (tmp_path / "solution.py").resolve() == (tmp_path / "data" / "solution.src").resolve()
+
+
+async def test_create_non_python_language_creates_symlink_but_no_source_file(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, _, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+
+    view = await manager.create(title="My Puzzle", language="Java")
+
+    assert view.data.solution_language == "Java"
+    assert not (tmp_path / "data" / "solution.src").exists()
+    assert (tmp_path / "solution.java").is_symlink()  # dangling--points at a file that doesn't exist yet
+    assert not (tmp_path / "solution.java").exists()  # is_symlink() is True even when the target is missing
+
+
+async def test_create_unmapped_language_creates_no_symlink(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, _, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+
+    await manager.create(title="My Puzzle", language="SomeUnknownLanguage")
+
+    assert not (tmp_path / "data" / "solution.src").exists()
+    assert list(tmp_path.glob("solution.*")) == []
+
+
+async def test_push_after_create_creates_a_minimal_stub_then_updates_with_real_content(tmp_path: Path) -> None:
+    """The default (direct_create=False) first-push behavior: a minimal, throwaway,
+       in-memory-only stub is createContribution'd first (never the real, possibly large, local
+       content--see push()'s docstring for why), then the real content goes through a normal
+       updateContribution, version 1 -> 2."""
+    data = _make_full_data()
+    stub_find_result = _make_contribution(data, public_handle="created-handle-1", version=1)
+    client, service, _, _ = _make_fake_client(stub_find_result)
     service.create_result = "created-handle-1"
+    service.update_result = _make_contribution(data, public_handle="created-handle-1", version=2)
     manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
     await manager.create(title="My Puzzle")
 
     result = await manager.push()
 
+    # step 1: the minimal stub, not the real (locally seeded) content.
     assert len(service.create_calls) == 1
-    call = service.create_calls[0]
-    assert call["puzzle_type"] == "PUZZLE_INOUT"
-    assert call["contribution_data"].title == "My Puzzle"
-    # always a private draft, never submitted for moderation--not caller-configurable at create()
-    # time; reflects contribution-data.json's own draft/ready_for_moderation flags at push() time.
-    assert call["draft"] is True
-    assert call["ready_for_moderation"] is False
-    assert service.update_calls == []  # the first push is a create, never an update
+    stub_call = service.create_calls[0]
+    assert stub_call["puzzle_type"] == "PUZZLE_INOUT"
+    assert stub_call["contribution_data"].title == "My Puzzle"
+    assert stub_call["contribution_data"].solution_language is None  # the real content has a Python stub; this doesn't
+    # always a private draft, never for moderation--not caller-configurable, regardless of
+    # contribution-data.json's own draft/ready_for_moderation flags (those apply to the real
+    # content in step 2 below, not this throwaway stub).
+    assert stub_call["draft"] is True
+    assert stub_call["ready_for_moderation"] is False
+
+    # step 2: the real (create()-seeded) content, via a normal update--version 1 -> 2.
+    assert len(service.update_calls) == 1
+    update_call = service.update_calls[0]
+    assert update_call["contribution_id"] == "created-handle-1"
+    assert update_call["prev_version"] == 1
+    assert update_call["contribution_data"].solution_language == "Python3"
+    assert update_call["contribution_data"].solution == "n = input()\nprint(n)\n"
 
     assert result.public_handle == "created-handle-1"
     identity = manager.load_identity()
@@ -472,33 +602,105 @@ async def test_push_after_create_calls_create_contribution_and_records_the_handl
     assert repo.resolve_ref("main") == repo.resolve_ref("server")
     metadata = manager.server_metadata()
     assert metadata is not None
-    assert metadata.version == 1
+    assert metadata.version == 2  # not 1--the stub was v1, the real content is v2
     assert metadata.contribution_id == "created-handle-1"
+
+
+async def test_push_direct_create_skips_the_stub_and_creates_with_real_content(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data, public_handle="created-handle-1", version=1)
+    client, service, _, _ = _make_fake_client(contribution)
+    service.create_result = "created-handle-1"
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.create(title="My Puzzle")
+
+    result = await manager.push(direct_create=True)
+
+    assert len(service.create_calls) == 1
+    call = service.create_calls[0]
+    assert call["contribution_data"].solution_language == "Python3"  # the real content, not a stub
+    assert call["draft"] is True
+    assert call["ready_for_moderation"] is False
+    assert service.update_calls == []  # a single createContribution call, no follow-up update
+
+    assert result.public_handle == "created-handle-1"
+    metadata = manager.server_metadata()
+    assert metadata is not None
+    assert metadata.version == 1
 
 
 async def test_push_after_create_uses_update_contribution_on_second_push(tmp_path: Path) -> None:
     data = _make_full_data()
-    contribution = _make_contribution(data, public_handle="created-handle-1", version=1)
-    updated = _make_contribution(data, public_handle="created-handle-1", version=2)
-    client, service, _, _ = _make_fake_client(contribution, update_result=updated)
+    stub_find_result = _make_contribution(data, public_handle="created-handle-1", version=1)
+    client, service, _, _ = _make_fake_client(stub_find_result)
     service.create_result = "created-handle-1"
+    service.update_result = _make_contribution(data, public_handle="created-handle-1", version=2)
     manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
     await manager.create(title="My Puzzle")
-    await manager.push()
+    await manager.push()  # first push: stub (v1) + real-content update (v2)
 
     (tmp_path / "data" / "statement.cgmd").write_text("A real statement now\n")
-    service.find_result = updated
+    real_v3 = _make_contribution(data, public_handle="created-handle-1", version=3)
+    service.update_result = real_v3
+    service.find_result = real_v3
 
     result = await manager.push()
 
-    assert len(service.create_calls) == 1  # unchanged--still just the one, from the first push
-    assert len(service.update_calls) == 1
-    assert service.update_calls[0]["contribution_id"] == "created-handle-1"
-    assert service.update_calls[0]["prev_version"] == 1
-    assert result.last_version.version == 2
+    assert len(service.create_calls) == 1  # unchanged--still just the one, from the first push's stub step
+    assert len(service.update_calls) == 2  # the first push's real-content update, plus this one
+    assert service.update_calls[0]["prev_version"] == 1  # updating from the stub's version
+    assert service.update_calls[1]["contribution_id"] == "created-handle-1"
+    assert service.update_calls[1]["prev_version"] == 2  # updating from the first push's real content
+    assert result.last_version.version == 3
     metadata = manager.server_metadata()
     assert metadata is not None
-    assert metadata.version == 2
+    assert metadata.version == 3
+
+
+async def test_push_refuses_instead_of_recreating_when_handle_set_but_git_dir_missing(tmp_path: Path) -> None:
+    """contribution.json's contribution_handle, not the server git branch's mere existence, is
+       what push() trusts for its create-vs-update decision--otherwise a working directory that
+       needs repair (git-dir missing, e.g. from an outer project clone that deliberately
+       didn't bring it along) or one whose git-dir was corrupted/tampered with would silently look
+       like a brand new contribution to push(), calling createContribution *again* for a
+       contribution that already exists--a real duplicate, not a recoverable mistake."""
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+
+    shutil.rmtree(manager.git_dir.parent)  # simulate a missing/corrupted git-dir
+    assert not manager.git_dir.exists()
+    identity = manager.load_identity()
+    assert identity is not None
+    assert identity.contribution_handle == "handle-1"  # contribution.json itself is untouched
+
+    with pytest.raises(CgContributionManagerError):
+        await manager.push()
+
+    assert service.create_calls == []  # refused before ever calling createContribution
+    assert service.update_calls == []
+
+
+async def test_delete_uses_contribution_handle_even_if_git_dir_missing(tmp_path: Path) -> None:
+    """delete() must not rely on being able to read git trailers to find the contribution to
+       delete--contribution.json's contribution_handle is enough on its own, and this needs to
+       keep working even against a working directory that's missing its git-dir entirely (e.g.
+       needs repair), so a real server-side contribution never accidentally survives
+       (orphaned) just because the local git state happens to be stale."""
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+
+    shutil.rmtree(manager.git_dir.parent)  # simulate a missing/corrupted git-dir
+
+    await manager.delete()
+
+    assert service.delete_calls == ["handle-1"]
+    assert not tmp_path.exists()
 
 
 async def test_create_refuses_if_directory_already_tracks_a_contribution(tmp_path: Path) -> None:
@@ -1329,36 +1531,56 @@ async def test_delete_keep_local_then_push_creates_a_new_contribution(tmp_path: 
     """The "fork/template" workflow: use an existing contribution's content as a starting point
        for a brand new one, without touching the original (except deleting it here, since this
        reuses the same working directory--a real templating workflow would `import_` into a fresh
-       directory instead, then never call `delete()` on the original at all)."""
-    data = _make_full_data()
+       directory instead, then never call `delete()` on the original at all).
+
+       Uses a two-test-case-pair contribution specifically to demonstrate the risk this whole
+       "clone as template" workflow poses that the two-step default first push protects
+       against--a carried-over test suite could be large/complex, and must never be sent to the
+       create-time API call, only the (much smaller, throwaway) minimal stub."""
+    data = _make_two_pair_data()
     contribution = _make_contribution(data, public_handle="old-handle")
-    new_handle_contribution = _make_contribution(data, public_handle="new-handle-1", version=1)
+    new_handle_stub = _make_contribution(data, public_handle="new-handle-1", version=1)
+    new_handle_real = _make_contribution(data, public_handle="new-handle-1", version=2)
     client, service, _, _ = _make_fake_client(contribution)
     service.create_result = "new-handle-1"
     manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
     await manager.import_("old-handle")
 
     await manager.delete(keep_local=True)
-    service.find_result = new_handle_contribution
+    service.find_result = new_handle_stub
+    service.update_result = new_handle_real
 
     result = await manager.push()
 
     assert service.delete_calls == ["old-handle"]
     assert len(service.create_calls) == 1
-    assert service.update_calls == []
+    stub_call = service.create_calls[0]
+    assert stub_call["contribution_data"].title == data.title
+    assert len(stub_call["contribution_data"].test_cases) == 2  # the minimal stub, not the cloned 4-test-case suite
+
+    assert len(service.update_calls) == 1
+    update_call = service.update_calls[0]
+    assert update_call["contribution_id"] == "new-handle-1"
+    assert len(update_call["contribution_data"].test_cases) == 4  # the real, cloned content
+
     assert result.public_handle == "new-handle-1"
+    assert result.last_version.version == 2
     identity = manager.load_identity()
     assert identity is not None
     assert identity.contribution_handle == "new-handle-1"
 
 
-async def test_delete_refuses_if_never_pushed(tmp_path: Path) -> None:
+async def test_delete_succeeds_if_never_pushed(tmp_path: Path) -> None:
+    """Plain delete() (no keep_local/keep_server) tolerates a never-pushed working directory
+       just fine--there's nothing to send to deleteContribution, so it just removes the local
+       directory, same as it would for any other directory."""
     client = object()
     manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
     await manager.create(title="My Puzzle")
 
-    with pytest.raises(FileNotFoundError):
-        await manager.delete()
+    await manager.delete()  # doesn't raise, and never touches self.client
+
+    assert not tmp_path.exists()
 
 
 async def test_delete_refuses_while_merge_in_progress(tmp_path: Path) -> None:
@@ -1386,14 +1608,33 @@ async def test_delete_keep_server_leaves_server_untouched(tmp_path: Path) -> Non
     assert not tmp_path.exists()
 
 
-async def test_delete_keep_server_works_even_if_never_pushed(tmp_path: Path) -> None:
+async def test_delete_keep_server_refuses_if_never_pushed(tmp_path: Path) -> None:
+    """Unlike plain delete(), keep_server=True is an explicit statement about server state
+       ("leave the thing I'm tracking alone")--nonsensical to honor silently when nothing is
+       actually tracked yet, so this raises instead."""
     client = object()
     manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
     await manager.create(title="My Puzzle")
 
-    await manager.delete(keep_server=True)  # doesn't raise, and never touches self.client
+    with pytest.raises(FileNotFoundError):
+        await manager.delete(keep_server=True)
 
-    assert not tmp_path.exists()
+    assert tmp_path.exists()  # refused before touching anything
+
+
+async def test_delete_keep_local_refuses_if_never_pushed(tmp_path: Path) -> None:
+    """Same reasoning as keep_server: keep_local means "detach from the thing I'm tracking,"
+       which doesn't make sense when nothing is being tracked yet."""
+    client = object()
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.create(title="My Puzzle")
+
+    with pytest.raises(FileNotFoundError):
+        await manager.delete(keep_local=True)
+
+    assert tmp_path.exists()  # refused before touching anything
+
+    assert tmp_path.exists()  # refused before touching anything
 
 
 async def test_delete_keep_local_and_keep_server_are_mutually_exclusive(tmp_path: Path) -> None:

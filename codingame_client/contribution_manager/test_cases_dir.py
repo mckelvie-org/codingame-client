@@ -52,10 +52,12 @@ __all__ = [
     "VALIDATOR_SUBDIR_NAME",
     "CgContributionTestCaseError",
     "CgTestCaseFileMeta",
+    "CgContributionLocalTestCase",
     "normalize_test_title",
     "import_test_cases",
     "commit_test_cases",
     "renormalize_test_case_dirs",
+    "list_local_test_cases",
 ]
 
 TESTS_SUBDIR_NAME = "tests"
@@ -284,3 +286,79 @@ def renormalize_test_case_dirs(tests_dir: Path) -> None:
         staged.append((temp_path, str(i + 1).zfill(width)))
     for temp_path, target_name in staged:
         temp_path.rename(tests_dir / target_name)
+
+
+@dataclass(frozen=True)
+class CgContributionLocalTestCase:
+    """One (ordinal, side) test case as read back from `tests_dir` by `list_local_test_cases`--
+       the local-execution counterpart to `commit_test_cases`'s flat `list[CgTestCase]` (which is
+       shaped for submission to `updateContribution`, not for running locally: it drops the
+       ordinal, and--unlike `CgTestCase`--this carries file paths, not just content, so a caller
+       can overwrite `output_file` in place, e.g. to accept a solution's current output as the new
+       expected baseline)."""
+
+    ordinal: str
+    """The ordinal directory name this test case lives under (e.g. `"03"`)--not necessarily a
+       clean integer (see the module docstring's `"05a"` example), but comparable via natural
+       sort like everything else here."""
+
+    side: str
+    """Either `"local"` or `"validator"`--which of `tests_dir`'s two subdirectories (see
+       `LOCAL_SUBDIR_NAME`/`VALIDATOR_SUBDIR_NAME`) this test case came from."""
+
+    title: str
+    """The test case's real title (see `CgTestCaseFileMeta.title`)."""
+
+    input_file: Path
+    """Path to this test case's `input.txt`."""
+
+    output_file: Path
+    """Path to this test case's `output.txt`--the expected/known-good output. A caller running
+       this test case locally may overwrite this file with the solution's actual output to accept
+       it as the new baseline (see `codingame_client.test_runner.debug_stdin`'s
+       `--update-expected`, and `CgContributionManager.run_local_test`)."""
+
+    input_text: str
+    """Content of `input_file`, decoded as UTF-8."""
+
+    output_text: str
+    """Content of `output_file`, decoded as UTF-8, as of when this was read--stale the moment
+       `output_file` is overwritten by an update, so re-`list_local_test_cases` after updating
+       rather than reusing an old `CgContributionLocalTestCase`."""
+
+
+def list_local_test_cases(tests_dir: Path) -> list[CgContributionLocalTestCase]:
+    """Read `tests_dir` back into a flat list of individually-runnable local test cases--one per
+       (ordinal, side) pair actually present on disk, in the same ordinal natural-sort order as
+       `commit_test_cases`, local before validator within an ordinal. Unlike `commit_test_cases`,
+       both sides of an ordinal are kept as separate entries here (rather than being merged into
+       API submission order) since each is independently runnable, and file paths are included
+       (rather than just content) since a caller may want to update `output_file` in place.
+
+    Returns:
+        An empty list if `tests_dir` doesn't exist (no test cases yet).
+    """
+    if not tests_dir.is_dir():
+        return []
+    ordinal_dirs = sorted(
+            (d for d in tests_dir.iterdir() if d.is_dir()),
+            key=lambda d: _natural_sort_key(d.name),
+        )
+    result: list[CgContributionLocalTestCase] = []
+    for ordinal_dir in ordinal_dirs:
+        named_dirs = sorted((d for d in ordinal_dir.iterdir() if d.is_dir()), key=lambda d: d.name)
+        for named_dir in named_dirs:
+            title = _read_test_meta_title(named_dir)
+            for side, subdir_name in (("local", LOCAL_SUBDIR_NAME), ("validator", VALIDATOR_SUBDIR_NAME)):
+                side_dir = named_dir / subdir_name
+                if not side_dir.is_dir():
+                    continue
+                input_file = side_dir / _INPUT_FILE_NAME
+                output_file = side_dir / _OUTPUT_FILE_NAME
+                result.append(CgContributionLocalTestCase(
+                        ordinal=ordinal_dir.name, side=side, title=title,
+                        input_file=input_file, output_file=output_file,
+                        input_text=input_file.read_text(encoding="utf-8"),
+                        output_text=output_file.read_text(encoding="utf-8"),
+                    ))
+    return result
