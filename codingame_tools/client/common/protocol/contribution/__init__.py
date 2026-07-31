@@ -8,12 +8,14 @@ from .schema import (
     CgContribution,
     CgContributionData,
     CgContributionId,
+    CgContributionModerator,
     CgContributionStatusChange,
     CgContributionStatusHistoryEntry,
     CgContributionVersion,
     CgDeleteContributionResult,
     CgHtml,
     CgMarkdown,
+    CgModerationAction,
     CgPendingContribution,
     CgPuzzleType,
     CgSolutionLanguage,
@@ -26,8 +28,8 @@ from .schema import (
 )
 
 __all__ = [
-    "CgContribution", "CgContributionData", "CgContributionStatusChange",
-    "CgContributionStatusHistoryEntry", "CgContributionVersion", "CgTestCase",
+    "CgContribution", "CgContributionData", "CgContributionModerator", "CgContributionStatusChange",
+    "CgContributionStatusHistoryEntry", "CgContributionVersion", "CgTestCase", "CgModerationAction",
     "CgMarkdown", "CgHtml", "CgStubGenerator", "CgTopic", "CgContributionId",
     "CgPendingContribution", "CgPuzzleType", "CgSolutionLanguage", "CgValidateAction",
     "CgDeleteContributionResult",

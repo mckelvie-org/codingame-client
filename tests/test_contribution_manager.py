@@ -21,6 +21,7 @@ import pytest
 from codingame_tools.client.common.protocol.contribution import (
     CgContribution,
     CgContributionData,
+    CgContributionModerator,
     CgContributionVersion,
     CgDeleteContributionResult,
     CgTestCase,
@@ -29,6 +30,7 @@ from codingame_tools.client.common.raw_client import CgDownloadFileResult, CgUpl
 from codingame_tools.contribution_manager.manager import (
     CgContributionManager,
     CgContributionManagerError,
+    CgContributionSyncStatus,
     CgMergeStartStatus,
     CgRebaseStatus,
 )
@@ -139,6 +141,8 @@ class _FakeContributionService:
         self.create_calls: list[dict[str, Any]] = []
         self.delete_calls: list[str] = []
         self.find_call_count = 0
+        self.moderator_results: dict[str, list[CgContributionModerator]] = {"validate": [], "deny": []}
+        self.find_contribution_moderators_calls: list[tuple[int, str]] = []
         self.helper = _FakeContributionHelper(self)
 
     async def find_contribution(self, contribution_id: str, arg2: bool = True) -> CgContribution:
@@ -148,6 +152,12 @@ class _FakeContributionService:
     async def delete_contribution(self, contribution_id: str, codingamer_id: int | None = None) -> CgDeleteContributionResult:
         self.delete_calls.append(contribution_id)
         return CgDeleteContributionResult(action_id=1, result=True)
+
+    async def find_contribution_moderators(
+                self, contribution_numeric_id: int, action: str,
+            ) -> list[CgContributionModerator]:
+        self.find_contribution_moderators_calls.append((contribution_numeric_id, action))
+        return self.moderator_results[action]
 
 
 class _FakeServices:
@@ -901,6 +911,29 @@ async def test_fetch_is_noop_when_version_unchanged(tmp_path: Path) -> None:
     assert file_servlet.calls == []
 
 
+async def test_fetch_refreshes_status_cache_even_when_version_unchanged(tmp_path: Path) -> None:
+    """A moderator vote (or a new comment/view/etc.) doesn't bump the content version, so it
+       would never be seen if the status cache refresh were gated on the same "version changed"
+       check as the git commit--`fetch()` must refresh `.meta/contribution-status.json`
+       unconditionally, even on this no-git-commit path."""
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+    approver = CgContributionModerator(
+            user_id=6132028, pseudo="NicknamedTwice", public_handle="d2434f", avatar=1, cover=2)
+    service.moderator_results = {"validate": [approver], "deny": []}
+    server_before = manager.git_repo.resolve_ref("server")
+
+    await manager.fetch()
+
+    assert manager.git_repo.resolve_ref("server") == server_before  # no new commit--version unchanged
+    cache = manager.read_status_cache()
+    assert cache is not None
+    assert cache.moderator_approvals == [approver]  # but the cache still picked up the new vote
+
+
 async def test_fetch_reuses_cached_cover_when_binary_id_unchanged(tmp_path: Path) -> None:
     data = _make_full_data()
     contribution = _make_contribution(data)
@@ -1059,6 +1092,207 @@ async def test_rebase_refuses_while_merge_in_progress(tmp_path: Path) -> None:
 
     with pytest.raises(CgContributionManagerError):
         await manager.rebase()
+
+
+# --- status ----------------------------------------------------------------------------------
+
+
+async def test_read_status_cache_self_heals_on_corrupt_file(tmp_path: Path) -> None:
+    """Opportunistic cache, same self-healing spirit as fetch()'s cover-image reuse: a corrupt/
+       unparseable .meta/contribution-status.json is treated as absent, not fatal."""
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, _, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+    assert manager.read_status_cache() is not None  # sanity: import_() did write it
+
+    manager.status_cache_file.write_text("not valid json{{{")
+
+    assert manager.read_status_cache() is None
+
+
+async def test_status_not_pushed_for_a_create_only_directory(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.create(title="My Puzzle")
+
+    status = await manager.status()
+
+    assert not status.pushed
+    assert status.contribution_handle is None
+    assert status.local_title == "My Puzzle"
+    assert status.sync_status == CgContributionSyncStatus.NOT_PUSHED
+    assert status.local_version is None
+    assert status.server is None
+    assert service.find_call_count == 0  # never fetched--create() is purely local
+
+
+async def test_status_up_to_date_after_import_uses_cached_server_data(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data, version=3)
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+    find_calls_after_import = service.find_call_count
+
+    status = await manager.status()
+
+    assert status.pushed
+    assert status.contribution_handle == "handle-1"
+    assert status.sync_status == CgContributionSyncStatus.UP_TO_DATE
+    assert not status.local_dirty
+    assert not status.merge_in_progress
+    assert status.local_version == 3
+    assert status.server is not None
+    assert status.server.status == "PENDING"
+    assert status.server.public_handle == "handle-1"
+    # served from .meta/contribution-status.json (written by import_()), not a fresh findContribution
+    assert service.find_call_count == find_calls_after_import
+    # import_() already refreshed the status cache (including moderator votes)--populated (as
+    # empty lists here, since the fake service defaults to no votes cast) without remote=True
+    assert status.moderator_approvals == []
+    assert status.moderator_denials == []
+    assert status.status_cache_refreshed_at is not None
+
+
+async def test_status_remote_refreshes_moderator_approve_reject_votes(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data, version=3)  # CgContribution.id is hardcoded to 1 in _make_contribution
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+    service.find_contribution_moderators_calls.clear()  # isolate the status(remote=True) call below
+    approver = CgContributionModerator(
+            user_id=6132028, pseudo="NicknamedTwice", public_handle="d2434f", avatar=1, cover=2)
+    service.moderator_results = {"validate": [approver], "deny": []}
+
+    status = await manager.status(remote=True)
+
+    assert status.moderator_approvals == [approver]
+    assert status.moderator_denials == []
+    assert service.find_contribution_moderators_calls == [(1, "validate"), (1, "deny")]
+
+
+async def test_status_local_draft_reflects_uncommitted_edits_while_cached_server_reflects_last_sync(tmp_path: Path) -> None:
+    """`status.local_draft`/`local_ready_for_moderation`/`local_puzzle_type` reflect `data/
+       contribution-data.json`'s current on-disk value (what the next `push()` would send).
+       `status.server` (from the unredacted `.meta/contribution-status.json` cache--unlike the
+       git `version-data` branch's copy, this one is NOT redacted) reflects the server's state as
+       of the last fetch--right after `import_()` the two agree, but a local edit not yet pushed
+       makes them diverge, which is exactly why local edits should be read from `local_*`, not
+       `server`."""
+    data = _make_full_data()
+    contribution = _make_contribution(data, draft=False, ready_for_moderation=True)
+    client, _, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+
+    status = await manager.status()
+    assert status.local_draft is False
+    assert status.local_ready_for_moderation is True
+    assert status.local_puzzle_type == "PUZZLE_INOUT"
+    assert status.server is not None
+    assert status.server.draft is False
+    assert status.server.ready_for_moderation is True
+
+    view = manager.load()
+    manager.save(dataclasses.replace(view, draft=True))
+
+    status2 = await manager.status()
+    assert status2.local_draft is True  # the uncommitted local edit
+    assert status2.server is not None
+    assert status2.server.draft is False  # unchanged--still the last-synced server value
+
+
+async def test_status_local_ahead_after_local_commit(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, _, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+    (tmp_path / "data" / "statement.cgmd").write_text("Local edit\n")
+    manager.git_repo.commit_worktree("local edit")
+
+    status = await manager.status()
+
+    assert status.sync_status == CgContributionSyncStatus.LOCAL_AHEAD
+    assert not status.local_dirty  # committed, not just sitting uncommitted
+
+
+async def test_status_local_ahead_with_uncommitted_edits(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, _, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+    (tmp_path / "data" / "statement.cgmd").write_text("Local edit\n")
+
+    status = await manager.status()
+
+    assert status.sync_status == CgContributionSyncStatus.LOCAL_AHEAD
+    assert status.local_dirty
+
+
+async def test_status_server_ahead_only_refreshes_with_remote(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+
+    new_data = _make_full_data(statement="Updated on server")
+    service.find_result = _make_contribution(new_data, version=4)
+
+    stale = await manager.status()
+    assert stale.sync_status == CgContributionSyncStatus.UP_TO_DATE  # cache not yet refreshed
+    assert stale.local_version == 3
+
+    fresh = await manager.status(remote=True)
+    assert fresh.sync_status == CgContributionSyncStatus.SERVER_AHEAD
+    assert fresh.local_version == 4
+
+
+async def test_status_diverged_when_both_sides_changed(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+    (tmp_path / "data" / "statement.cgmd").write_text("Local edit\n")
+    manager.git_repo.commit_worktree("local edit")
+    new_data = _make_full_data(statement="Server edit")
+    service.find_result = _make_contribution(new_data, version=4)
+
+    status = await manager.status(remote=True)
+
+    assert status.sync_status == CgContributionSyncStatus.DIVERGED
+
+
+async def test_status_reports_merge_in_progress(tmp_path: Path) -> None:
+    data = _make_full_data()
+    contribution = _make_contribution(data)
+    client, service, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+    await _start_conflicting_merge(manager, service, data)
+
+    status = await manager.status()
+
+    assert status.merge_in_progress
+    assert status.sync_status == CgContributionSyncStatus.MERGE_IN_PROGRESS
+    assert not status.local_dirty  # not meaningful mid-merge, deliberately not computed
+
+
+async def test_status_raises_if_never_imported_or_created(tmp_path: Path) -> None:
+    contribution = _make_contribution(_make_full_data())
+    client, _, _, _ = _make_fake_client(contribution)
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+
+    with pytest.raises(FileNotFoundError):
+        await manager.status()
 
 
 # --- merge_discard_local / merge_discard_server --------------------------------------------

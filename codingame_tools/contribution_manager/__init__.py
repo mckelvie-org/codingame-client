@@ -3,15 +3,17 @@
 
    See `CgContributionManager` for `import_`/`repair`/`create`/`push`/`rebase`/`fetch`/
    `merge_start`/`merge_continue`/`merge_abort`/`merge_discard_local`/`merge_discard_server`/
-   `discard_local`/`delete`--its module docstring covers the `main`/`server`/`version-data` branch
-   design in full, `push()`'s covers the create-vs-update duality hidden behind that one method,
-   and `repair()`'s covers reconstructing a missing/corrupted git-dir; `codingame_tools.
-   contribution_manager.schema` for the working directory's own manifest files
-   (`CgContributionIdentity`/`CgContributionView`); `codingame_tools.contribution_manager.
-   contribution_commit_data` for `CgContributionCommitMetadata` (the git-trailer-backed remote
-   commit metadata) and `redact_commit_contribution`; `codingame_tools.contribution_manager.
-   git_repo` for the low-level git plumbing wrapper; and `codingame_tools.contribution_manager.
-   resolver` for how a contribution directory is located.
+   `discard_local`/`delete`/`status`/`read_status_cache`--its module docstring covers the `main`/
+   `server`/`version-data` branch design in full, `push()`'s covers the create-vs-update duality
+   hidden behind that one method, and `repair()`'s covers reconstructing a missing/corrupted
+   git-dir; `codingame_tools.contribution_manager.schema` for the working directory's own
+   manifest files (`CgContributionIdentity`/`CgContributionView`/`CgContributionStatusCache`--the
+   last one an offline, non-git-tracked cache of server metadata that isn't tied to any content
+   version, e.g. votes/comments/the moderator approve-reject gate); `codingame_tools.
+   contribution_manager.contribution_commit_data` for `CgContributionCommitMetadata` (the
+   git-trailer-backed remote commit metadata) and `redact_commit_contribution`; `codingame_tools.
+   contribution_manager.git_repo` for the low-level git plumbing wrapper; and `codingame_tools.
+   contribution_manager.resolver` for how a contribution directory is located.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from .contribution_commit_data import (
 )
 from .git_repo import CgGitError, CgGitRepo, init_repo, is_inside_existing_repo
 from .layout import (
+    CONTRIBUTION_STATUS_CACHE_FILE_NAME,
     COVER_IMAGE_FILE_NAME,
     DATA_SUBDIR_NAME,
     GIT_METADATA_SUBDIR_NAME,
@@ -49,6 +52,8 @@ from .manager import (
     CgContributionLocalTestResult,
     CgContributionManager,
     CgContributionManagerError,
+    CgContributionStatus,
+    CgContributionSyncStatus,
     CgMergeStartResult,
     CgMergeStartStatus,
     CgRebaseStatus,
@@ -67,6 +72,7 @@ from .schema import (
     CONTRIBUTION_IDENTITY_FILE_NAME,
     CONTRIBUTION_SCHEMA_VERSION,
     CgContributionIdentity,
+    CgContributionStatusCache,
     CgContributionView,
 )
 from .test_cases_dir import (
@@ -90,14 +96,18 @@ __all__ = [
     "CgRebaseStatus",
     "CgMergeStartStatus",
     "CgMergeStartResult",
+    "CgContributionSyncStatus",
+    "CgContributionStatus",
     "CgContributionLocalTestResult",
     "CgContributionLocalTestFailedError",
     "CgContributionLocalTestCase",
     "list_local_test_cases",
     "CgContributionIdentity",
     "CgContributionView",
+    "CgContributionStatusCache",
     "CONTRIBUTION_IDENTITY_FILE_NAME",
     "CONTRIBUTION_DATA_FILE_NAME",
+    "CONTRIBUTION_STATUS_CACHE_FILE_NAME",
     "CONTRIBUTION_SCHEMA_VERSION",
     "CgContributionCommitMetadata",
     "CONTRIBUTION_COMMIT_DATA_FILE_NAME",

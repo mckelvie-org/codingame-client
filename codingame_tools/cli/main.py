@@ -8,7 +8,7 @@ import logging
 import subprocess
 import sys
 import textwrap
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import cast
@@ -40,9 +40,12 @@ from ..contribution_manager import (
     CgContributionCommitMetadata,
     CgContributionLocalTestResult,
     CgContributionManager,
+    CgContributionStatus,
+    CgContributionSyncStatus,
     CgMergeStartStatus,
     CgRebaseStatus,
     find_contribution_dir,
+    redact_commit_contribution,
     renormalize_test_case_dirs,
     resolve_contribution_dir,
 )
@@ -62,6 +65,22 @@ from ..puzzle_manager import (
 from ..settings import CgSettings, resolve_settings
 
 logger = logging.getLogger(__name__)
+
+def _isoformat_z(dt: datetime) -> str:
+    """Render a UTC-aware datetime as ISO 8601 with a trailing "Z" instead of "+00:00"--both are
+       equally standard (RFC 3339/ISO 8601's "Zulu time" designator for UTC), "Z" is just the
+       more common convention."""
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+_SYNC_STATUS_TEXT: dict[CgContributionSyncStatus, str] = {
+    CgContributionSyncStatus.NOT_PUSHED: "not yet pushed",
+    CgContributionSyncStatus.UP_TO_DATE: "up to date",
+    CgContributionSyncStatus.LOCAL_AHEAD: "local changes not yet pushed--`cg contribution push` would succeed cleanly",
+    CgContributionSyncStatus.SERVER_AHEAD: "server has new changes--`cg contribution rebase` would fast-forward cleanly",
+    CgContributionSyncStatus.DIVERGED: "diverged--both sides changed; see `cg contribution diff` and `cg contribution merge`",
+    CgContributionSyncStatus.MERGE_IN_PROGRESS: "merge in progress",
+}
+"""Human-readable text for `cg contribution status`'s `CgContributionSyncStatus` display."""
 
 def default_config_template(default_data_dir: Path) -> str:
     """Build the content for a freshly-`init`'d config.yaml.
@@ -731,6 +750,26 @@ class CgCli(CliBase):
                        help="Count contributions published after this point in time. Can be milliseconds "
                             "since epoch (e.g., '1680000000000'), a duration string (e.g., '1h30m'), a relative "
                             "duration from now (e.g., '-1h30m'), or an ISO 8601 datetime string. Defaults to now.")
+        return handler
+
+    @cli_command("List the moderators who have cast a given vote ('validate'/'deny') on a "
+                 "PENDING contribution's approve/reject moderation gate--the privileged gate "
+                 "that actually decides whether it gets published or rejected (3 votes either "
+                 "way, confirmed live). Distinct from the ungated community vote (`cg api vote "
+                 "find-votable-values-by-id`)--do not conflate the two.")
+    async def cmd_api__contribution__find_contribution_moderators(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_numeric_id: int = self.args.contribution_numeric_id
+            action: str = self.args.action
+            client = await self.get_client()
+            moderators = await client.services.contribution.find_contribution_moderators(contribution_numeric_id, action)
+            print(json.dumps([m.to_dict() for m in moderators], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("contribution_numeric_id", type=int, metavar="CONTRIBUTION-NUMERIC-ID",
+                       help="The contribution's *numeric* ID (CgContribution.id)--NOT the opaque "
+                            "public handle used by every other `cg api contribution` command.")
+        p.add_argument("action", type=str, choices=["validate", "deny"], metavar="ACTION",
+                       help="'validate' (approve) or 'deny' (reject).")
         return handler
 
     @cli_command("Get pending (community-review-queue) contributions.")
@@ -1424,6 +1463,27 @@ class CgCli(CliBase):
             print(json.dumps(language_ids, indent=2, sort_keys=True))
         return handler
 
+    @cli_command("Vote service commands.")
+    async def cmd_api__vote(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None  # No handler for the parent command; subcommands will be handled by their own handlers.
+
+    @cli_command("Find a votable's current up/down-vote tally (e.g. a contribution's "
+                 "CgContribution.votable_id)--CodinGame's generic community vote, distinct from "
+                 "the moderator approve/reject gate (no known API for that yet).")
+    async def cmd_api__vote__find_votable_values_by_id(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            votable_id: int = self.args.votable_id
+            codingamer_id: int | None = self.args.codingamer_id
+            client = await self.get_client()
+            values = await client.services.vote.find_votable_values_by_id(votable_id, codingamer_id)
+            print(json.dumps([v.to_dict() for v in values], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("votable_id", type=int, metavar="VOTABLE-ID",
+                       help="The votable entity's ID, e.g. a contribution's votableId.")
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Codingamer whose own vote to report. Defaults to the logged-in codingamer's ID.")
+        return handler
+
     @cli_command("Higher-level helper commands, layered on top of the plain API wrappers "
                  "(retries, polling, data normalization).")
     async def cmd_api_helper(self, cmd: CliCommand[Self]) -> OptCmdFunc:
@@ -1688,6 +1748,138 @@ class CgCli(CliBase):
                 print("No contribution working directory found. Run `cg contribution import CONTRIBUTION-ID DIRECTORY` to create one.")
                 return
             print(f"Contribution directory: {found}")
+        return handler
+
+    @cli_command("Human-friendly summary of this contribution: submission/review status, sync "
+                 "status against the server, votes/comments/views, the moderator approve/reject "
+                 "gate, and any in-progress validation. By default reports whatever "
+                 ".meta/contribution-status.json last cached (no network access); pass --refresh "
+                 "to fetch fresh first (updates that cache for next time too). With --json "
+                 "(top-level option), renders as JSON instead of text.")
+    async def cmd_contribution__status(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            refresh: bool = self.args.refresh
+            use_json: bool = self.args.json
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            client = await self.get_client()
+            manager = CgContributionManager(resolved_dir, client)
+            try:
+                status: CgContributionStatus = await manager.status(remote=refresh)
+            except FileNotFoundError as e:
+                raise CliError(str(e)) from e
+
+            server = status.server
+            refreshed_at_iso = None if status.status_cache_refreshed_at is None else _isoformat_z(status.status_cache_refreshed_at)
+            moderation_autoclose_iso: str | None = None
+            moderation_remaining_seconds: int | None = None
+            if server is not None:
+                autoclose = server.last_version.autoclose_time
+                if autoclose is not None:
+                    moderation_autoclose_iso = _isoformat_z(autoclose)
+                    moderation_remaining_seconds = int((autoclose - datetime.now(timezone.utc)).total_seconds())
+
+            if use_json:
+                server_dict: JsonData | None = None
+                if server is not None:
+                    # `.meta/contribution-status.json` stores `server` whole and unredacted (see
+                    # CgContributionStatusCache's docstring)--including the full statement/
+                    # solution/test-case content, which is not what a "status" summary should
+                    # dump. Redact it the same way the git version-data branch already does for
+                    # display purposes here, and drop the resulting known-placeholder `draft`/
+                    # `readyForModeration`/`type` keys rather than ship misleading values--the
+                    # real ones are the top-level local* fields above.
+                    server_dict = redact_commit_contribution(server).to_dict()
+                    server_dict.pop("draft", None)
+                    server_dict.pop("readyForModeration", None)
+                    server_dict.pop("type", None)
+                output: JsonData = {
+                    "contributionDir": str(status.contribution_dir),
+                    "pushed": status.pushed,
+                    "contributionHandle": status.contribution_handle,
+                    "localTitle": status.local_title,
+                    "localPuzzleType": status.local_puzzle_type,
+                    "localSolutionLanguage": status.local_solution_language,
+                    "localDraft": status.local_draft,
+                    "localReadyForModeration": status.local_ready_for_moderation,
+                    "localDirty": status.local_dirty,
+                    "mergeInProgress": status.merge_in_progress,
+                    "syncStatus": status.sync_status.value,
+                    "localVersion": status.local_version,
+                    "statusCacheRefreshedAt": refreshed_at_iso,
+                    "moderationAutocloseTime": moderation_autoclose_iso,
+                    "moderationWindowRemainingSeconds": moderation_remaining_seconds,
+                    "moderatorApprovals": None if status.moderator_approvals is None
+                        else [m.to_dict() for m in status.moderator_approvals],
+                    "moderatorDenials": None if status.moderator_denials is None
+                        else [m.to_dict() for m in status.moderator_denials],
+                    "server": server_dict,
+                }
+                print(json.dumps(output, indent=4, sort_keys=True))
+                return
+
+            def line(label: str, value: object) -> None:
+                print(f"{label:<25}{value}")
+
+            line("Contribution directory:", status.contribution_dir)
+            line("Local title:", repr(status.local_title))
+            line("Puzzle type:", status.local_puzzle_type or "(not set)")
+            line("Language:", status.local_solution_language or "(not set)")
+            line("Draft:", "yes" if status.local_draft else "no")
+            line("Ready for moderation:", "yes" if status.local_ready_for_moderation else "no")
+            line("Handle:", status.contribution_handle if status.pushed else "<not yet pushed>")
+            line("Contribution id:", server.id if server is not None else "<not yet pushed>")
+            if not status.pushed:
+                line("Local edits:", "yes (uncommitted)" if status.local_dirty else "none")
+                return
+            if status.merge_in_progress:
+                line("Sync status:", "merge in progress--run `cg contribution merge continue`/`abort`.")
+            else:
+                line("Sync status:", _SYNC_STATUS_TEXT[status.sync_status])
+                line("Local edits:", "yes (uncommitted)" if status.local_dirty else "none")
+            line("Last synced version:", status.local_version)
+            if server is None:
+                print("(no cached server details yet--run `cg contribution status --refresh` to fetch them)")
+                return
+            print()
+            print(f"Server details below are as of last refresh: {refreshed_at_iso}--pass --refresh to update.")
+            print()
+            line("Contribution status:", server.status)
+            line("Editable:", "yes" if server.editable else "no")
+            line("Active version:", server.active_version)
+            line("Score:", f"{server.score} (+{server.up_votes} / -{server.down_votes})")
+            line("Comments:", server.comment_count)
+            line("Views:", server.views)
+            if moderation_remaining_seconds is not None and moderation_autoclose_iso is not None:
+                if moderation_remaining_seconds > 0:
+                    days, rem = divmod(moderation_remaining_seconds, 86400)
+                    hours = rem // 3600
+                    window_text = f"{days}d {hours}h remaining (closes {moderation_autoclose_iso})"
+                else:
+                    window_text = f"expired (closed {moderation_autoclose_iso})"
+                line("Moderation window:", window_text)
+            assert status.moderator_approvals is not None  # populated whenever `server` is
+            assert status.moderator_denials is not None
+            approval_names = ", ".join(m.pseudo for m in status.moderator_approvals)
+            line("Approvals:", f"{len(status.moderator_approvals)}/3" + (f" ({approval_names})" if approval_names else ""))
+            denial_names = ", ".join(m.pseudo for m in status.moderator_denials)
+            line("Rejections:", f"{len(status.moderator_denials)}/3" + (f" ({denial_names})" if denial_names else ""))
+            if server.validate_action is not None:
+                va = server.validate_action
+                progress_pct = round(va.progress * 100)
+                done = " (done)" if va.already_done else ""
+                line("Validation:", f"in progress, {progress_pct}%{done}")
+            if server.status_history:
+                latest = server.status_history[-1]
+                line(
+                        "Latest status change:",
+                        f"{latest.status} at {_isoformat_z(latest.date)} ({latest.data.author}/{latest.data.reason})",
+                    )
+        p = cmd.get_parser()
+        p.add_argument("--refresh", default=False, action="store_true",
+                       help="Fetch fresh from the server first (forces `fetch()`, which also "
+                            "refreshes .meta/contribution-status.json for next time), instead of "
+                            "using whatever's cached there already.")
         return handler
 
     @cli_command("Discard local edits: reset this working directory's content to match server's "

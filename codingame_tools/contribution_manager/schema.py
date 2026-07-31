@@ -11,14 +11,25 @@
    - `contribution-data.json` (`CgContributionView`): the actual content manifest, inside `data/`
      (see `codingame_tools.contribution_manager.layout.DATA_SUBDIR_NAME`)--part of `data/`'s
      ordinary git-tracked content, diffed/merged by real git like everything else there.
+
+   - `.meta/contribution-status.json` (`CgContributionStatusCache`): an offline, non-git-tracked
+     cache of server metadata that isn't tied to any content version (score/votes/comment count/
+     views/moderator approve-reject tallies/etc.)--see that class's docstring.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
-from ..client.common.protocol.contribution import CgContributionData, CgContributionId, CgPuzzleType
-from ..common.dataclass_wizard_x import CatchAll, JSONWizardX
+from ..client.common.protocol.contribution import (
+    CgContribution,
+    CgContributionData,
+    CgContributionId,
+    CgContributionModerator,
+    CgPuzzleType,
+)
+from ..common.dataclass_wizard_x import Alias, CatchAll, CgEpochMillis, JSONWizardX
 
 __all__ = [
     "CONTRIBUTION_IDENTITY_FILE_NAME",
@@ -26,6 +37,7 @@ __all__ = [
     "CONTRIBUTION_SCHEMA_VERSION",
     "CgContributionIdentity",
     "CgContributionView",
+    "CgContributionStatusCache",
 ]
 
 CONTRIBUTION_IDENTITY_FILE_NAME = "contribution.json"
@@ -124,3 +136,61 @@ class CgContributionView(JSONWizardX):
     data: CgContributionData = field(default_factory=lambda: CgContributionData(title=""))
     """The materialized contribution content--see the class docstring for which fields are real
        and which are always-empty placeholders backed by sibling files/directories instead."""
+
+
+@dataclass
+class CgContributionStatusCache(JSONWizardX):
+    """The `.meta/contribution-status.json` cache: an offline snapshot of every piece of server
+       metadata that is NOT tied to any particular content version--`status`/`status_history`/
+       `score`/`up_votes`/`down_votes`/`comment_count`/`views`/`editable`/`active_version`/
+       `validate_action`/the moderation-window timestamps (all live on `contribution.last_version`
+       or `contribution` itself), plus `moderator_approvals`/`moderator_denials` (from a wholly
+       separate endpoint, `Contribution/findContributionModerators`--not part of `CgContribution`
+       at all).
+
+       Deliberately NOT git-tracked (see `layout.CONTRIBUTION_STATUS_CACHE_FILE_NAME`)--unlike
+       `contribution-data.json`, none of this is diffable/mergeable content, it's just the most
+       recent snapshot available, refreshed every time `CgContributionManager.fetch()`/`import_()`/
+       `repair()` obtain a fresh `CgContribution` from the server--regardless of whether the
+       content version changed, since none of these fields are tied to it (a moderator vote or a
+       new comment doesn't bump the content version).
+
+       `contribution` is stored whole and unredacted here (unlike the `version-data` git branch's
+       copy, which redacts `draft`/`ready_for_moderation`/`contribution_type`/`last_version.data`
+       to keep those out of diffable git history)--this file isn't git-tracked at all, so nothing
+       is gained by redacting it, and keeping the full object avoids having to duplicate every
+       field name into a narrower cache-specific shape."""
+
+    version: int
+    """The content version (`contribution.last_version.version`) as of this refresh--informational
+       only; this cache's own fields are current as of `refreshed_at` regardless of whether the
+       content version has since moved on."""
+
+    contribution: CgContribution
+    """The complete, unredacted `CgContribution` as returned by `findContribution` at
+       `refreshed_at`."""
+
+    moderator_approvals: list[CgContributionModerator]
+    """Moderators who had cast a `"validate"` (approve) vote as of `refreshed_at`."""
+
+    moderator_denials: list[CgContributionModerator]
+    """Moderators who had cast a `"deny"` (reject) vote as of `refreshed_at`."""
+
+    # `_refreshed_at` (below) is an Alias()'d field with no real default--mypy's dataclass plugin
+    # still treats any `= Alias(...)` assignment as if it provided one, so (matching every other
+    # Alias()'d epoch-millis field in this codebase, e.g. CgAchievement._completion_time) it must
+    # be the LAST field before the true defaults (`extra_data` on down), not the first--otherwise
+    # mypy flags every genuinely-required field that follows it as a field-ordering error.
+    _refreshed_at: CgEpochMillis = Alias("refreshedAt")
+    """When this cache was last written."""
+
+    extra_data: CatchAll = field(default_factory=dict)
+
+    @property
+    def refreshed_at(self) -> datetime:
+        """See the field docstring for `_refreshed_at`. Always UTC."""
+        return self._refreshed_at
+
+    @refreshed_at.setter
+    def refreshed_at(self, value: datetime) -> None:
+        self._refreshed_at = CgEpochMillis.upcast(value)

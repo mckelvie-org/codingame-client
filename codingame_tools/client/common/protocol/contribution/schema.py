@@ -517,9 +517,43 @@ class CgPendingContribution(JSONWizardX):
         self._autoclose_time = CgEpochMillis.upcast(value)
 
 
+CgModerationAction = str
+"""One of the two moderator decisions on a PENDING contribution: `"validate"` (approve) or
+   `"deny"` (reject)--the argument to `Contribution/findContributionModerators`. This is the gate
+   that actually publishes/rejects a contribution (confirmed live by the user: "2/3 to approve,
+   0/3 to reject" on the site matched `findContributionModerators(id, "validate")` returning 2
+   moderators and `findContributionModerators(id, "deny")` returning 0)--distinct from, and not
+   derivable from, the ungated community up/down vote (`CgContribution.up_votes`/`down_votes`,
+   `Vote/findVotableValuesById`). The required vote count to tip the gate (3 either way, per the
+   user) is not itself returned by this API--only the current list of moderators on each side."""
+
+
+@dataclass
+class CgContributionModerator(JSONWizardX):
+    """A single moderator who has cast a `"validate"`/`"deny"` vote on a contribution, as
+       returned (in a bare JSON array) by `Contribution/findContributionModerators`."""
+
+    user_id: int
+    """The moderator's numeric codingamer ID."""
+
+    pseudo: str
+    """The moderator's display nickname."""
+
+    public_handle: str
+    """The moderator's opaque public handle."""
+
+    avatar: int
+    """The binary image ID of the moderator's avatar."""
+
+    cover: int
+    """The binary image ID of the moderator's profile cover image."""
+
+    extra_data: CatchAll = field(default_factory=dict)
+
+
 __all__ = [
-    "CgContribution", "CgContributionData", "CgContributionStatusChange",
-    "CgContributionStatusHistoryEntry", "CgContributionVersion", "CgTestCase",
+    "CgContribution", "CgContributionData", "CgContributionModerator", "CgContributionStatusChange",
+    "CgContributionStatusHistoryEntry", "CgContributionVersion", "CgTestCase", "CgModerationAction",
     "CgMarkdown", "CgHtml", "CgStubGenerator", "CgTopic", "CgContributionId", "CgPuzzleType",
     "CgPendingContribution", "CgSolutionLanguage", "CgValidateAction", "CgDeleteContributionResult",
     "cg_extension_to_solution_language", "cg_solution_language_to_extension",

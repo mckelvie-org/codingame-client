@@ -17,7 +17,9 @@ from ....common.protocol.contribution import (
     CgContribution,
     CgContributionData,
     CgContributionId,
+    CgContributionModerator,
     CgDeleteContributionResult,
+    CgModerationAction,
     CgPendingContribution,
     CgPuzzleType,
 )
@@ -293,6 +295,47 @@ class CgAsyncContributionService(CgAsyncService):
         since_ms = int(since.timestamp() * 1000)
         result = await self.service_request("findNewContributionCount", [codingamer_id, since_ms])
         return cast(int, result)
+
+    async def find_contribution_moderators(
+                self,
+                contribution_numeric_id: int,
+                action: CgModerationAction,
+            ) -> list[CgContributionModerator]:
+        """List the moderators who have cast a given vote on a PENDING contribution's
+           approve/reject moderation gate--the privileged (moderator/high-level-codingamer-only)
+           mechanism that actually decides whether a contribution gets published or rejected,
+           confirmed live to require 3 `"validate"` votes to approve or 3 `"deny"` votes to
+           reject. Entirely distinct from the ungated community up/down vote (`CgContribution.
+           up_votes`/`down_votes`, `Vote/findVotableValuesById`)--do not conflate the two.
+
+           The required threshold (3, either way) is not itself part of this response--only the
+           current list of moderators on the requested side. Call this twice (once per `action`)
+           to get both sides' current tallies (`len(result)`) and named voters.
+
+        Args:
+            contribution_numeric_id: The contribution's *numeric* ID (`CgContribution.id`)--NOT
+                                      the opaque `public_handle`/`CgContributionId` string used
+                                      by every other method on this service (`find_contribution`/
+                                      `update_contribution`/etc.). Confirmed live: passing the
+                                      numeric `id` (e.g. `149373`) works; the opaque handle was
+                                      not tried here and is not expected to.
+            action:                  `"validate"` (approve) or `"deny"` (reject)--see
+                                      `CgModerationAction`.
+
+        Returns:
+            A list of CgContributionModerator objects--one per moderator who has cast that vote.
+            Empty if nobody has voted that way yet.
+
+        Raises:
+            CgAuthenticationError:
+                If the session is not authenticated and cannot implicitly login.
+            CgAsyncClientHttpError:
+                If a transport error occurs, if the response content could not be decoded at all,
+                if the status code is not 2xx, or if the decoded content is not a list.
+        """
+        raw_moderators = await self.service_request_to_list(
+                "findContributionModerators", [contribution_numeric_id, action])
+        return CgContributionModerator.from_list(cast(list[JsonDict], raw_moderators))
 
     async def get_all_pending_contributions(
                 self,

@@ -33,6 +33,7 @@ from .services.test_session_question_submission import (
     CgAsyncTestSessionQuestionSubmissionServiceHelper,
 )
 from .services.user import CgAsyncUserService, CgAsyncUserServiceHelper
+from .services.vote import CgAsyncVoteService, CgAsyncVoteServiceHelper
 
 if TYPE_CHECKING:
     from ..client import CgAsyncClient
@@ -80,6 +81,8 @@ __all__ = [
     "CgAsyncTestSessionQuestionSubmissionServiceHelper",
     "CgAsyncUserService",
     "CgAsyncUserServiceHelper",
+    "CgAsyncVoteService",
+    "CgAsyncVoteServiceHelper",
 ]
 
 class CgAsyncServices:
@@ -116,6 +119,7 @@ class CgAsyncServices:
     test_session: CgAsyncTestSessionService
     test_session_question_submission: CgAsyncTestSessionQuestionSubmissionService
     user: CgAsyncUserService
+    vote: CgAsyncVoteService
 
     def __init__(self, client: CgAsyncClient) -> None:
         self.client = client
@@ -138,3 +142,4 @@ class CgAsyncServices:
         self.test_session = CgAsyncTestSessionService(client)
         self.test_session_question_submission = CgAsyncTestSessionQuestionSubmissionService(client)
         self.user = CgAsyncUserService(client)
+        self.vote = CgAsyncVoteService(client)

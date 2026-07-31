@@ -46,6 +46,7 @@ import dataclasses
 import logging
 import shutil
 import tempfile
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
@@ -54,11 +55,13 @@ from ..client.common.protocol.contribution import (
     CgContribution,
     CgContributionData,
     CgContributionId,
+    CgContributionModerator,
     CgPuzzleType,
     CgTestCase,
 )
 from ..client.common.protocol.schema import CgSolutionLanguage, cg_solution_language_to_extension
 from ..client.common.raw_client import compute_content_hash
+from ..common.dataclass_wizard_x import CgEpochMillis
 from ..test_runner import DEFAULT_RUN_TIMEOUT_SECONDS, outputs_match, run_solution_locally
 from .contribution_commit_data import (
     CONTRIBUTION_COMMIT_DATA_FILE_NAME,
@@ -68,6 +71,7 @@ from .contribution_commit_data import (
 from .git_repo import CgGitError, CgGitRepo, init_repo, is_inside_existing_repo
 from .layout import (
     CONSTRAINTS_FILE_NAME,
+    CONTRIBUTION_STATUS_CACHE_FILE_NAME,
     COVER_IMAGE_FILE_NAME,
     DATA_SUBDIR_NAME,
     GIT_METADATA_SUBDIR_NAME,
@@ -93,6 +97,7 @@ from .schema import (
     CONTRIBUTION_IDENTITY_FILE_NAME,
     CONTRIBUTION_SCHEMA_VERSION,
     CgContributionIdentity,
+    CgContributionStatusCache,
     CgContributionView,
 )
 from .test_cases_dir import (
@@ -116,6 +121,8 @@ __all__ = [
     "CgRebaseStatus",
     "CgMergeStartStatus",
     "CgMergeStartResult",
+    "CgContributionSyncStatus",
+    "CgContributionStatus",
     "CgContributionLocalTestResult",
     "CgContributionLocalTestFailedError",
     "CgContributionManager",
@@ -186,6 +193,123 @@ class CgMergeStartResult:
        default behavior for a binary conflict is to leave `main`'s (local) version as-is, no
        markers; pull `.git show server:<path>` (or `cg contribution git show server:<path>`) by
        hand if you want the server's version instead."""
+
+
+class CgContributionSyncStatus(str, Enum):
+    """Read-only classification of how `main` and `server` currently relate--see
+       `CgContributionManager.status()`. Distinct from `CgRebaseStatus` (the *outcome of taking an
+       action*): this describes the current state without changing anything, and distinguishes
+       `LOCAL_AHEAD`/`SERVER_AHEAD` from each other, which `CgRebaseStatus` doesn't need to (it
+       only cares whether `server` moved)."""
+
+    NOT_PUSHED = "not_pushed"
+    """`create()`d but never successfully `push()`d--no `server` branch exists at all yet."""
+
+    UP_TO_DATE = "up_to_date"
+    """`main` and `server` agree, and there are no uncommitted local edits either."""
+
+    LOCAL_AHEAD = "local_ahead"
+    """`main` has commits and/or uncommitted edits beyond the last sync point, but `server` hasn't
+       moved--a plain `push()` would succeed with no conflict."""
+
+    SERVER_AHEAD = "server_ahead"
+    """`server` has moved since the last sync, but `main` hasn't changed--`cg contribution rebase`
+       would fast-forward cleanly."""
+
+    DIVERGED = "diverged"
+    """Both sides have changed since they last synced--`cg contribution rebase`/`push()` would
+       report a conflict; use `cg contribution merge` to resolve."""
+
+    MERGE_IN_PROGRESS = "merge_in_progress"
+    """A `cg contribution merge` is currently unresolved (`MERGE_HEAD` exists)--other sync-status
+       classification doesn't apply until it's finished (`merge continue`) or `merge abort`ed."""
+
+
+@dataclasses.dataclass(frozen=True)
+class CgContributionStatus:
+    """A point-in-time summary of a contribution working directory--see
+       `CgContributionManager.status()`. Combines purely local facts (`sync_status`,
+       `local_dirty`, `local_title`) with the last-known server state (`server`/
+       `moderator_approvals`/`moderator_denials`/`status_cache_refreshed_at`), which is either
+       served from `.meta/contribution-status.json` (cheap, no network access) or freshly
+       re-fetched first, depending on `status(remote=...)`."""
+
+    contribution_dir: Path
+    """The working directory this status describes."""
+
+    pushed: bool
+    """Whether this working directory has ever been successfully `push()`d--i.e. whether
+       `contribution_handle` is set. If False, `server`/`local_version` are always None and
+       `sync_status` is always `NOT_PUSHED`."""
+
+    contribution_handle: CgContributionId | None
+    """The public handle this working directory tracks, or None if never pushed."""
+
+    local_title: str
+    """`data/contribution-data.json`'s current title, always available once imported/created,
+       regardless of push/sync state."""
+
+    local_dirty: bool
+    """Whether the working tree currently differs from `main`'s tip (staged or unstaged)--False
+       whenever `merge_in_progress` is True (not meaningful mid-merge)."""
+
+    merge_in_progress: bool
+    """Whether a `cg contribution merge` is currently unresolved."""
+
+    sync_status: CgContributionSyncStatus
+    """How `main` currently relates to `server`--see `CgContributionSyncStatus`."""
+
+    local_version: int | None
+    """The server version `main` last synced with (`server`'s tip's `Cg-Version` trailer), or None
+       if never pushed. Not necessarily the server's *current* version unless `sync_status` is
+       `UP_TO_DATE` or `LOCAL_AHEAD`--see `server.last_version.version` for that, when `server` is
+       populated fresh (`status(remote=True)`)."""
+
+    local_draft: bool
+    """`data/contribution-data.json`'s `draft` flag--what's currently on disk (i.e. what the
+       *next* `push()` would send), which may differ from `server.draft` if there are local edits
+       not yet pushed. Always available once imported/created. Prefer this over `server.draft`
+       for "what will be pushed"--`server` reflects the server's state as of the last fetch, not
+       necessarily what's currently on disk here."""
+
+    local_ready_for_moderation: bool
+    """`data/contribution-data.json`'s `ready_for_moderation` flag--see `local_draft`'s
+       docstring; same local-vs-server caveat applies to `server.ready_for_moderation`."""
+
+    local_puzzle_type: CgPuzzleType | None
+    """`data/contribution-data.json`'s `puzzle_type` (e.g. "PUZZLE_INOUT"), always available once
+       imported/created--see `local_draft`'s docstring for why this (not `server.
+       contribution_type`) is the one to use for "what will be pushed"."""
+
+    local_solution_language: CgSolutionLanguage | None
+    """`data/contribution-data.json`'s `data.solution_language` (e.g. "Python3")--the reference
+       solution's language. May be None if a solution hasn't been provided yet. Same local-vs-
+       server rationale as `local_puzzle_type`--this is versioned (content) state, changed only
+       via `push()`, not part of `CgContributionStatusCache`'s non-versioned metadata."""
+
+    server: CgContribution | None
+    """The last-known full, unredacted contribution record from the server (from `.meta/
+       contribution-status.json`'s `contribution` field--see `CgContributionStatusCache`), or
+       None if never pushed or never fetched under a version of this package new enough to write
+       that cache. Reflects the server's state as of `status_cache_refreshed_at`, which may lag
+       behind local edits--see `local_draft`/`local_ready_for_moderation`/`local_puzzle_type`/
+       `local_solution_language` for what's actually on disk right now."""
+
+    moderator_approvals: list[CgContributionModerator] | None
+    """Moderators who had cast a `"validate"` (approve) vote on this contribution's privileged
+       approve/reject moderation gate (`Contribution/findContributionModerators`) as of
+       `status_cache_refreshed_at`--3 needed to publish. `None` under the same conditions as
+       `server` (never pushed, or never fetched yet). Distinct from the ungated community vote
+       (`server.up_votes`/`down_votes`)--never conflate the two."""
+
+    moderator_denials: list[CgContributionModerator] | None
+    """Moderators who had cast a `"deny"` (reject) vote as of `status_cache_refreshed_at`--see
+       `moderator_approvals`'s docstring; 3 needed to reject."""
+
+    status_cache_refreshed_at: datetime | None
+    """When `server`/`moderator_approvals`/`moderator_denials` were captured (`.meta/
+       contribution-status.json`'s own `refreshed_at`)--None exactly when those three are None.
+       Always UTC."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -486,9 +610,12 @@ class CgContributionManager:
     def solution_file(self) -> Path:
         return self.data_dir / SOLUTION_FILE_NAME
 
-    def _git_dir_for(self, git_dir_in_data: bool) -> Path:
+    def _meta_dir_for(self, git_dir_in_data: bool) -> Path:
         root = self.data_dir if git_dir_in_data else self.contribution_dir
-        return root / META_SUBDIR_NAME / GIT_METADATA_SUBDIR_NAME
+        return root / META_SUBDIR_NAME
+
+    def _git_dir_for(self, git_dir_in_data: bool) -> Path:
+        return self._meta_dir_for(git_dir_in_data) / GIT_METADATA_SUBDIR_NAME
 
     @property
     def git_dir(self) -> Path:
@@ -504,6 +631,20 @@ class CgContributionManager:
         if identity is None:
             raise FileNotFoundError(f"{self.identity_file} does not exist--this working directory has never been imported.")
         return self._git_dir_for(identity.git_dir_in_data)
+
+    @property
+    def status_cache_file(self) -> Path:
+        """Path to `.meta/contribution-status.json` (see `CgContributionStatusCache`)--same two
+           possible parent locations as `git_dir`, same `git_dir_in_data` switch.
+
+        Raises:
+            FileNotFoundError: if this working directory has never been imported/created--nothing
+                                to derive it from.
+        """
+        identity = self.load_identity()
+        if identity is None:
+            raise FileNotFoundError(f"{self.identity_file} does not exist--this working directory has never been imported/created.")
+        return self._meta_dir_for(identity.git_dir_in_data) / CONTRIBUTION_STATUS_CACHE_FILE_NAME
 
     @property
     def git_repo(self) -> CgGitRepo:
@@ -598,6 +739,53 @@ class CgContributionManager:
 
         return sha
 
+    # --- status cache (non-version-tied server metadata; shared by import_/repair/fetch) -------
+
+    async def _refresh_status_cache(self, contribution: CgContribution) -> None:
+        """Fetch the moderator approve/reject vote lists and write `.meta/contribution-status.
+           json` (`CgContributionStatusCache`)--called every time `import_()`/`repair()`/`fetch()`
+           obtain a fresh `CgContribution` via `findContribution`, regardless of whether the
+           content version changed, since none of `CgContributionStatusCache`'s fields are tied to
+           it. Deliberately NOT called from `push()`--`updateContribution`'s response is a fresh
+           `CgContribution` too, but refreshing the moderator vote lists on every push would be two
+           extra live calls on a path that's already the heaviest one in this class; `fetch()`
+           (`cg contribution fetch`, or `status(remote=True)`/`rebase()`, which both call it) is
+           the deliberate, cheap-by-default place for this."""
+        identity = self.load_identity()
+        assert identity is not None  # only ever called from methods that already require one
+        moderator_approvals = await self.client.services.contribution.find_contribution_moderators(
+                contribution.id, "validate")
+        moderator_denials = await self.client.services.contribution.find_contribution_moderators(
+                contribution.id, "deny")
+        cache = CgContributionStatusCache(
+                version=contribution.last_version.version,
+                contribution=contribution,
+                moderator_approvals=moderator_approvals,
+                moderator_denials=moderator_denials,
+                _refreshed_at=CgEpochMillis.upcast(datetime.now(timezone.utc)),
+            )
+        meta_dir = self._meta_dir_for(identity.git_dir_in_data)
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        cache.save(self.status_cache_file)
+
+    def read_status_cache(self) -> CgContributionStatusCache | None:
+        """Load `.meta/contribution-status.json` (see `_refresh_status_cache`), or None if it
+           doesn't exist yet (never `fetch()`ed/`import_()`ed under a version of this package new
+           enough to write it) or fails to parse (opportunistic cache, same self-healing spirit as
+           the cover-image reuse in `fetch()`--corrupt/unreadable is treated as absent, not fatal).
+        """
+        try:
+            path = self.status_cache_file
+        except FileNotFoundError:
+            return None
+        if not path.is_file():
+            return None
+        try:
+            return CgContributionStatusCache.load(path)
+        except Exception:
+            logger.warning("Failed to parse %s--treating as absent.", path, exc_info=True)
+            return None
+
     # --- import_ / commit ----------------------------------------------------------------------
 
     async def import_(
@@ -690,6 +878,8 @@ class CgContributionManager:
         message = "Repair from server" if repairing else "Import from server"
         server_sha = self._record_server_commit(repo, tree, contribution, cover_bytes, f"{message} (version {version.version})")
         repo.reset_index_to(server_sha)
+
+        await self._refresh_status_cache(contribution)
 
         return self.load()
 
@@ -1071,10 +1261,14 @@ class CgContributionManager:
     # --- fetch -------------------------------------------------------------------------------
 
     async def fetch(self) -> CgContribution:
-        """Refresh `server`'s tip from a fresh `findContribution`. A no-op (no new commit) if the
-           version hasn't changed. Never touches `main`, the working tree, or the real index--the
-           fetched content is staged into a throwaway temp directory purely to build a tree object
-           from, so this is safe to call regardless of what's currently on disk in `data/`.
+        """Refresh `server`'s tip from a fresh `findContribution`, and unconditionally refresh
+           `.meta/contribution-status.json` (see `_refresh_status_cache`)--even when the content
+           version hasn't changed, since none of that cache's fields (score/votes/comment count/
+           views/moderator approve-reject tallies/etc.) are tied to it; only the `server`/
+           `version-data` git commit is skipped in that case. Never touches `main`, the working
+           tree, or the real index--the fetched content is staged into a throwaway temp directory
+           purely to build a tree object from, so this is safe to call regardless of what's
+           currently on disk in `data/`.
 
            Reuses the previous cover image's bytes (read straight out of the object database, via
            `server`'s current tip) rather than re-downloading, if its binary ID is unchanged;
@@ -1100,8 +1294,9 @@ class CgContributionManager:
         current_metadata = _trailers_to_metadata(repo.read_trailers(server_sha))
 
         contribution = await self.client.services.contribution.find_contribution(current_metadata.contribution_id)
+        await self._refresh_status_cache(contribution)
         if contribution.last_version.version == current_metadata.version:
-            return contribution  # server's tip already reflects this exact version
+            return contribution  # server's tip already reflects this exact version; status cache still refreshed above
 
         version = contribution.last_version
         data = version.data
@@ -1442,6 +1637,88 @@ class CgContributionManager:
             self._write_contribution_handle(None)
         else:
             shutil.rmtree(self.contribution_dir)
+
+    # --- status ----------------------------------------------------------------------------
+
+    async def status(self, *, remote: bool = False) -> CgContributionStatus:
+        """A point-in-time summary of this working directory--see `CgContributionStatus`.
+
+           By default, entirely local/cheap: no network access at all--`server`/
+           `moderator_approvals`/`moderator_denials` (if this working directory has ever been
+           pushed) come straight from `.meta/contribution-status.json` (see `read_status_cache`),
+           refreshed on some earlier `fetch()`/`import_()`/`repair()` call. Pass `remote=True` to
+           `fetch()` fresh first (same tradeoff as `cg contribution diff --remote`)--skipped
+           automatically if this working directory has never been pushed (nothing to fetch) or a
+           merge is in progress (fetching mid-merge is refused by `fetch()` itself); `fetch()`
+           unconditionally refreshes that cache file (see its docstring), so this always reflects
+           whatever `fetch()` just saw.
+
+        Args:
+            remote: If True, `fetch()` fresh from the server before reporting--otherwise reports
+                    whatever `.meta/contribution-status.json` last cached (possibly stale, or
+                    entirely absent if this working directory has never been fetched under a
+                    version of this package new enough to write it). Defaults to False.
+
+        Raises:
+            FileNotFoundError: if this working directory has never been imported/created.
+        """
+        identity = self.load_identity()
+        if identity is None:
+            raise FileNotFoundError(f"{self.identity_file} does not exist--this working directory has never been imported/created.")
+        merge_in_progress = self.merge_in_progress
+        if remote and not merge_in_progress and identity.contribution_handle is not None:
+            await self.fetch()
+
+        repo = self.git_repo
+        view = self.load()
+        local_title = view.data.title
+        local_dirty = False if merge_in_progress else bool(repo.diff_name_status(MAIN_BRANCH_NAME))
+
+        server_sha = repo.resolve_ref(SERVER_BRANCH_NAME)
+        metadata = self.server_metadata()
+        status_cache = self.read_status_cache()
+        server_contribution = status_cache.contribution if status_cache is not None else None
+        moderator_approvals = status_cache.moderator_approvals if status_cache is not None else None
+        moderator_denials = status_cache.moderator_denials if status_cache is not None else None
+        status_cache_refreshed_at = status_cache.refreshed_at if status_cache is not None else None
+
+        sync_status: CgContributionSyncStatus
+        if merge_in_progress:
+            sync_status = CgContributionSyncStatus.MERGE_IN_PROGRESS
+        elif server_sha is None:
+            sync_status = CgContributionSyncStatus.NOT_PUSHED
+        else:
+            base = repo.merge_base(MAIN_BRANCH_NAME, SERVER_BRANCH_NAME)
+            main_sha = repo.resolve_ref(MAIN_BRANCH_NAME)
+            server_changed = server_sha != base
+            local_changed = local_dirty or main_sha != base
+            if server_changed and local_changed:
+                sync_status = CgContributionSyncStatus.DIVERGED
+            elif server_changed:
+                sync_status = CgContributionSyncStatus.SERVER_AHEAD
+            elif local_changed:
+                sync_status = CgContributionSyncStatus.LOCAL_AHEAD
+            else:
+                sync_status = CgContributionSyncStatus.UP_TO_DATE
+
+        return CgContributionStatus(
+                contribution_dir=self.contribution_dir,
+                pushed=identity.contribution_handle is not None,
+                contribution_handle=identity.contribution_handle,
+                local_title=local_title,
+                local_dirty=local_dirty,
+                merge_in_progress=merge_in_progress,
+                sync_status=sync_status,
+                local_version=metadata.version if metadata is not None else None,
+                local_draft=view.draft,
+                local_ready_for_moderation=view.ready_for_moderation,
+                local_puzzle_type=view.puzzle_type,
+                local_solution_language=view.data.solution_language,
+                server=server_contribution,
+                moderator_approvals=moderator_approvals,
+                moderator_denials=moderator_denials,
+                status_cache_refreshed_at=status_cache_refreshed_at,
+            )
 
     # --- local test running -----------------------------------------------------------------
 

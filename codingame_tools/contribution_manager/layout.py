@@ -17,6 +17,7 @@ __all__ = [
     "DATA_SUBDIR_NAME",
     "META_SUBDIR_NAME",
     "GIT_METADATA_SUBDIR_NAME",
+    "CONTRIBUTION_STATUS_CACHE_FILE_NAME",
     "GITIGNORE_FILE_NAME",
     "MAIN_BRANCH_NAME",
     "SERVER_BRANCH_NAME",
@@ -64,6 +65,13 @@ GIT_METADATA_SUBDIR_NAME = ".contribution-git"
 """Name of the actual git-dir directory (objects/refs/HEAD/index/config) under `META_SUBDIR_NAME`.
    Deliberately not named `.git`--see `manager`'s module docstring for why nothing inside `data/`
    may ever carry a literal `.git` marker."""
+
+CONTRIBUTION_STATUS_CACHE_FILE_NAME = "contribution-status.json"
+"""Name of the offline cache of non-version-tied server metadata (score/votes/comment count/
+   views/moderator approve-reject tallies/etc.), under `META_SUBDIR_NAME`--see
+   `schema.CgContributionStatusCache`. Deliberately NOT git-tracked (unlike `contribution-data.
+   json`, which lives in `data/`)--this is a disposable, opportunistically-refreshed cache, not
+   diffable/mergeable content, and none of it is tied to any particular content version."""
 
 GITIGNORE_FILE_NAME = ".gitignore"
 """Written (containing just `.meta/`) at creation time, in whichever directory directly contains
