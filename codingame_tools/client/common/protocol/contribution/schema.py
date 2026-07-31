@@ -517,6 +517,98 @@ class CgPendingContribution(JSONWizardX):
         self._autoclose_time = CgEpochMillis.upcast(value)
 
 
+@dataclass
+class CgPersonalContribution(JSONWizardX):
+    """A single contribution summary, as returned (in a bare JSON array) by
+       Contribution/getPersonalContributions--every contribution (any status, not just PENDING)
+       authored by the queried codingamer, e.g. for a "my contributions" listing page. Another
+       lighter-weight summary than `CgContribution` (no `last_version`), and not quite the same
+       shape as `CgPendingContribution` either--no `user_moderation_status`/`publication_date`
+       here, but adds `avatar`/`validate_action`, and `autoclose_time` is optional (absent for
+       draft/never-submitted-for-moderation contributions) rather than always present."""
+
+    id: int
+    """The unique identifier for the contribution."""
+
+    votable_id: int
+    """The unique identifier for the votable entity associated with the contribution."""
+
+    commentable_id: int
+    """The unique identifier for the commentable entity associated with the contribution."""
+
+    codingamer_id: int
+    """The unique identifier for the codingamer (contributor) who created the contribution."""
+
+    codingamer_handle: str
+    """The long, opaque string identifier for the contributor."""
+
+    nickname: str
+    """The nickname of the contributor."""
+
+    public_handle: str
+    """The public handle of the contribution."""
+
+    avatar: int
+    """The binary image ID of the contributor's avatar image."""
+
+    title: str
+    """The title of the contribution."""
+
+    status: str
+    """The status of the contribution, e.g. "PENDING", "APPROVED", "REFUSED"."""
+
+    active_version: int
+    """The version number of the currently active version of the contribution."""
+
+    draft: bool
+    """Whether the contribution is currently a draft."""
+
+    editable: bool
+    """Whether the contribution is currently editable by the contributor."""
+
+    ready_for_moderation: bool
+    """Whether the contribution is ready for moderation."""
+
+    score: int
+    """The score of the contribution."""
+
+    up_votes: int
+    """The number of up votes on the contribution."""
+
+    down_votes: int
+    """The number of down votes on the contribution."""
+
+    comment_count: int
+    """The number of comments on the contribution."""
+
+    views: int
+    """The number of views the contribution has received."""
+
+    status_history: list[CgContributionStatusHistoryEntry]
+    """The history of status changes for the contribution."""
+
+    contribution_type: CgPuzzleType = Alias("type")
+    """The type of the contribution, e.g. "PUZZLE_INOUT", "CLASHOFCODE"."""
+
+    extra_data: CatchAll = field(default_factory=dict)
+
+    validate_action: CgValidateAction | None = None
+    """The status of an in-progress server-side validation action for the contribution, if any."""
+
+    _autoclose_time: CgEpochMillis | None = Alias("autocloseTime", default=None)
+    """When the contribution will be automatically closed for voting and comments, if it has ever
+       been submitted for moderation--absent for a draft that never has been."""
+
+    @property
+    def autoclose_time(self) -> datetime | None:
+        """See the field docstring for `_autoclose_time`. Always UTC. None if not set."""
+        return self._autoclose_time
+
+    @autoclose_time.setter
+    def autoclose_time(self, value: datetime | None) -> None:
+        self._autoclose_time = None if value is None else CgEpochMillis.upcast(value)
+
+
 CgModerationAction = str
 """One of the two moderator decisions on a PENDING contribution: `"validate"` (approve) or
    `"deny"` (reject)--the argument to `Contribution/findContributionModerators`. This is the gate
@@ -555,6 +647,7 @@ __all__ = [
     "CgContribution", "CgContributionData", "CgContributionModerator", "CgContributionStatusChange",
     "CgContributionStatusHistoryEntry", "CgContributionVersion", "CgTestCase", "CgModerationAction",
     "CgMarkdown", "CgHtml", "CgStubGenerator", "CgTopic", "CgContributionId", "CgPuzzleType",
-    "CgPendingContribution", "CgSolutionLanguage", "CgValidateAction", "CgDeleteContributionResult",
+    "CgPendingContribution", "CgPersonalContribution", "CgSolutionLanguage", "CgValidateAction",
+    "CgDeleteContributionResult",
     "cg_extension_to_solution_language", "cg_solution_language_to_extension",
 ]

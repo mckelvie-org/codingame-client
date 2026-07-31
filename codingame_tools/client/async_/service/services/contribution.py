@@ -21,6 +21,7 @@ from ....common.protocol.contribution import (
     CgDeleteContributionResult,
     CgModerationAction,
     CgPendingContribution,
+    CgPersonalContribution,
     CgPuzzleType,
 )
 from ....common.raw_client import CgAuthenticationError
@@ -395,6 +396,51 @@ class CgAsyncContributionService(CgAsyncService):
         raw_contributions = await self.service_request_to_list(
                 "getAllPendingContributions", [page, contribution_type_filter, codingamer_id])
         return CgPendingContribution.from_list(cast(list[JsonDict], raw_contributions))
+
+    async def get_personal_contributions(
+                self,
+                codingamer_id: int | None = None,
+                page: int = 1,
+            ) -> list[CgPersonalContribution]:
+        """List every contribution (any status--draft, PENDING, APPROVED, REFUSED, etc.)
+           authored by a codingamer, e.g. for a "my contributions" listing page. Unlike
+           `get_all_pending_contributions`'s `codingamer_id`, this one genuinely filters to just
+           that codingamer's own contributions.
+
+           `codingamer_id` must equal the logged-in codingamer's own ID--confirmed live that both
+           an arbitrary ID (`1`) and a real, different codingamer's ID are rejected with a 422
+           (no distinguishing error detail between the two cases); `page` is a real 1-indexed
+           page number--confirmed live via the server's own error detail (`page=0` -> 422
+           `INVALID_PAGE: Page must be at least 1`, unlike `get_all_pending_contributions`'s
+           `page`, which merely 500s on `0` with no detail)--`page` values beyond the last page
+           return `[]` rather than erroring.
+
+        Args:
+            codingamer_id: Must equal the logged-in codingamer's own ID (server-enforced; see
+                           above). If not provided, defaults to the logged-in codingamer's ID.
+            page:          1-indexed page number; see above. Defaults to 1.
+
+        Returns:
+            A list of CgPersonalContribution objects.
+
+        Raises:
+            CgAuthenticationError:
+                If the session is not authenticated and cannot implicitly login, or if
+                `codingamer_id` is not provided and no codingamer ID can be resolved from the
+                session's credentials.
+            CgAsyncClientHttpError:
+                If a transport error occurs, if the response content could not be decoded at all,
+                if the status code is not 2xx (e.g. 422 if `codingamer_id` isn't your own, or if
+                `page` is less than 1), or if the decoded content is not a list.
+        """
+        if codingamer_id is None:
+            await self.require_authenticate()
+            codingamer_id = self.client.codingamer_id
+            if codingamer_id is None:
+                raise CgAuthenticationError()
+        raw_contributions = await self.service_request_to_list(
+                "getPersonalContributions", [codingamer_id, page])
+        return CgPersonalContribution.from_list(cast(list[JsonDict], raw_contributions))
 
     async def update_contribution(
                 self,

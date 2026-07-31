@@ -19,7 +19,7 @@ from json_data_types import JsonData, JsonList
 from rich.console import Console
 
 from ..client.async_.client import CgAsyncClient
-from ..client.common.protocol.contribution import CgContributionData
+from ..client.common.protocol.contribution import CgContributionData, CgPendingContribution, CgPersonalContribution
 from ..client.common.protocol.test_session import CgMultipleLanguagesTestParams, CgPlayRequest, CgSubmitRequest
 from ..client.common.protocol.user import CgUserProperties
 from ..client.common.raw_client import CgAuthenticationError, CgDownloadFileResult, compute_content_hash
@@ -790,6 +790,25 @@ class CgCli(CliBase):
                             "Defaults to the logged-in codingamer's ID.")
         p.add_argument("--page", "-n", type=int, default=1, metavar="PAGE",
                        help="Assumed 1-indexed page number; unconfirmed. Defaults to 1.")
+        return handler
+
+    @cli_command("List every contribution (any status--draft/PENDING/APPROVED/REFUSED/etc.) "
+                 "authored by a codingamer. Unlike `get-all-pending-contributions`, this "
+                 "genuinely filters to just that codingamer's own contributions.")
+    async def cmd_api__contribution__get_personal_contributions(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            codingamer_id: int | None = self.args.codingamer_id
+            page: int = self.args.page
+            client = await self.get_client()
+            contributions = await client.services.contribution.get_personal_contributions(codingamer_id, page)
+            print(json.dumps([c.to_dict() for c in contributions], indent=2, sort_keys=True))
+        p = cmd.get_parser()
+        p.add_argument("--codingamer-id", "-g", type=int, default=None, metavar="ID",
+                       help="Must equal the logged-in codingamer's own ID (server-enforced). "
+                            "Defaults to the logged-in codingamer's ID.")
+        p.add_argument("--page", "-n", type=int, default=1, metavar="PAGE",
+                       help="1-indexed page number (confirmed live via the server's own "
+                            "INVALID_PAGE error detail). Defaults to 1.")
         return handler
 
     @cli_command("Submit a new version of a contribution's content. A JSON-serialized "
@@ -1566,6 +1585,41 @@ class CgCli(CliBase):
                        default=True, action="store_false",
                        help="Don't strip a single trailing newline from each test case's input/output text "
                             "before submitting. By default, this normalization is applied.")
+        return handler
+
+    @cli_command("List server-side contributions, one line per contribution (handle, id, "
+                 "status, puzzle type, title). By default lists all pending "
+                 "(community-review-queue) contributions from every author (`Contribution/"
+                 "getAllPendingContributions`); --personal lists only the logged-in codingamer's "
+                 "own contributions, any status (`Contribution/getPersonalContributions`). With "
+                 "--json (top-level option), prints the raw list instead--shape depends on which "
+                 "endpoint was used (CgPendingContribution vs CgPersonalContribution--no unified "
+                 "schema between the two yet).")
+    async def cmd_contributions(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            personal: bool = self.args.personal
+            use_json: bool = self.args.json
+            client = await self.get_client()
+            items: list[CgPendingContribution] | list[CgPersonalContribution]
+            if personal:
+                items = await client.services.contribution.get_personal_contributions()
+            else:
+                items = await client.services.contribution.get_all_pending_contributions()
+
+            if use_json:
+                print(json.dumps([item.to_dict() for item in items], indent=2, sort_keys=True))
+                return
+
+            if not items:
+                print("No contributions found.")
+                return
+            print(f"{'HANDLE':<42}{'ID':<10}{'STATUS':<12}{'TYPE':<16}{'TITLE'}")
+            for item in items:
+                print(f"{item.public_handle:<42}{item.id:<10}{item.status:<12}{item.contribution_type:<16}{item.title}")
+        p = cmd.get_parser()
+        p.add_argument("--personal", default=False, action="store_true",
+                       help="List only the logged-in codingamer's own contributions (any "
+                            "status), instead of all pending contributions from every author.")
         return handler
 
     @cli_command("Contribution working directory commands--manage a local, possibly-uncommitted "

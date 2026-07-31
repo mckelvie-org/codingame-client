@@ -20,3 +20,10 @@
   (even when the content version hasn't changed, since none of this is tied to it)--not
   git-tracked. `cg contribution status` reads it by default (no network access); `--refresh`
   forces a fetch first, which also updates the cache for next time.
+- Add `Contribution/getPersonalContributions` (`client.services.contribution.
+  get_personal_contributions`, `cg api contribution get-personal-contributions`): every
+  contribution (any status) authored by a codingamer--unlike `get_all_pending_contributions`,
+  genuinely filtered to just that codingamer's own.
+- Add `cg contributions`: a one-line-per-contribution listing (handle/id/status/type/title) of
+  all pending contributions community-wide by default, or just your own with `--personal`;
+  top-level `--json` for the raw underlying list.
