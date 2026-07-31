@@ -1,4 +1,4 @@
-"""Unit tests for codingame_client.test_runner.runner: subprocess-based local test execution and
+"""Unit tests for codingame_tools.test_runner.runner: subprocess-based local test execution and
    output comparison. Shared by puzzle_manager and contribution_manager.
 
 These are pure/local tests--no network--so they run under the default `pdm run test` invocation.
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from codingame_client.test_runner.runner import (
+from codingame_tools.test_runner.runner import (
     CgLocalRunUnsupportedLanguageError,
     outputs_match,
     run_solution_locally,

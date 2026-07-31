@@ -1,11 +1,11 @@
-# codingame-client
+# codingame-tools
 
-[![CI](https://github.com/mckelvie-org/codingame-client/actions/workflows/ci.yml/badge.svg)](https://github.com/mckelvie-org/codingame-client/actions/workflows/ci.yml)
-[![PyPI version](https://img.shields.io/pypi/v/codingame-client.svg)](https://pypi.org/project/codingame-client/)
-[![Python versions](https://img.shields.io/pypi/pyversions/codingame-client.svg)](https://pypi.org/project/codingame-client/)
+[![CI](https://github.com/mckelvie-org/codingame-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/mckelvie-org/codingame-tools/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/codingame-tools.svg)](https://pypi.org/project/codingame-tools/)
+[![Python versions](https://img.shields.io/pypi/pyversions/codingame-tools.svg)](https://pypi.org/project/codingame-tools/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-`codingame-client`: {Python package codingame-client}
+`codingame-tools`: {Python package codingame-tools}
 
 ## Highlights
 
@@ -24,7 +24,7 @@ pip install json-data-types
 ## Quick Start
 
 ```python
-from codingame_client import <!-- TODO: insert symbol;s to import -->
+from codingame_tools import <!-- TODO: insert symbol;s to import -->
 
 <!-- TODO: brief example of usage -->
 ```

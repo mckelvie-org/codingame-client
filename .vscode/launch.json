@@ -54,7 +54,7 @@
       "name": "CG Puzzle: Debug solution against test case",
       "type": "debugpy",
       "request": "launch",
-      "module": "codingame_client.puzzle_manager.debug",
+      "module": "codingame_tools.puzzle_manager.debug",
       "args": [
         "${file}",
         "${input:cgPuzzleTestIndex}"
@@ -66,7 +66,7 @@
       "name": "CG Contribution: Debug solution against test case",
       "type": "debugpy",
       "request": "launch",
-      "module": "codingame_client.contribution_manager.debug",
+      "module": "codingame_tools.contribution_manager.debug",
       "args": [
         "${file}",
         "${input:cgContributionOrdinal}",

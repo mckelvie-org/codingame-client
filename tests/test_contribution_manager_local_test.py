@@ -13,14 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from codingame_client.client.common.protocol.contribution import CgContributionData, CgTestCase
-from codingame_client.contribution_manager.manager import (
+from codingame_tools.client.common.protocol.contribution import CgContributionData, CgTestCase
+from codingame_tools.contribution_manager.manager import (
     CgContributionLocalTestFailedError,
     CgContributionManager,
 )
-from codingame_client.contribution_manager.schema import CgContributionView
-from codingame_client.contribution_manager.test_cases_dir import import_test_cases
-from codingame_client.test_runner import CgLocalRunUnsupportedLanguageError
+from codingame_tools.contribution_manager.schema import CgContributionView
+from codingame_tools.contribution_manager.test_cases_dir import import_test_cases
+from codingame_tools.test_runner import CgLocalRunUnsupportedLanguageError
 
 
 def _tc(title: str, test_in: str, test_out: str, *, is_test: bool, is_validator: bool) -> CgTestCase:

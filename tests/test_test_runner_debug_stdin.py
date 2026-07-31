@@ -1,4 +1,4 @@
-"""Unit tests for codingame_client.test_runner.debug_stdin: in-process, debugger-launchable
+"""Unit tests for codingame_tools.test_runner.debug_stdin: in-process, debugger-launchable
    single-run entry point (stdin binding, tee'd stdout capture, compare-or-update-expected-output).
 
 These are pure/local tests--no network--so they run under the default `pdm run test` invocation.
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from codingame_client.test_runner.debug_stdin import CgDebugStdinOutputMismatchError, main
+from codingame_tools.test_runner.debug_stdin import CgDebugStdinOutputMismatchError, main
 
 
 def _write(path: Path, content: str) -> Path:

@@ -20,9 +20,9 @@ new pending publisher** (use "pending" because the project won't exist there yet
 
 | Field | Value |
 |---|---|
-| PyPI project name | `codingame-client` *(or your fork's package name)* |
+| PyPI project name | `codingame-tools` *(or your fork's package name)* |
 | Owner | `mckelvie-org` *(or your fork's GitHub owner) |
-| Repository | `codingame-client` |
+| Repository | `codingame-tools` |
 | Workflow | `publish-test.yml` |
 | Environment | `testpypi` |
 
@@ -33,9 +33,9 @@ pending publisher**:
 
 | Field | Value |
 |---|---|
-| PyPI project name | `codingame-client` *(or your fork's package name)* |
+| PyPI project name | `codingame-tools` *(or your fork's package name)* |
 | Owner | `mckelvie-org` *(or your fork's GitHub owner) |
-| Repository | `codingame-client` |
+| Repository | `codingame-tools` |
 | Workflow | `publish.yml` |
 | Environment | `pypi` |
 

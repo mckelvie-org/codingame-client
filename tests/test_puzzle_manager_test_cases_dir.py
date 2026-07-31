@@ -1,4 +1,4 @@
-"""Unit tests for codingame_client.puzzle_manager.test_cases_dir: the `.meta/tests/` download/
+"""Unit tests for codingame_tools.puzzle_manager.test_cases_dir: the `.meta/tests/` download/
    layout algorithm (slug normalization, per-index directories, duplicate-index detection).
 
 These are pure/local tests--no real network--so they run under the default `pdm run test`
@@ -12,9 +12,9 @@ from typing import Any
 
 import pytest
 
-from codingame_client.client.common.protocol.test_session import CgTestSessionTestCase
-from codingame_client.client.common.raw_client import CgDownloadFileResult
-from codingame_client.puzzle_manager.test_cases_dir import (
+from codingame_tools.client.common.protocol.test_session import CgTestSessionTestCase
+from codingame_tools.client.common.raw_client import CgDownloadFileResult
+from codingame_tools.puzzle_manager.test_cases_dir import (
     TEST_META_FILE_NAME,
     CgPuzzleTestCaseMeta,
     CgPuzzleTestCasesDownloadError,

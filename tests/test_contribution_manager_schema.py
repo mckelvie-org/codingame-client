@@ -1,5 +1,5 @@
-"""Unit tests for codingame_client.contribution_manager.schema (CgContributionIdentity,
-   CgContributionView) and codingame_client.contribution_manager.contribution_commit_data
+"""Unit tests for codingame_tools.contribution_manager.schema (CgContributionIdentity,
+   CgContributionView) and codingame_tools.contribution_manager.contribution_commit_data
    (CgContributionCommitMetadata, redact_commit_contribution).
 
 These are pure/local tests--no network--so they run under the default `pdm run test` invocation.
@@ -9,16 +9,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codingame_client.client.common.protocol.contribution import (
+from codingame_tools.client.common.protocol.contribution import (
     CgContribution,
     CgContributionData,
     CgContributionVersion,
 )
-from codingame_client.contribution_manager.contribution_commit_data import (
+from codingame_tools.contribution_manager.contribution_commit_data import (
     CgContributionCommitMetadata,
     redact_commit_contribution,
 )
-from codingame_client.contribution_manager.schema import (
+from codingame_tools.contribution_manager.schema import (
     CONTRIBUTION_SCHEMA_VERSION,
     CgContributionIdentity,
     CgContributionView,

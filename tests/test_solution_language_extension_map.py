@@ -1,4 +1,4 @@
-"""Regression test for codingame_client.client.common.protocol.schema's solution-language <->
+"""Regression test for codingame_tools.client.common.protocol.schema's solution-language <->
    file-extension mapping, against the real set of language IDs confirmed live (2026-07-28) via
    `ProgrammingLanguage/findAllIds`.
 
@@ -7,7 +7,7 @@ Pure/local--no network--so it runs under the default `pdm run test` invocation.
 
 from __future__ import annotations
 
-from codingame_client.client.common.protocol.schema import (
+from codingame_tools.client.common.protocol.schema import (
     cg_extension_to_solution_language,
     cg_solution_language_to_extension,
 )

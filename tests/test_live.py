@@ -4,7 +4,7 @@
    explicitly with `pdm run test-live` or `pytest -m live`.
 
    These do not perform an interactive browser login themselves (there is no way to do that
-   without a human present); run `python -m codingame_client.async_.browser_login` first to
+   without a human present); run `python -m codingame_tools.async_.browser_login` first to
    establish a real session. If no usable credentials are found, tests here skip with a
    message explaining that, rather than failing.
 
@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import pytest
 
-from codingame_client.client.async_.raw_client import CgAsyncClientHttpError, CgAsyncRawClient
-from codingame_client.credentials.cg_credentials import get_credentials
+from codingame_tools.client.async_.raw_client import CgAsyncClientHttpError, CgAsyncRawClient
+from codingame_tools.credentials.cg_credentials import get_credentials
 
 
 def _require_real_credentials() -> None:
@@ -24,7 +24,7 @@ def _require_real_credentials() -> None:
     if credentials.remember_me_cookie is None or credentials.cg_session_cookie is None:
         pytest.skip(
             "No logged-in credentials available; run "
-            "`python -m codingame_client.async_.browser_login` first."
+            "`python -m codingame_tools.async_.browser_login` first."
         )
 
 

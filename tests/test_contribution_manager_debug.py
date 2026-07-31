@@ -1,5 +1,5 @@
-"""Unit tests for codingame_client.contribution_manager.debug: the VS Code debugger launcher CLI
-   (`python -m codingame_client.contribution_manager.debug`).
+"""Unit tests for codingame_tools.contribution_manager.debug: the VS Code debugger launcher CLI
+   (`python -m codingame_tools.contribution_manager.debug`).
 
 These are pure/local tests--no network--so they run under the default `pdm run test` invocation.
 `main()` runs the "solution" in-process (that's the whole point of the module it wraps), so stdout
@@ -12,13 +12,13 @@ from pathlib import Path
 
 import pytest
 
-from codingame_client.client.common.protocol.contribution import CgTestCase
-from codingame_client.contribution_manager.debug import main
-from codingame_client.contribution_manager.layout import DATA_SUBDIR_NAME, SOLUTION_FILE_NAME
-from codingame_client.contribution_manager.resolver import CgContributionDirInferenceError
-from codingame_client.contribution_manager.schema import CONTRIBUTION_IDENTITY_FILE_NAME
-from codingame_client.contribution_manager.test_cases_dir import TESTS_SUBDIR_NAME, import_test_cases
-from codingame_client.test_runner.debug_stdin import CgDebugStdinOutputMismatchError
+from codingame_tools.client.common.protocol.contribution import CgTestCase
+from codingame_tools.contribution_manager.debug import main
+from codingame_tools.contribution_manager.layout import DATA_SUBDIR_NAME, SOLUTION_FILE_NAME
+from codingame_tools.contribution_manager.resolver import CgContributionDirInferenceError
+from codingame_tools.contribution_manager.schema import CONTRIBUTION_IDENTITY_FILE_NAME
+from codingame_tools.contribution_manager.test_cases_dir import TESTS_SUBDIR_NAME, import_test_cases
+from codingame_tools.test_runner.debug_stdin import CgDebugStdinOutputMismatchError
 
 
 def _tc(title: str, i: str, o: str, *, is_test: bool, is_validator: bool) -> CgTestCase:

@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from codingame_client.client.async_.raw_client import CgAsyncRawClient
-from codingame_client.config.cg_config import CgConfigData
-from codingame_client.config.resolver import CgConfig
-from codingame_client.settings.cg_settings import CgSettings, CgSettingsData
+from codingame_tools.client.async_.raw_client import CgAsyncRawClient
+from codingame_tools.config.cg_config import CgConfigData
+from codingame_tools.config.resolver import CgConfig
+from codingame_tools.settings.cg_settings import CgSettings, CgSettingsData
 
 
 @pytest.fixture(autouse=True)

@@ -1,4 +1,4 @@
-"""Unit tests for codingame_client.cli.main's config-related helpers.
+"""Unit tests for codingame_tools.cli.main's config-related helpers.
 
 These are pure/local tests--no network--so they run under the default `pdm run test` invocation.
 """
@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codingame_client.cli.main import default_config_template
-from codingame_client.config import CgConfigData
+from codingame_tools.cli.main import default_config_template
+from codingame_tools.config import CgConfigData
 
 
 def test_default_config_template_parses_as_all_defaults() -> None:

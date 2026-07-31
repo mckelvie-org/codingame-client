@@ -1,4 +1,4 @@
-"""Unit tests for codingame_client.common.dataclass_wizard_x, focused on the YAML support
+"""Unit tests for codingame_tools.common.dataclass_wizard_x, focused on the YAML support
    (from_yaml/load_yaml/to_yaml/save_yaml) added on top of JSONWizardX's existing JSON support.
 """
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from codingame_client.common.dataclass_wizard_x import DEFAULT_YAML_DECODER, CatchAll, JSONWizardX
+from codingame_tools.common.dataclass_wizard_x import DEFAULT_YAML_DECODER, CatchAll, JSONWizardX
 
 
 @dataclass

@@ -1,4 +1,4 @@
-"""Unit tests for codingame_client.config.resolver: config.yaml discovery precedence, the
+"""Unit tests for codingame_tools.config.resolver: config.yaml discovery precedence, the
    upward-search stopping policy, and the persistent data-directory resolution rules.
 
 These are pure/local tests--no network--so they run under the default `pdm run test` invocation.
@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from codingame_client.config.cg_config import CgConfigData
-from codingame_client.config.resolver import (
+from codingame_tools.config.cg_config import CgConfigData
+from codingame_tools.config.resolver import (
     CONFIG_FILE_NAME,
     CONFIG_SUBDIR_NAME,
     DATA_SUBDIR_NAME,

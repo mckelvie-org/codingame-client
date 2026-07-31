@@ -1,4 +1,4 @@
-"""Unit tests for codingame_client.common.credentials.
+"""Unit tests for codingame_tools.common.credentials.
 
 These are pure/local tests--no network, no live CodinGame API--so they run under the
 default `pdm run test` invocation alongside the mock/cassette tests.
@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from private_files import PrivateDirManager
 
-from codingame_client.credentials.cg_credentials import (
+from codingame_tools.credentials.cg_credentials import (
     CG_SESSION_TOKEN_ENV_VAR,
     REMEMBER_ME_TOKEN_ENV_VAR,
     CgCredentials,

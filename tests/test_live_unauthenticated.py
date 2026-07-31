@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from codingame_client.client.async_.raw_client import CgAsyncRawClient
+from codingame_tools.client.async_.raw_client import CgAsyncRawClient
 
 
 @pytest.mark.live_unauthenticated

@@ -3,9 +3,9 @@ requires = ["pdm-backend>=2.4.0"]
 build-backend = "pdm.backend"
 
 [project]
-name = "codingame-client"
+name = "codingame-tools"
 version = "0.0.0-dev.1"
-description = "Python package codingame-client"
+description = "Python package codingame-tools"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
@@ -43,13 +43,13 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/mckelvie-org/codingame-client"
-Source = "https://github.com/mckelvie-org/codingame-client"
-"Bug Tracker" = "https://github.com/mckelvie-org/codingame-client/issues"
-Changelog = "https://github.com/mckelvie-org/codingame-client/releases"
+Homepage = "https://github.com/mckelvie-org/codingame-tools"
+Source = "https://github.com/mckelvie-org/codingame-tools"
+"Bug Tracker" = "https://github.com/mckelvie-org/codingame-tools/issues"
+Changelog = "https://github.com/mckelvie-org/codingame-tools/releases"
 
 [project.scripts]
-cg = "codingame_client.cli.main:main"
+cg = "codingame_tools.cli.main:main"
 
 [dependency-groups]
 dev = [
@@ -86,12 +86,12 @@ select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
 ignore = []
 
 [tool.ruff.lint.isort]
-known-first-party = ["codingame_client"]
+known-first-party = ["codingame_tools"]
 
 [tool.mypy]
 python_version = "3.10"
 strict = true
-packages = ["codingame_client"]
+packages = ["codingame_tools"]
 exclude = ["^\\.codingame/", "^\\.cg_api/"]
 
 [[tool.mypy.overrides]]
@@ -102,12 +102,12 @@ ignore_missing_imports = true
 distribution = true
 
 [tool.pdm.build]
-includes = ["codingame_client"]
+includes = ["codingame_tools"]
 
 [tool.pdm.scripts]
 test = "pytest"
 test-live-unauthenticated = "pytest -m live_unauthenticated"
 test-live = "pytest -m live"
 lint = "ruff check ."
-typecheck = "mypy codingame_client"
+typecheck = "mypy codingame_tools"
 post_install = "./bin/post-install"

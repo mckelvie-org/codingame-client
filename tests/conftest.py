@@ -68,7 +68,7 @@ def vcr_cassette(request: pytest.FixtureRequest) -> Iterator[None]:
 
 
 class _FakeGlobalPlatformDirs:
-    """Stand-in for the object `codingame_client.config.resolver._global_platformdirs()`
+    """Stand-in for the object `codingame_tools.config.resolver._global_platformdirs()`
        returns, pointed at a tmp_path subtree."""
 
     def __init__(self, root: Path) -> None:
@@ -89,7 +89,7 @@ def fake_global_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
        subtree, so tests never touch the real machine's actual global config."""
     root = tmp_path / "global_root"
     monkeypatch.setattr(
-        "codingame_client.config.resolver._global_platformdirs",
+        "codingame_tools.config.resolver._global_platformdirs",
         lambda: _FakeGlobalPlatformDirs(root),
     )
     return root

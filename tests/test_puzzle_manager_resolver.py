@@ -1,4 +1,4 @@
-"""Unit tests for codingame_client.puzzle_manager.resolver: puzzle working directory discovery
+"""Unit tests for codingame_tools.puzzle_manager.resolver: puzzle working directory discovery
    precedence (explicit > CG_PUZZLE_DIR > settings > cwd > ./puzzle).
 
 These are pure/local tests--no network--so they run under the default `pdm run test` invocation.
@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from codingame_client.config.cg_config import CgConfigData
-from codingame_client.config.resolver import CgConfig
-from codingame_client.puzzle_manager.layout import DATA_SUBDIR_NAME, SOLUTION_FILE_NAME
-from codingame_client.puzzle_manager.resolver import (
+from codingame_tools.config.cg_config import CgConfigData
+from codingame_tools.config.resolver import CgConfig
+from codingame_tools.puzzle_manager.layout import DATA_SUBDIR_NAME, SOLUTION_FILE_NAME
+from codingame_tools.puzzle_manager.resolver import (
     CG_PUZZLE_DIR_ENV_VAR,
     DEFAULT_PUZZLE_SUBDIR_NAME,
     CgPuzzleDirInferenceError,
@@ -22,8 +22,8 @@ from codingame_client.puzzle_manager.resolver import (
     infer_puzzle_dir,
     resolve_puzzle_dir,
 )
-from codingame_client.puzzle_manager.schema import PUZZLE_IDENTITY_FILE_NAME
-from codingame_client.settings import CgSettings, CgSettingsData
+from codingame_tools.puzzle_manager.schema import PUZZLE_IDENTITY_FILE_NAME
+from codingame_tools.settings import CgSettings, CgSettingsData
 
 
 @pytest.fixture(autouse=True)

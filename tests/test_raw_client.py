@@ -1,4 +1,4 @@
-"""Tests for codingame_client.async_.raw_client, backed by VCR cassettes (see conftest.py).
+"""Tests for codingame_tools.async_.raw_client, backed by VCR cassettes (see conftest.py).
 
 These exercise genuinely public, unauthenticated endpoints, so the cassettes here were
 recorded from real live requests but require no login and carry no cookie data.
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from codingame_client.client.async_.raw_client import CgAsyncClientHttpError, CgAsyncRawClient
+from codingame_tools.client.async_.raw_client import CgAsyncClientHttpError, CgAsyncRawClient
 
 
 @pytest.mark.usefixtures("vcr_cassette")

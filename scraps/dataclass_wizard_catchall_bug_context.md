@@ -10,18 +10,18 @@ though the pointers below tell you exactly where to look.
 - **The fork to work in:** `/Users/sam/projects/pypi/dataclass-wizard` — a clean checkout of
   `git@github.com:mckelvie-org/dataclass-wizard.git` (`origin`), currently on `main`, HEAD at
   commit `57535e9` ("Bump version: 0.39.1 → 1.0.0"), working tree clean, unmodified. This is a
-  sibling directory to `codingame-client` (the client library that surfaced the bug), not a
+  sibling directory to `codingame-tools` (the client library that surfaced the bug), not a
   subdirectory of it.
-- **The client project that depends on it:** `/Users/sam/projects/pypi/codingame-client` — a
+- **The client project that depends on it:** `/Users/sam/projects/pypi/codingame-tools` — a
   Python CodinGame API client. Its `.venv` has `dataclass-wizard==1.0.0` installed (pip), which
   as of now is identical in content to the fork's current HEAD.
 - **Standalone minimal reproduction (already written and verified):**
-  `/Users/sam/projects/pypi/codingame-client/scraps/demo_dataclass_wizard_catchall_reuse_bug.py`
+  `/Users/sam/projects/pypi/codingame-tools/scraps/demo_dataclass_wizard_catchall_reuse_bug.py`
   — depends only on `dataclass_wizard` + stdlib, no import from the client project. Six isolated
   scenarios, each documented with a comment explaining what it proves. Run it against the fork
   with:
   ```
-  cd /Users/sam/projects/pypi/codingame-client
+  cd /Users/sam/projects/pypi/codingame-tools
   PYTHONPATH=/Users/sam/projects/pypi/dataclass-wizard python3 \
       scraps/demo_dataclass_wizard_catchall_reuse_bug.py
   ```
@@ -29,7 +29,7 @@ though the pointers below tell you exactly where to look.
   source via this `PYTHONPATH` override, so the bug lives in the fork as of its current HEAD, not
   something specific to the pip-packaged build.
 - **Persistent memory** (survives across Claude sessions on this machine):
-  `project_dataclass_wizard_catchall_reuse_bug.md` in the codingame-client project's memory store
+  `project_dataclass_wizard_catchall_reuse_bug.md` in the codingame-tools project's memory store
   documents this same finding for future reference from the client-project side.
 
 ## The bug, precisely
@@ -147,8 +147,8 @@ over a symptom).
 5. A PR opened from the fork. Ask the user whether they want it targeted at their own fork's
    `main` (`mckelvie-org/dataclass-wizard`) or upstream (`rnag/dataclass-wizard`, the original
    project) before opening one against a repo they may not have intended — don't assume.
-6. Once merged/fixed, the client project (`codingame-client`) should be able to drop its existing
-   narrower workaround in `codingame_client/common/dataclass_wizard_x.py`
+6. Once merged/fixed, the client project (`codingame-tools`) should be able to drop its existing
+   narrower workaround in `codingame_tools/common/dataclass_wizard_x.py`
    (`_is_self_referential`/`_get_wrapper_class`, which only covers the self-referential special
    case) — but that cleanup is a separate follow-up in the *other* repo, not part of this task,
    and shouldn't be done without the user's explicit go-ahead (don't edit sibling repos without

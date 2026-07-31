@@ -1,4 +1,4 @@
-"""Unit tests for codingame_client.contribution_manager.test_cases_dir: the tests/ directory
+"""Unit tests for codingame_tools.contribution_manager.test_cases_dir: the tests/ directory
    import/commit algorithm (local/validator pairing, ordinal directories, title-collision
    handling, natural sort, renormalization).
 
@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codingame_client.client.common.protocol.contribution import CgTestCase
-from codingame_client.contribution_manager.test_cases_dir import (
+from codingame_tools.client.common.protocol.contribution import CgTestCase
+from codingame_tools.contribution_manager.test_cases_dir import (
     LOCAL_SUBDIR_NAME,
     TEST_META_FILE_NAME,
     VALIDATOR_SUBDIR_NAME,

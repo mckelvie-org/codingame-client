@@ -1,4 +1,4 @@
-"""Unit tests for codingame_client.contribution_manager.resolver: contribution working directory
+"""Unit tests for codingame_tools.contribution_manager.resolver: contribution working directory
    discovery precedence (explicit > CG_CONTRIBUTION_DIR > settings > cwd > ./contribution).
 
 These are pure/local tests--no network--so they run under the default `pdm run test` invocation.
@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from codingame_client.config.cg_config import CgConfigData
-from codingame_client.config.resolver import CgConfig
-from codingame_client.contribution_manager.layout import DATA_SUBDIR_NAME, SOLUTION_FILE_NAME
-from codingame_client.contribution_manager.resolver import (
+from codingame_tools.config.cg_config import CgConfigData
+from codingame_tools.config.resolver import CgConfig
+from codingame_tools.contribution_manager.layout import DATA_SUBDIR_NAME, SOLUTION_FILE_NAME
+from codingame_tools.contribution_manager.resolver import (
     CG_CONTRIBUTION_DIR_ENV_VAR,
     CgContributionDirInferenceError,
     CgContributionDirNotFoundError,
@@ -21,8 +21,8 @@ from codingame_client.contribution_manager.resolver import (
     infer_contribution_dir,
     resolve_contribution_dir,
 )
-from codingame_client.contribution_manager.schema import CONTRIBUTION_IDENTITY_FILE_NAME
-from codingame_client.settings import CgSettings, CgSettingsData
+from codingame_tools.contribution_manager.schema import CONTRIBUTION_IDENTITY_FILE_NAME
+from codingame_tools.settings import CgSettings, CgSettingsData
 
 
 @pytest.fixture(autouse=True)

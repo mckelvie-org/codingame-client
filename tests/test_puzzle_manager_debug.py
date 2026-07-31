@@ -1,5 +1,5 @@
-"""Unit tests for codingame_client.puzzle_manager.debug: the VS Code debugger launcher CLI
-   (`python -m codingame_client.puzzle_manager.debug`).
+"""Unit tests for codingame_tools.puzzle_manager.debug: the VS Code debugger launcher CLI
+   (`python -m codingame_tools.puzzle_manager.debug`).
 
 These are pure/local tests--no network--so they run under the default `pdm run test` invocation.
 `main()` runs the "solution" in-process (that's the whole point of the module it wraps), so stdout
@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from codingame_client.puzzle_manager.debug import main
-from codingame_client.puzzle_manager.layout import DATA_SUBDIR_NAME, META_SUBDIR_NAME, SOLUTION_FILE_NAME
-from codingame_client.puzzle_manager.resolver import CgPuzzleDirInferenceError
-from codingame_client.puzzle_manager.schema import PUZZLE_IDENTITY_FILE_NAME
-from codingame_client.puzzle_manager.test_cases_dir import TEST_META_FILE_NAME, TESTS_SUBDIR_NAME, CgPuzzleTestCaseMeta
-from codingame_client.test_runner.debug_stdin import CgDebugStdinOutputMismatchError
+from codingame_tools.puzzle_manager.debug import main
+from codingame_tools.puzzle_manager.layout import DATA_SUBDIR_NAME, META_SUBDIR_NAME, SOLUTION_FILE_NAME
+from codingame_tools.puzzle_manager.resolver import CgPuzzleDirInferenceError
+from codingame_tools.puzzle_manager.schema import PUZZLE_IDENTITY_FILE_NAME
+from codingame_tools.puzzle_manager.test_cases_dir import TEST_META_FILE_NAME, TESTS_SUBDIR_NAME, CgPuzzleTestCaseMeta
+from codingame_tools.test_runner.debug_stdin import CgDebugStdinOutputMismatchError
 
 
 def _make_puzzle_dir(root: Path) -> Path:

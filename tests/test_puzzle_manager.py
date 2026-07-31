@@ -1,4 +1,4 @@
-"""Unit tests for codingame_client.puzzle_manager.manager.CgPuzzleManager (`import_`/`repair`/
+"""Unit tests for codingame_tools.puzzle_manager.manager.CgPuzzleManager (`import_`/`repair`/
    `diff`/`discard_local`/`push`/`play`), against a fake, duck-typed client (services.puzzle,
    services.test_session)--no real CgAsyncClient/network involved.
 
@@ -14,8 +14,8 @@ from typing import Any
 
 import pytest
 
-from codingame_client.client.common.protocol.last_activities import CgLastActivityPuzzle, CgPuzzleFeedback
-from codingame_client.client.common.protocol.test_session import (
+from codingame_tools.client.common.protocol.last_activities import CgLastActivityPuzzle, CgPuzzleFeedback
+from codingame_tools.client.common.protocol.test_session import (
     CgLastActivityContributor,
     CgPlayComparison,
     CgPlayRequest,
@@ -29,14 +29,14 @@ from codingame_client.client.common.protocol.test_session import (
     CgTestSessionQuestionDetails,
     CgTestSessionTestCase,
 )
-from codingame_client.client.common.raw_client import CgDownloadFileResult
-from codingame_client.common.dataclass_wizard_x import CgEpochMillis
-from codingame_client.puzzle_manager.manager import (
+from codingame_tools.client.common.raw_client import CgDownloadFileResult
+from codingame_tools.common.dataclass_wizard_x import CgEpochMillis
+from codingame_tools.puzzle_manager.manager import (
     CgPuzzleLocalTestFailedError,
     CgPuzzleManager,
     CgPuzzleManagerError,
 )
-from codingame_client.puzzle_manager.test_cases_dir import (
+from codingame_tools.puzzle_manager.test_cases_dir import (
     TEST_META_FILE_NAME,
     CgPuzzleTestCaseMeta,
     normalize_test_label,

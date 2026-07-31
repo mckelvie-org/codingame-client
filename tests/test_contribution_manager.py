@@ -1,4 +1,4 @@
-"""Unit tests for codingame_client.contribution_manager.manager.CgContributionManager
+"""Unit tests for codingame_tools.contribution_manager.manager.CgContributionManager
    (`import_`/`push`/`fetch`/`rebase`/`merge_discard_local`/`merge_discard_server`/`discard_local`/
    `merge_start`/`merge_continue`/`merge_abort`), against a fake, duck-typed client
    (services.contribution, servlets.file_servlet, servlets.file_upload)--no real
@@ -18,21 +18,21 @@ from typing import Any
 
 import pytest
 
-from codingame_client.client.common.protocol.contribution import (
+from codingame_tools.client.common.protocol.contribution import (
     CgContribution,
     CgContributionData,
     CgContributionVersion,
     CgDeleteContributionResult,
     CgTestCase,
 )
-from codingame_client.client.common.raw_client import CgDownloadFileResult, CgUploadFileResult, compute_content_hash
-from codingame_client.contribution_manager.manager import (
+from codingame_tools.client.common.raw_client import CgDownloadFileResult, CgUploadFileResult, compute_content_hash
+from codingame_tools.contribution_manager.manager import (
     CgContributionManager,
     CgContributionManagerError,
     CgMergeStartStatus,
     CgRebaseStatus,
 )
-from codingame_client.contribution_manager.schema import CgContributionView
+from codingame_tools.contribution_manager.schema import CgContributionView
 
 requires_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 pytestmark = requires_git
@@ -846,7 +846,7 @@ async def test_push_refreshes_stale_active_version_via_find_contribution(tmp_pat
 async def test_push_gives_up_refreshing_after_max_attempts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def no_sleep(seconds: float) -> None:
         return None
-    monkeypatch.setattr("codingame_client.contribution_manager.manager.asyncio.sleep", no_sleep)
+    monkeypatch.setattr("codingame_tools.contribution_manager.manager.asyncio.sleep", no_sleep)
 
     data = _make_full_data()
     contribution = _make_contribution(data)
