@@ -1,7 +1,8 @@
 """Unit tests for CgAsyncReportServiceHelper.find_report_by_submission_when_ready--the polling
    wrapper around Report/findReportBySubmission added after live confirmation that calling it
    immediately after TestSession/submit can race server-side grading (every field but
-   best_score/validator_shareable entirely absent).
+   validator_shareable can be entirely absent--including best_score, confirmed absent for a
+   puzzle with no prior submission).
 
 These are pure/local tests--no network--so they run under the default `pdm run test` invocation.
 """
@@ -21,6 +22,11 @@ from codingame_tools.client.common.protocol.report import (
 from codingame_tools.common.dataclass_wizard_x import CgEpochMillis
 
 _NOT_READY_REPORT = CgSubmissionReport(best_score=100.0, validator_shareable=False)
+
+_NOT_READY_REPORT_NO_PRIOR_BEST_SCORE = CgSubmissionReport(validator_shareable=False)
+"""Confirmed live (2026-08-01): for a puzzle with no prior submission, best_score can be entirely
+   absent too--not just this submission's own score--distinct from _NOT_READY_REPORT above, which
+   at least has a best_score."""
 
 _READY_REPORT = CgSubmissionReport(
         best_score=100.0, validator_shareable=True, codingamer_id=1, submission_id=424242,
@@ -49,6 +55,11 @@ def test_not_ready_report_lacks_all_but_two_fields() -> None:
     assert not _NOT_READY_REPORT.is_ready()
     assert _NOT_READY_REPORT.submission_id is None
     assert _NOT_READY_REPORT.score is None
+
+
+def test_not_ready_report_with_no_prior_best_score_is_still_not_ready() -> None:
+    assert not _NOT_READY_REPORT_NO_PRIOR_BEST_SCORE.is_ready()
+    assert _NOT_READY_REPORT_NO_PRIOR_BEST_SCORE.best_score is None
 
 
 def test_ready_report_is_ready() -> None:

@@ -122,7 +122,7 @@ class CgPuzzleData(JSONWizardX):
 
     solution_language: CgSolutionLanguage
     """The language `data/solution.src` is currently written in--submitted alongside the code on
-       `push()`/`play()`, and so genuinely part of the user-managed submission state, not read-only
+       `submit()`/`play()`, and so genuinely part of the user-managed submission state, not read-only
        reference material or server-derived cache."""
 
     extra_data: CatchAll = field(default_factory=dict)

@@ -1,5 +1,5 @@
 """Unit tests for codingame_tools.puzzle_manager.manager.CgPuzzleManager (`import_`/`repair`/
-   `diff`/`discard_local`/`push`/`play`), against a fake, duck-typed client (services.puzzle,
+   `diff`/`discard_local`/`submit`/`play`), against a fake, duck-typed client (services.puzzle,
    services.test_session)--no real CgAsyncClient/network involved.
 
 These are pure/local tests--no network--so they run under the default `pdm run test` invocation.
@@ -558,10 +558,10 @@ async def test_repair_refuses_if_no_local_solution(tmp_path: Path) -> None:
         await manager.repair()
 
 
-# --- push ----------------------------------------------------------------------------------
+# --- submit --------------------------------------------------------------------------------
 
 
-async def test_push_submits_current_local_content(tmp_path: Path) -> None:
+async def test_submit_submits_current_local_content(tmp_path: Path) -> None:
     answer = CgTestSessionAnswer(code="print('old')\n", programming_language_id="Python3")
     session = _make_test_session(answer=answer)
     client, _, test_session_service, _ = _make_fake_client(session)
@@ -569,7 +569,7 @@ async def test_push_submits_current_local_content(tmp_path: Path) -> None:
     await manager.import_("literary-alfabet-soupe")
     (tmp_path / "data" / "solution.src").write_text("print('new solution')\n")
 
-    report = await manager.push()
+    report = await manager.submit()
 
     assert report is client.services.report.report
     assert client.services.report.find_calls == [424242]
@@ -580,13 +580,13 @@ async def test_push_submits_current_local_content(tmp_path: Path) -> None:
     assert call["request"].programming_language_id == "Python3"
 
 
-async def test_push_requires_prior_import(tmp_path: Path) -> None:
+async def test_submit_requires_prior_import(tmp_path: Path) -> None:
     manager = CgPuzzleManager(tmp_path, object())  # type: ignore[arg-type]
     with pytest.raises(FileNotFoundError):
-        await manager.push()
+        await manager.submit()
 
 
-async def test_push_requires_meta_present(tmp_path: Path) -> None:
+async def test_submit_requires_meta_present(tmp_path: Path) -> None:
     session = _make_test_session()
     client, _, _, _ = _make_fake_client(session)
     manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
@@ -595,7 +595,7 @@ async def test_push_requires_meta_present(tmp_path: Path) -> None:
     shutil.rmtree(tmp_path / ".meta")
 
     with pytest.raises(CgPuzzleManagerError):
-        await manager.push()
+        await manager.submit()
 
 
 # --- play ------------------------------------------------------------------------------------

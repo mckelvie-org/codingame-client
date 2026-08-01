@@ -61,19 +61,31 @@ class CgSubmissionReport(JSONWizardX):
     """The complete response to Report/findReportBySubmission: a report on a single puzzle
        submission's results.
 
-       CAUTION, confirmed live (2026-07-31): calling `findReportBySubmission` right after
-       `TestSession/submit` can race server-side grading--every field below except `best_score`/
-       `validator_shareable` was entirely absent in one observed case (not merely `null`). All of
-       them are therefore Optional here; a report is only "done" once they're all populated. See
+       CAUTION, confirmed live (2026-07-31, and again 2026-08-01 for a puzzle with no prior
+       submission at all--see `best_score`): calling `findReportBySubmission` right after
+       `TestSession/submit` can race server-side grading--every field below except
+       `validator_shareable` has been observed entirely absent (not merely `null`) in some
+       partial-report snapshot. All of them are therefore Optional here except
+       `validator_shareable`, the only field confirmed present in every observed case so far; a
+       report is only "done" once they're all populated. See
        `CgAsyncReportServiceHelper.find_report_by_submission_when_ready`, which polls until that's
        true (or a timeout elapses) instead of returning a partial report."""
 
-    best_score: float
-    """The codingamer's best-ever validator score for this puzzle, 0.0 to 100.0 (may be higher
-       than `score` if this submission wasn't their best attempt)."""
-
     validator_shareable: bool
     """Whether this submission's validator results are eligible to be shared."""
+
+    # `extra_data` is deliberately the first field with a default: dataclass_wizard 1.0.0 mis-binds
+    # any defaulted field positioned immediately before it (silently, no error) to the CatchAll's
+    # own value. Keeping it first among the defaulted fields makes that impossible.
+    extra_data: CatchAll = field(default_factory=dict)
+
+    best_score: float | None = None
+    """The codingamer's best-ever validator score for this puzzle, 0.0 to 100.0 (may be higher
+       than `score` if this submission wasn't their best attempt). Confirmed live (2026-08-01)
+       absent--not just this submission's own score, but this field specifically--for a puzzle
+       the codingamer had never before submitted, i.e. there's no historical "best" yet at the
+       moment this was polled. Absent while grading is still in progress--see the class
+       docstring."""
 
     codingamer_id: int | None = None
     """The submitting codingamer's numeric ID. Absent while grading is still in progress--see the
@@ -108,8 +120,6 @@ class CgSubmissionReport(JSONWizardX):
        element shape is unknown otherwise. Absent while grading is still in progress--see the
        class docstring."""
 
-    extra_data: CatchAll = field(default_factory=dict)
-
     feedback: CgPuzzleFeedback | None = None
     """Community feedback/rating summary for the puzzle. Not confirmed to always be present
        (only a single example observed so far)."""
@@ -132,7 +142,8 @@ class CgSubmissionReport(JSONWizardX):
            still in progress" above is now populated. See the class docstring and
            `CgAsyncReportServiceHelper.find_report_by_submission_when_ready`."""
         return (
-                self.codingamer_id is not None and self.submission_id is not None
+                self.best_score is not None
+                and self.codingamer_id is not None and self.submission_id is not None
                 and self.score is not None and self.achievements_completed is not None
                 and self.shared is not None and self.puzzle_progress is not None
                 and self.validators is not None and self.achievements is not None

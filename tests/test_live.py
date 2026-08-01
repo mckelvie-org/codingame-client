@@ -32,7 +32,7 @@ def _require_real_credentials() -> None:
 async def test_find_unread_notifications_live() -> None:
     _require_real_credentials()
     async with CgAsyncRawClient() as client:
-        await client.login()
+        await client.authenticate(require_credentials=True)
         try:
             notifications = await client.service_request_to_list(
                 "Notification", "findUnreadNotifications", [client.codingamer_id]

@@ -1,6 +1,6 @@
 """`CgPuzzleManager`: builds a puzzle working directory from an existing server-side puzzle
    (`import_`), runs the working directory's current solution against a single test case
-   (`play`), submits it for credit (`push`), and reconstructs cached/reference state that was
+   (`play`), submits it for credit (`submit`), and reconstructs cached/reference state that was
    deliberately never committed to git (`repair`).
 
    Deliberately much simpler than `codingame_tools.contribution_manager`: exactly one file is
@@ -10,7 +10,13 @@
 
    - `diff()` shows a unified text diff between them.
    - `discard_local()` overwrites the local file with the server's version.
-   - `push()` overwrites the server's version with the local file (a normal `TestSession/submit`).
+   - `submit()` overwrites the server's version with the local file (a normal `TestSession/submit`).
+     Note `play()` *also* durably updates the server's copy of the code as a side effect (see its
+     docstring)--unlike a contribution, a puzzle working directory has two independent
+     server-side persistence phases (the test session's current answer, and a graded
+     submission), not one; `submit()` is named for CodinGame's own vocabulary (matching the
+     underlying `TestSession/submit` API method) rather than `push()`'s git vocabulary, precisely
+     to avoid implying it's the only thing that persists anything server-side.
 
    There is no third "merge tool" option in this first cut--flagged as a possible follow-up, not
    built, since a single-file external diff/merge tool is easy to add later if actually wanted.
@@ -344,7 +350,7 @@ class CgPuzzleManager:
 
     def _require_state(self) -> tuple[CgPuzzleIdentity, CgPuzzleServerData, CgPuzzleData]:
         """All three manifests, for operations that need the full picture (`diff`/
-           `discard_local`/`push`/`play`).
+           `discard_local`/`submit`/`play`).
 
         Raises:
             FileNotFoundError: if this working directory has never been imported at all.
@@ -605,7 +611,7 @@ class CgPuzzleManager:
             _refresh_solution_symlink(self.puzzle_dir, puzzle_data.solution_language)
         return server_data
 
-    # --- diff / discard_local / push ------------------------------------------------------------
+    # --- diff / discard_local / submit ----------------------------------------------------------
 
     async def _fetch_current_answer_code(self) -> tuple[str, CgSolutionLanguage] | None:
         """A fresh `TestSession/startTestSession` call (using the cached `test_session_handle`),
@@ -663,12 +669,19 @@ class CgPuzzleManager:
         _refresh_solution_symlink(self.puzzle_dir, solution_language)
         return CgPuzzleDiscardResult(code=code, solution_language=solution_language)
 
-    async def push(self) -> CgSubmissionReport:
+    async def submit(self) -> CgSubmissionReport:
         """Submit the current local `data/solution.src` to the server for credit
            (`TestSession/submit`), in `data/puzzle-data.json`'s recorded `solution_language`,
            then fetch and return the resulting results report
            (`Report/findReportBySubmission`)--score, achievement completion, and per-validator
            pass/fail.
+
+           Named `submit()`, not `push()` (unlike `codingame_tools.contribution_manager`'s
+           git-vocabulary naming)--a puzzle working directory has two distinct server-side
+           persistence phases, not one: the test session's current answer (see `play()`'s
+           docstring--confirmed live to be silently updated by *any* `TestSession/play` call, not
+           just this method) and this method's actual graded submission. "Push" would suggest
+           the former; this method is unambiguously the latter.
 
            CAUTION: unlike `codingame_tools.contribution_manager`'s `push()`, this always
            creates a new graded submission--there's no draft/private-staging concept for puzzle
@@ -702,8 +715,20 @@ class CgPuzzleManager:
     async def play(self, test_indices: list[int] | None = None) -> list[CgPuzzleRemoteTestResult]:
         """Run the current local `data/solution.src` against one or more of the puzzle's test
            cases via the server (`TestSession/play`--the IDE's "Test"/"Run" button, as opposed
-           to `push()`'s full "Submit"). Each index is a separate live API call--there is no
+           to `submit()`'s full "Submit"). Each index is a separate live API call--there is no
            batch form of `TestSession/play`--run sequentially, in the order given.
+
+           CONFIRMED LIVE (2026-08-01): this call has a side effect beyond just running the given
+           test case(s)--the server durably persists whatever `code` was sent as the test
+           session's current answer (the same "current answer" returned by
+           `TestSession/startTestSession`, and visible in the web IDE from any browser), whether
+           or not the test case actually passes. This is NOT a grading/submission event (no
+           `Report`/score is produced), and there's no separate "just save, don't run" call--the
+           web IDE itself has no autosave either (confirmed: editing code there without running a
+           test, then navigating away, prompts "All changes will be lost")--so running at least
+           one test case is, in effect, the only way to persist a change short of a real
+           submission. `submit()` also persists the code this way (again regardless of whether
+           the submission scores well), as a side effect of grading it.
 
         Args:
             test_indices: 1-based indices to run against (see `CgTestSessionTestCase.index`).

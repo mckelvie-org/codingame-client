@@ -106,7 +106,7 @@ def resolve_puzzle_dir(
        import` relies on this fallback for its everyday no-argument usage, and dropping
        `puzzle.json`/`data/` directly into whatever the current directory happens to be would be
        a real footgun--confirmed live (2026-07-30): an earlier version of this fell back to bare
-       cwd and did exactly that. `push()`-style callers, where there must already be a working
+       cwd and did exactly that. `submit()`-style callers, where there must already be a working
        directory, should leave `allow_default` False.
 
     Raises:

@@ -2,6 +2,25 @@
 
 ## {{UNRELEASED}}
 
+- Fix `cg puzzle submit` crashing on a puzzle with no prior submission: `CgSubmissionReport.
+  best_score` was assumed always-present (based on one earlier partial-report example) but
+  confirmed live absent too when there's no historical "best" yet--now Optional like every other
+  field except `validator_shareable`, the only one confirmed present in every case seen so far.
+  Also fixes a real `dataclass_wizard` CatchAll mis-binding introduced by that same edit
+  (`extra_data` wasn't the first defaulted field, corrupting `best_score` into `{}` instead of
+  `None`)--see this project's established "extra_data must be first among defaulted fields" rule.
+- Rename `cg puzzle push` to `cg puzzle submit` (`CgPuzzleManager.push()` -> `.submit()`), unlike
+  `cg contribution push`'s git vocabulary--confirmed live (2026-08-01) that a puzzle working
+  directory has two independent server-side persistence phases, not one: the test session's
+  current answer (durably updated by *any* `TestSession/play` call, not just a real submission--
+  see below) and this method's actual graded submission via `TestSession/submit`. "Push" would
+  ambiguously suggest either; "submit" (matching the underlying API method's own name) is
+  unambiguous.
+- Document (in `CgPuzzleManager.play()`'s docstring) a confirmed-live side effect of
+  `TestSession/play`: the server durably persists whatever code was sent as the test session's
+  current answer--the same answer visible in the web IDE from any browser--even though `play()`
+  itself is not a grading/submission event. There's no separate "just save" API; running at
+  least one test case is, in effect, this project's puzzle-working-directory autosave.
 - Fix `cg config init`'s freshly-created project-local `config.yaml` showing an absolute
   `#dataDir:` example (resolved for the specific `--at` directory at creation time)--if the
   project directory is later renamed or moved, that absolute path would silently stop matching

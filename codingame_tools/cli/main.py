@@ -2645,21 +2645,24 @@ class CgCli(CliBase):
         return handler
 
     @cli_command("Submit the current local solution.src to the server for credit "
-                 "(TestSession/submit)--a real, permanent graded submission, unlike `cg puzzle play`.")
-    async def cmd_puzzle__push(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+                 "(TestSession/submit)--a real, permanent graded submission, unlike `cg puzzle play`. "
+                 "Note `cg puzzle play` also durably updates the server's copy of the code as a side "
+                 "effect of running a test case--this command is the one that actually grades it.")
+    async def cmd_puzzle__submit(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             puzzle_dir: Path | None = self.args.puzzle_dir
             resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
             client = await self.get_client(require_credentials=True)
             manager = CgPuzzleManager(resolved_dir, client)
-            report = await manager.push()
+            report = await manager.submit()
             if self.args.json:
                 print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
                 return
-            # push() only returns once find_report_by_submission_when_ready() confirms grading
+            # submit() only returns once find_report_by_submission_when_ready() confirms grading
             # is done, so every field below is guaranteed populated--see CgSubmissionReport.
             assert report.is_ready()
             assert report.score is not None
+            assert report.best_score is not None
             assert report.achievements_completed is not None
             assert report.validators is not None
             self.eprint(f"Submission {report.submission_id}: score {report.score:.1f}/100 "
@@ -3080,7 +3083,7 @@ class CgCli(CliBase):
         p.add_argument("puzzle_dir", type=Path, metavar="DIR",
                        help="Directory to use as the default puzzle working directory--used "
                             "whenever --puzzle-dir isn't given and CG_PUZZLE_DIR isn't set (see "
-                            "`cg puzzle import`/`cg puzzle push`). Same relative-path handling as "
+                            "`cg puzzle import`/`cg puzzle submit`). Same relative-path handling as "
                             "`cg settings set contribution-dir`--see its help for details.")
         return handler
 

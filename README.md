@@ -16,7 +16,7 @@ authoring/maintaining community contributions (puzzles you publish to CodinGame)
 - **Async + sync API client** — a typed wrapper around CodinGame's internal JSON API
   (session/credential handling, request/response models), usable directly as a library.
 - **`cg puzzle`** — a local working directory for solving an existing CodinGame puzzle:
-  import a puzzle, edit `data/solution.src`, run it locally or via `cg puzzle push` against
+  import a puzzle, edit `data/solution.src`, run it locally or via `cg puzzle submit` against
   the real judge, and debug it directly in VS Code against downloaded test cases.
 - **`cg contribution`** — a local working directory for authoring/maintaining a CodinGame
   contribution (a puzzle you're writing). `data/` is a real git working tree with `main`/
@@ -42,7 +42,7 @@ cg whoami
 cg puzzle import <puzzle-id> my-puzzle
 cd my-puzzle && $EDITOR data/solution.src
 cg puzzle play-local               # run locally against downloaded test cases
-cg puzzle push                     # submit to CodinGame
+cg puzzle submit                   # submit to CodinGame for credit
 
 cg contribution import <handle> my-contribution
 cd my-contribution && $EDITOR data/solution.src
