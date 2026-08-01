@@ -8,24 +8,38 @@
    exist yet, no explicit "init" required. This lives in its own top-level package (`settings/`,
    a sibling of `config/`) rather than inside `config/` itself, since it's runtime data the app
    writes, not configuration a user edits--a deliberately different concern even though the two
-   are closely related (a `CgSettings` always belongs to a `CgConfig`).
+   are closely related (a `CgSettings` always belongs to a `CgConfig`, and `CgConfigData` embeds
+   this module's own `CgSettingsData` shape as its `settings` sub-object--see
+   `CgConfigData.settings` and `CgConfig.settings` for how that's merged in).
+
+   `CgConfig` is only imported under `TYPE_CHECKING` here (used purely for type annotations) to
+   avoid a real circular import: `codingame_tools.config.cg_config` needs `CgSettingsData` (for
+   `CgConfigData.settings`), so this module cannot import `codingame_tools.config` eagerly at
+   module-load time without creating a cycle.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from json_data_types import JsonDict
 
 from ..common.dataclass_wizard_x import CatchAll, JSONWizardX
-from ..config import CgConfig
+
+if TYPE_CHECKING:
+    from ..config import CgConfig
 
 __all__ = [
     "SETTINGS_FILE_NAME",
     "CgSettingsData",
     "CgSettings",
+    "overlay_settings_data",
+    "relativize_settings_dir",
     "resolve_settings",
+    "resolve_settings_dir",
     "write_settings",
 ]
 
@@ -52,21 +66,77 @@ class CgSettingsData(JSONWizardX):
 
     default_profile: str | None = None
     """Override for the default codingame-tools credential profile name to use. If not set,
-       falls back to `CgConfigData.default_profile` (and from there to "default"). See
-       `CgSettings.default_profile` for the resolved value."""
+       falls back to `CgConfig.settings.default_profile` (see `CgConfigData.settings`--itself
+       merged from the global then a project config.yaml's own `settings.defaultProfile`), and
+       from there to "default". See `CgSettings.default_profile` for the resolved value."""
 
     contribution_dir: str | None = None
     """Default contribution working directory (see `codingame_tools.contribution_manager`), used
-       when one isn't given explicitly and `CG_CONTRIBUTION_DIR` isn't set. Unlike
-       `default_profile`, there is no further fallback--if unset here, contribution-dir discovery
-       moves on to its cwd-based heuristics. May be relative (resolved against the current
-       directory at the time it's consulted) or absolute; `~` is expanded. See
+       when one isn't given explicitly and `CG_CONTRIBUTION_DIR` isn't set. If not set, falls
+       back to `CgConfig.settings.contribution_dir` the same way `default_profile` does--only
+       once that's also unset does contribution-dir discovery move on to its cwd-based
+       heuristics. May be relative or absolute; `~` is expanded. A relative value is resolved
+       against the directory settings.json itself lives in (i.e. the owning `CgConfig.data_dir`)
+       --NOT the current working directory at the time it's consulted--so the effective directory
+       doesn't move around depending on where `cg` happens to be run from. `cg settings set
+       contribution-dir` takes care of converting a path typed relative to the CLI's own cwd into
+       this form--see `relativize_settings_dir`/`resolve_settings_dir`, and
        `CgSettings.contribution_dir` for the resolved value."""
 
     puzzle_dir: str | None = None
     """Default puzzle working directory (see `codingame_tools.puzzle_manager`), used when one
        isn't given explicitly and `CG_PUZZLE_DIR` isn't set. Same resolution rules as
        `contribution_dir`--see `CgSettings.puzzle_dir` for the resolved value."""
+
+
+def overlay_settings_data(base: CgSettingsData, override: CgSettingsData) -> CgSettingsData:
+    """Return a new `CgSettingsData` with each of `default_profile`/`contribution_dir`/
+       `puzzle_dir` taken from `override` where it's set there, else from `base`. The building
+       block for the base-to-refined settings resolution chain (global config.yaml's `settings`
+       -> a project config.yaml's `settings` -> settings.json)--see `CgConfig.settings` for where
+       the first two tiers get combined, and `CgSettings`'s properties for where settings.json
+       itself gets layered on top as the final, most-refined tier."""
+    return CgSettingsData(
+            default_profile=override.default_profile if override.default_profile is not None else base.default_profile,
+            contribution_dir=override.contribution_dir if override.contribution_dir is not None else base.contribution_dir,
+            puzzle_dir=override.puzzle_dir if override.puzzle_dir is not None else base.puzzle_dir,
+        )
+
+
+def resolve_settings_dir(raw_value: str | None, base_dir: Path) -> Path | None:
+    """Resolve a raw `contributionDir`/`puzzleDir`-shaped string--as stored in a `CgSettingsData`,
+       whether it came from settings.json directly or from a config.yaml `settings` tier--to an
+       absolute `Path`.
+
+       `None` if `raw_value` is `None`. Otherwise `~`-expanded, and--if still not absolute--
+       resolved against `base_dir` (the *resolved data directory* settings.json lives in, i.e.
+       `CgConfig.data_dir`/`CgSettings.settings_file.parent`), never the current working
+       directory--so the effective directory is the same regardless of where `cg` is run from.
+       See `relativize_settings_dir` for the inverse, used when a value is first set."""
+    if raw_value is None:
+        return None
+    path = Path(raw_value).expanduser()
+    if not path.is_absolute():
+        path = base_dir / path
+    return path.resolve()
+
+
+def relativize_settings_dir(path: Path, base_dir: Path) -> str:
+    """The inverse of `resolve_settings_dir`: given a path as typed at the CLI (relative to the
+       current working directory if not absolute--the natural way to type a path on a command
+       line), return the string that should actually be stored in `CgSettingsData.
+       contribution_dir`/`puzzle_dir` so that `resolve_settings_dir()` reconstructs the exact
+       same absolute location later, regardless of `cg`'s cwd at that later time.
+
+       Absolute input (after `~`-expansion) is stored as-is, unchanged. Relative input is first
+       resolved against the current working directory (i.e. what it actually refers to right
+       now), then re-expressed relative to `base_dir`--which may include `..` segments if the
+       target isn't under `base_dir`."""
+    expanded = path.expanduser()
+    if expanded.is_absolute():
+        return str(expanded)
+    absolute = expanded.resolve()
+    return os.path.relpath(absolute, start=base_dir.resolve())
 
 
 @dataclass
@@ -92,8 +162,9 @@ class CgSettings:
     @property
     def default_profile(self) -> str:
         """The default codingame-tools credential profile name to use. Resolution order: this
-           file's own `defaultProfile`, then `CgConfig.default_profile` (which itself falls back
-           to "default")."""
+           file's own `defaultProfile`, then `CgConfig.default_profile` (itself merged from the
+           global then a project config.yaml's `settings.defaultProfile`, falling back to
+           "default" if neither sets it)."""
         if self.raw_data.default_profile is not None:
             return self.raw_data.default_profile
         return self.config.default_profile
@@ -101,23 +172,25 @@ class CgSettings:
     @property
     def contribution_dir(self) -> Path | None:
         """The configured default contribution working directory, resolved to an absolute path
-           (relative values resolved against the current directory, `~` expanded), or None if not
-           set. There is no further fallback (unlike `default_profile`)--`None` here just means
-           "not configured", and callers (see `codingame_tools.contribution_manager.resolver`)
-           move on to their own cwd-based discovery steps."""
-        if self.raw_data.contribution_dir is None:
-            return None
-        return Path(self.raw_data.contribution_dir).expanduser().resolve()
+           (relative values resolved against `settings_file`'s own directory--see
+           `resolve_settings_dir`--NOT the current working directory). Resolution order: this
+           file's own `contributionDir`, then `CgConfig.contribution_dir` (itself merged from the
+           global then a project config.yaml's `settings.contributionDir`). `None` if still unset
+           after that--callers (see `codingame_tools.contribution_manager.resolver`) move on to
+           their own cwd-based discovery steps."""
+        resolved = resolve_settings_dir(self.raw_data.contribution_dir, self.settings_file.parent)
+        if resolved is not None:
+            return resolved
+        return self.config.contribution_dir
 
     @property
     def puzzle_dir(self) -> Path | None:
-        """The configured default puzzle working directory, resolved to an absolute path (relative
-           values resolved against the current directory, `~` expanded), or None if not set. Same
-           "no further fallback" contract as `contribution_dir`--see
-           `codingame_tools.puzzle_manager.resolver`."""
-        if self.raw_data.puzzle_dir is None:
-            return None
-        return Path(self.raw_data.puzzle_dir).expanduser().resolve()
+        """The configured default puzzle working directory, resolved to an absolute path (same
+           rules as `contribution_dir`). See `codingame_tools.puzzle_manager.resolver`."""
+        resolved = resolve_settings_dir(self.raw_data.puzzle_dir, self.settings_file.parent)
+        if resolved is not None:
+            return resolved
+        return self.config.puzzle_dir
 
     def save(self) -> None:
         """Write `raw_data` back to `settings_file`."""

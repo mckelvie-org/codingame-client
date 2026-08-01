@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from ..settings import CgSettingsData
 from .cg_config import CgConfigData
 from .resolver import (
     APP_NAME,
@@ -24,6 +25,7 @@ from .resolver import (
 
 __all__ = [
     "CgConfigData",
+    "CgSettingsData",
     "CgConfig",
     "CgConfigNotFoundError",
     "find_config_file",

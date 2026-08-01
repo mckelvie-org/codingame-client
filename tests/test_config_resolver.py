@@ -23,6 +23,7 @@ from codingame_tools.config.resolver import (
     resolve_config,
     write_config,
 )
+from codingame_tools.settings import CgSettingsData
 
 
 def _write_project_config(root: Path, *, data_dir: str | None = None) -> Path:
@@ -231,9 +232,97 @@ def test_default_profile_defaults_to_hardcoded_default(tmp_path: Path) -> None:
 
 def test_default_profile_override(tmp_path: Path) -> None:
     config_file = _write_project_config(tmp_path)
-    CgConfigData(default_profile="work").save_yaml(config_file)
+    CgConfigData(settings=CgSettingsData(default_profile="work")).save_yaml(config_file)
     resolved = CgConfig(config_file=config_file, raw_data=CgConfigData.load_yaml(config_file))
     assert resolved.default_profile == "work"
+
+
+# --- settings resolution (global config.yaml <-> project config.yaml merge) -----------------
+
+
+def test_settings_falls_back_to_global_config_settings_field_by_field(
+            tmp_path: Path, fake_global_root: Path,
+        ) -> None:
+    """A project config.yaml that doesn't mention defaultProfile at all must not mask the
+       global config.yaml's own defaultProfile--regression test for the bug this was built to
+       fix (previously: whichever single config.yaml find_config_file() picked won outright,
+       with no per-field merge)."""
+    global_config = fake_global_root / "config" / CONFIG_FILE_NAME
+    global_config.parent.mkdir(parents=True)
+    CgConfigData(settings=CgSettingsData(default_profile="sammck")).save_yaml(global_config)
+    project_config = _write_project_config(tmp_path)
+    CgConfigData(settings=CgSettingsData(contribution_dir="myrepo")).save_yaml(project_config)
+
+    resolved = CgConfig(config_file=project_config, raw_data=CgConfigData.load_yaml(project_config))
+
+    assert resolved.default_profile == "sammck"  # from the global file, not masked
+    # from the project file--relative to data_dir (where settings.json lives), not cwd
+    assert resolved.contribution_dir == resolved.data_dir / "myrepo"
+
+
+def test_project_settings_field_overrides_global_settings_field(
+            tmp_path: Path, fake_global_root: Path,
+        ) -> None:
+    global_config = fake_global_root / "config" / CONFIG_FILE_NAME
+    global_config.parent.mkdir(parents=True)
+    CgConfigData(settings=CgSettingsData(default_profile="global-default")).save_yaml(global_config)
+    project_config = _write_project_config(tmp_path)
+    CgConfigData(settings=CgSettingsData(default_profile="project-default")).save_yaml(project_config)
+
+    resolved = CgConfig(config_file=project_config, raw_data=CgConfigData.load_yaml(project_config))
+
+    assert resolved.default_profile == "project-default"
+
+
+def test_settings_is_unaffected_by_a_nonexistent_global_config(tmp_path: Path, fake_global_root: Path) -> None:
+    project_config = _write_project_config(tmp_path)
+    CgConfigData(settings=CgSettingsData(default_profile="only-project")).save_yaml(project_config)
+
+    resolved = CgConfig(config_file=project_config, raw_data=CgConfigData.load_yaml(project_config))
+
+    assert resolved.default_profile == "only-project"
+    assert resolved.contribution_dir is None
+    assert resolved.puzzle_dir is None
+
+
+def test_contribution_dir_resolves_relative_to_data_dir_not_cwd(
+            tmp_path: Path, fake_global_root: Path, monkeypatch: pytest.MonkeyPatch,
+        ) -> None:
+    """Regression test: a relative contributionDir must resolve against data_dir (where
+       settings.json lives), not whatever the current working directory happens to be--otherwise
+       the effective directory moves around depending on where `cg` is run from."""
+    project_config = _write_project_config(tmp_path)
+    CgConfigData(settings=CgSettingsData(contribution_dir="myrepo")).save_yaml(project_config)
+    resolved = CgConfig(config_file=project_config, raw_data=CgConfigData.load_yaml(project_config))
+    elsewhere = tmp_path / "some" / "other" / "cwd"
+    elsewhere.mkdir(parents=True)
+    monkeypatch.chdir(elsewhere)
+
+    assert resolved.contribution_dir == resolved.data_dir / "myrepo"
+    assert resolved.contribution_dir != elsewhere / "myrepo"
+
+
+def test_contribution_dir_absolute_override_used_as_is(tmp_path: Path, fake_global_root: Path) -> None:
+    absolute = tmp_path / "elsewhere"
+    project_config = _write_project_config(tmp_path)
+    CgConfigData(settings=CgSettingsData(contribution_dir=str(absolute))).save_yaml(project_config)
+    resolved = CgConfig(config_file=project_config, raw_data=CgConfigData.load_yaml(project_config))
+
+    assert resolved.contribution_dir == absolute
+
+
+def test_settings_for_the_global_config_itself_is_not_overlaid_on_itself(
+            fake_global_root: Path,
+        ) -> None:
+    """When config_file *is* the global fallback location, there's no separate project tier to
+       overlay--this must not re-read/double-apply the same file."""
+    global_config = fake_global_root / "config" / CONFIG_FILE_NAME
+    global_config.parent.mkdir(parents=True)
+    CgConfigData(settings=CgSettingsData(default_profile="global-only")).save_yaml(global_config)
+
+    resolved = CgConfig(config_file=global_config, raw_data=CgConfigData.load_yaml(global_config))
+
+    assert resolved.default_profile == "global-only"
 
 
 # --- write_config ----------------------------------------------------------------------------
@@ -267,6 +356,29 @@ def test_cg_config_to_dump_dict_has_resolved_values_and_raw_config(tmp_path: Pat
     # The raw field is unresolved and unset, unlike the resolved "dataDir" above--omitted
     # entirely (skip_defaults), not present as null.
     assert "dataDir" not in d["rawConfig"]
+
+
+def test_cg_config_to_dump_dict_nests_resolved_settings(tmp_path: Path, fake_global_root: Path) -> None:
+    """defaultProfile/contributionDir/puzzleDir must be nested under "settings" in the dump--
+       matching CgConfigData.settings's own nested shape--not flattened onto the config object
+       directly (that's where they lived before the config/settings merge redesign)."""
+    global_config = fake_global_root / "config" / CONFIG_FILE_NAME
+    global_config.parent.mkdir(parents=True)
+    CgConfigData(settings=CgSettingsData(default_profile="sammck")).save_yaml(global_config)
+    project_config = _write_project_config(tmp_path)
+    CgConfigData(settings=CgSettingsData(contribution_dir="myrepo")).save_yaml(project_config)
+    resolved = CgConfig(config_file=project_config, raw_data=CgConfigData.load_yaml(project_config))
+
+    d = resolved.to_dump_dict()
+
+    assert "defaultProfile" not in d
+    assert "contributionDir" not in d
+    assert "puzzleDir" not in d
+    assert d["settings"] == {
+        "defaultProfile": "sammck",
+        "contributionDir": str(resolved.data_dir / "myrepo"),
+        "puzzleDir": None,
+    }
 
 
 def test_cg_config_data_omits_unset_fields_from_to_dict(tmp_path: Path) -> None:

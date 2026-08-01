@@ -14,7 +14,10 @@ from typing import Any
 
 import pytest
 
+from codingame_tools.client.async_.raw_client import CgAsyncClientHttpError
 from codingame_tools.client.common.protocol.last_activities import CgLastActivityPuzzle, CgPuzzleFeedback
+from codingame_tools.client.common.protocol.report import CgReportPuzzleProgress, CgSubmissionReport, CgValidatorResult
+from codingame_tools.client.common.protocol.search import CgSearchResult
 from codingame_tools.client.common.protocol.test_session import (
     CgLastActivityContributor,
     CgPlayComparison,
@@ -105,12 +108,34 @@ def _make_progress(
     return progress
 
 
+def _make_submission_report(
+            *, submission_id: int = 424242, score: float = 100.0,
+        ) -> CgSubmissionReport:
+    return CgSubmissionReport(
+            codingamer_id=1, submission_id=submission_id, score=score, best_score=score,
+            achievements_completed=True, shared=False, validator_shareable=True,
+            puzzle_progress=CgReportPuzzleProgress(
+                    id=10075, achievement_count=1, done_achievement_count=1, validator_score=0,
+                ),
+            validators=[CgValidatorResult(method_name="Validator_1", name="Test 1", difficulty=100, success=True)],
+            achievements=[], _completed_time=CgEpochMillis.fromtimestamp(0, tz=timezone.utc),
+        )
+
+
 class _FakePuzzleService:
     def __init__(self, handle: str = "session-handle-1") -> None:
         self.handle = handle
         self.generate_calls: list[dict[str, Any]] = []
         self.progress_results: list[CgLastActivityPuzzle] = []
         self.find_progress_calls: list[list[int]] = []
+        # find_progress_by_pretty_id defaults to always succeeding (echoing back a match for
+        # whatever pretty_id was queried)--matching the old, pre-_resolve_puzzle_ref() behavior
+        # of every existing test here, which all pass an already-valid pretty id straight
+        # through. Set pretty_id_not_found=True to simulate an unrecognized pretty id (the live-
+        # confirmed 200-with-null-body signature), or pretty_id_result to a specific object.
+        self.pretty_id_result: CgLastActivityPuzzle | None = None
+        self.pretty_id_not_found: bool = False
+        self.find_pretty_id_calls: list[str] = []
 
     async def generate_session_from_puzzle_pretty_id(
                 self, puzzle_pretty_id: str, codingamer_id: int | None = None,
@@ -123,6 +148,44 @@ class _FakePuzzleService:
             ) -> list[CgLastActivityPuzzle]:
         self.find_progress_calls.append(puzzle_ids)
         return self.progress_results
+
+    async def find_progress_by_pretty_id(
+                self, pretty_id: str, codingamer_id: int | None = None,
+            ) -> CgLastActivityPuzzle:
+        self.find_pretty_id_calls.append(pretty_id)
+        if self.pretty_id_not_found:
+            raise CgAsyncClientHttpError(status_code=200)
+        if self.pretty_id_result is not None:
+            return self.pretty_id_result
+        return _make_progress(pretty_id=pretty_id)
+
+
+class _FakeSearchService:
+    def __init__(self) -> None:
+        self.results: list[CgSearchResult] = []
+        self.calls: list[dict[str, Any]] = []
+
+    async def search(
+                self, query: str, locale: str = "en", type_filter: str | None = None,
+            ) -> list[CgSearchResult]:
+        self.calls.append({"query": query, "locale": locale, "type_filter": type_filter})
+        return self.results
+
+
+class _FakeReportService:
+    def __init__(self, report: CgSubmissionReport | None = None) -> None:
+        self.report = report or _make_submission_report()
+        self.find_calls: list[int] = []
+        self.helper = self
+
+    async def find_report_by_submission(self, submission_id: int) -> CgSubmissionReport:
+        self.find_calls.append(submission_id)
+        return self.report
+
+    async def find_report_by_submission_when_ready(
+                self, submission_id: int, *, max_wait_seconds: float = 60.0,
+            ) -> CgSubmissionReport:
+        return await self.find_report_by_submission(submission_id)
 
 
 class _FakeTestSessionService:
@@ -154,9 +217,14 @@ class _FakeTestSessionService:
 
 
 class _FakeServices:
-    def __init__(self, puzzle: _FakePuzzleService, test_session: _FakeTestSessionService) -> None:
+    def __init__(
+                self, puzzle: _FakePuzzleService, test_session: _FakeTestSessionService,
+                search: _FakeSearchService, report: _FakeReportService,
+            ) -> None:
         self.puzzle = puzzle
         self.test_session = test_session
+        self.search = search
+        self.report = report
 
 
 class _FakeFileServletServlet:
@@ -177,9 +245,10 @@ class _FakeServlets:
 class _FakeClient:
     def __init__(
                 self, puzzle: _FakePuzzleService, test_session: _FakeTestSessionService,
-                file_servlet: _FakeFileServletServlet,
+                file_servlet: _FakeFileServletServlet, search: _FakeSearchService,
+                report: _FakeReportService,
             ) -> None:
-        self.services = _FakeServices(puzzle, test_session)
+        self.services = _FakeServices(puzzle, test_session, search, report)
         self.servlets = _FakeServlets(file_servlet)
 
 
@@ -189,7 +258,9 @@ def _make_fake_client(
     puzzle_service = _FakePuzzleService(session.test_session_handle)
     test_session_service = _FakeTestSessionService(session, play_result=play_result)
     file_servlet = _FakeFileServletServlet()
-    client = _FakeClient(puzzle_service, test_session_service, file_servlet)
+    search_service = _FakeSearchService()
+    report_service = _FakeReportService()
+    client = _FakeClient(puzzle_service, test_session_service, file_servlet, search_service, report_service)
     return client, puzzle_service, test_session_service, file_servlet
 
 
@@ -252,6 +323,23 @@ async def test_import_without_existing_answer_uses_placeholder_and_language_flag
     assert "Literary Alfabet Soupe" in content
 
 
+async def test_import_treats_empty_placeholder_answer_object_as_no_real_answer(tmp_path: Path) -> None:
+    """Regression test: confirmed live (2026-07-31) that `answer` can be present as an empty
+       JSON object (`code`/`programming_language_id` both `None`) with no solution ever
+       submitted--NOT the `answer=None` shape every other test here uses. Must be treated the
+       same as `answer=None`, not crash or be mistaken for a real saved answer."""
+    answer = CgTestSessionAnswer(code=None, programming_language_id=None)
+    session = _make_test_session(answer=answer)
+    client, _, _, _ = _make_fake_client(session)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+
+    puzzle_data = await manager.import_("literary-alfabet-soupe", language="Rust")
+
+    assert puzzle_data.solution_language == "Rust"
+    content = (tmp_path / "data" / "solution.src").read_text()
+    assert "TODO" in content
+
+
 async def test_import_refuses_unsupported_contribution_type(tmp_path: Path) -> None:
     session = _make_test_session(contribution_type="PUZZLE_OPTI")
     client, _, _, _ = _make_fake_client(session)
@@ -272,6 +360,109 @@ async def test_import_refuses_if_already_imported(tmp_path: Path) -> None:
 
     with pytest.raises(CgPuzzleManagerError):
         await manager.import_("literary-alfabet-soupe")
+
+
+# --- import_ puzzle reference resolution (_resolve_puzzle_ref) ------------------------------
+
+
+async def test_import_resolves_numeric_puzzle_id(tmp_path: Path) -> None:
+    session = _make_test_session()
+    client, puzzle_service, _, _ = _make_fake_client(session)
+    puzzle_service.progress_results = [_make_progress(puzzle_id=10075, pretty_id="literary-alfabet-soupe")]
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+
+    await manager.import_("10075")
+
+    assert puzzle_service.find_progress_calls == [[10075]]
+    assert puzzle_service.find_pretty_id_calls == []  # numeric ID resolved first--no need to try the rest
+    assert puzzle_service.generate_calls == [{"puzzle_pretty_id": "literary-alfabet-soupe", "codingamer_id": None}]
+
+
+async def test_import_numeric_puzzle_id_with_no_match_raises_immediately(tmp_path: Path) -> None:
+    session = _make_test_session()
+    client, puzzle_service, _, _ = _make_fake_client(session)
+    search_service = client.services.search
+    puzzle_service.progress_results = []  # no puzzle with this ID
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+
+    with pytest.raises(CgPuzzleManagerError):
+        await manager.import_("99999999")
+
+    # doesn't fall through to title search--a bare number is meant as an ID, not a title
+    assert search_service.calls == []
+
+
+async def test_import_resolves_already_valid_pretty_id(tmp_path: Path) -> None:
+    session = _make_test_session()
+    client, puzzle_service, _, _ = _make_fake_client(session)
+    search_service = client.services.search
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+
+    await manager.import_("literary-alfabet-soupe")
+
+    assert puzzle_service.find_pretty_id_calls == ["literary-alfabet-soupe"]
+    assert search_service.calls == []  # resolved directly--no need for a title search
+
+
+async def test_import_falls_back_to_exact_title_match_when_not_a_valid_pretty_id(tmp_path: Path) -> None:
+    session = _make_test_session()
+    client, puzzle_service, _, _ = _make_fake_client(session)
+    search_service = client.services.search
+    puzzle_service.pretty_id_not_found = True
+    search_service.results = [
+            CgSearchResult(id="literary-alfabet-soupe", name="Literary Alfabet Soupe", type="PUZZLE"),
+            CgSearchResult(id="some-other-puzzle", name="Something Else Entirely", type="PUZZLE"),
+        ]
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+
+    await manager.import_("Literary Alfabet Soupe")
+
+    assert search_service.calls == [{"query": "Literary Alfabet Soupe", "locale": "en", "type_filter": "PUZZLE"}]
+    assert puzzle_service.generate_calls == [{"puzzle_pretty_id": "literary-alfabet-soupe", "codingamer_id": None}]
+
+
+async def test_import_falls_back_to_case_insensitive_title_match(tmp_path: Path) -> None:
+    session = _make_test_session()
+    client, puzzle_service, _, _ = _make_fake_client(session)
+    search_service = client.services.search
+    puzzle_service.pretty_id_not_found = True
+    search_service.results = [
+            CgSearchResult(id="literary-alfabet-soupe", name="Literary Alfabet Soupe", type="PUZZLE"),
+        ]
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+
+    # doesn't exactly match "Literary Alfabet Soupe"--only case-insensitively
+    await manager.import_("literary alfabet soupe")
+
+    assert puzzle_service.generate_calls == [{"puzzle_pretty_id": "literary-alfabet-soupe", "codingamer_id": None}]
+
+
+async def test_import_prefers_exact_title_match_over_case_insensitive(tmp_path: Path) -> None:
+    session = _make_test_session()
+    client, puzzle_service, _, _ = _make_fake_client(session)
+    search_service = client.services.search
+    puzzle_service.pretty_id_not_found = True
+    search_service.results = [
+            CgSearchResult(id="wrong-case-match", name="literary alfabet soupe", type="PUZZLE"),
+            CgSearchResult(id="literary-alfabet-soupe", name="Literary Alfabet Soupe", type="PUZZLE"),
+        ]
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+
+    await manager.import_("Literary Alfabet Soupe")
+
+    assert puzzle_service.generate_calls == [{"puzzle_pretty_id": "literary-alfabet-soupe", "codingamer_id": None}]
+
+
+async def test_import_raises_when_nothing_resolves(tmp_path: Path) -> None:
+    session = _make_test_session()
+    client, puzzle_service, _, _ = _make_fake_client(session)
+    search_service = client.services.search
+    puzzle_service.pretty_id_not_found = True
+    search_service.results = []
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+
+    with pytest.raises(CgPuzzleManagerError):
+        await manager.import_("Some Puzzle That Does Not Exist")
 
 
 # --- repair ----------------------------------------------------------------------------------
@@ -378,9 +569,10 @@ async def test_push_submits_current_local_content(tmp_path: Path) -> None:
     await manager.import_("literary-alfabet-soupe")
     (tmp_path / "data" / "solution.src").write_text("print('new solution')\n")
 
-    submission_id = await manager.push()
+    report = await manager.push()
 
-    assert submission_id == 424242
+    assert report is client.services.report.report
+    assert client.services.report.find_calls == [424242]
     assert len(test_session_service.submit_calls) == 1
     call = test_session_service.submit_calls[0]
     assert call["test_session_handle"] == "session-handle-1"
@@ -409,20 +601,21 @@ async def test_push_requires_meta_present(tmp_path: Path) -> None:
 # --- play ------------------------------------------------------------------------------------
 
 
-async def test_play_defaults_to_test_index_1(tmp_path: Path) -> None:
-    session = _make_test_session()
+async def test_play_with_no_args_runs_every_downloaded_test_case(tmp_path: Path) -> None:
+    session = _make_test_session()  # 2 downloaded test cases: index 1 "Test 1", index 2 "Test 2"
     play_result = CgPlayResult(output="1\n", comparison=CgPlayComparison(success=True))
     client, _, test_session_service, _ = _make_fake_client(session, play_result=play_result)
     manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
     await manager.import_("literary-alfabet-soupe")
 
-    result = await manager.play()
+    items = await manager.play()
 
-    assert result.comparison.success is True
-    assert len(test_session_service.play_calls) == 1
-    request = test_session_service.play_calls[0]["request"]
-    assert request.multiple_languages is not None
-    assert request.multiple_languages.test_index == 1
+    assert [item.index for item in items] == [1, 2]
+    assert [item.label for item in items] == ["Test 1", "Test 2"]
+    assert all(item.result.comparison.success for item in items)
+    assert len(test_session_service.play_calls) == 2
+    indices = [c["request"].multiple_languages.test_index for c in test_session_service.play_calls]
+    assert indices == [1, 2]
 
 
 async def test_play_with_explicit_index(tmp_path: Path) -> None:
@@ -432,11 +625,42 @@ async def test_play_with_explicit_index(tmp_path: Path) -> None:
     manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
     await manager.import_("literary-alfabet-soupe")
 
-    await manager.play(3)
+    items = await manager.play([2])
 
+    assert len(items) == 1
+    assert items[0].index == 2
+    assert items[0].label == "Test 2"
+    assert items[0].result is play_result
     request = test_session_service.play_calls[0]["request"]
     assert request.multiple_languages is not None
-    assert request.multiple_languages.test_index == 3
+    assert request.multiple_languages.test_index == 2
+
+
+async def test_play_with_multiple_explicit_indices_runs_each_in_order(tmp_path: Path) -> None:
+    session = _make_test_session()
+    play_result = CgPlayResult(output="1\n", comparison=CgPlayComparison(success=True))
+    client, _, test_session_service, _ = _make_fake_client(session, play_result=play_result)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe")
+
+    # index 5 isn't downloaded locally--play() doesn't require that, only a real server index.
+    items = await manager.play([2, 5, 1])
+
+    assert [item.index for item in items] == [2, 5, 1]
+    assert [item.label for item in items] == ["Test 2", "test 5", "Test 1"]
+    indices = [c["request"].multiple_languages.test_index for c in test_session_service.play_calls]
+    assert indices == [2, 5, 1]
+
+
+async def test_play_with_no_downloaded_tests_and_no_args_raises(tmp_path: Path) -> None:
+    session = _make_test_session()
+    client, _, _, _ = _make_fake_client(session)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe")
+    shutil.rmtree(manager.tests_dir)
+
+    with pytest.raises(FileNotFoundError):
+        await manager.play()
 
 
 # --- diff ------------------------------------------------------------------------------------
@@ -721,3 +945,24 @@ async def test_status_requires_meta_present(tmp_path: Path) -> None:
 
     with pytest.raises(CgPuzzleManagerError):
         await manager.status()
+
+
+# --- delete --------------------------------------------------------------------------------
+
+
+async def test_delete_removes_the_whole_working_directory(tmp_path: Path) -> None:
+    session = _make_test_session()
+    client, _, _, _ = _make_fake_client(session)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe")
+    assert tmp_path.is_dir()
+
+    manager.delete()
+
+    assert not tmp_path.exists()
+
+
+async def test_delete_requires_prior_import(tmp_path: Path) -> None:
+    manager = CgPuzzleManager(tmp_path, object())  # type: ignore[arg-type]
+    with pytest.raises(FileNotFoundError):
+        manager.delete()

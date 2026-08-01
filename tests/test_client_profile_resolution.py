@@ -44,7 +44,7 @@ async def test_profile_name_resolved_from_project_config(
     project = fake_home / "myproject"
     config_dir = project / ".cg" / "config"
     config_dir.mkdir(parents=True)
-    CgConfigData(default_profile="work").save_yaml(config_dir / "config.yaml")
+    CgConfigData(settings=CgSettingsData(default_profile="work")).save_yaml(config_dir / "config.yaml")
     monkeypatch.chdir(project)
 
     client = CgAsyncRawClient()
@@ -62,7 +62,7 @@ async def test_explicit_profile_name_skips_settings_resolution(
     project = fake_home / "myproject"
     config_dir = project / ".cg" / "config"
     config_dir.mkdir(parents=True)
-    CgConfigData(default_profile="from-config").save_yaml(config_dir / "config.yaml")
+    CgConfigData(settings=CgSettingsData(default_profile="from-config")).save_yaml(config_dir / "config.yaml")
     monkeypatch.chdir(project)
 
     client = CgAsyncRawClient(profile_name="explicit")

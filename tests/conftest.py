@@ -83,10 +83,17 @@ class _FakeGlobalPlatformDirs:
         return str(self._root / "data")
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def fake_global_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirects the global (per-user) fallback config/data location into an isolated tmp_path
-       subtree, so tests never touch the real machine's actual global config."""
+       subtree, so tests never touch the real machine's actual global config.
+
+       autouse: since CgConfig.settings (added for the global<->project config.yaml settings
+       merge) reads the global config file location on every access, ANY test touching
+       CgConfig/CgSettings--not just config-discovery tests--could otherwise silently pick up
+       whatever really lives at e.g. ~/.config/codingame/cg/config.yaml on the machine running
+       the suite. Tests that also want the returned Path (to write a fake global config.yaml into
+       it) can still take it as a normal fixture parameter, same as before."""
     root = tmp_path / "global_root"
     monkeypatch.setattr(
         "codingame_tools.config.resolver._global_platformdirs",

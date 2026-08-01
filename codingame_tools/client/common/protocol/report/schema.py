@@ -59,42 +59,54 @@ class CgValidatorResult(JSONWizardX):
 @dataclass
 class CgSubmissionReport(JSONWizardX):
     """The complete response to Report/findReportBySubmission: a report on a single puzzle
-       submission's results."""
+       submission's results.
 
-    codingamer_id: int
-    """The submitting codingamer's numeric ID."""
-
-    submission_id: int
-    """Numeric ID of the submission this report is for (matches the `submission_id` argument)."""
-
-    score: float
-    """The submission's validator score, 0.0 to 100.0."""
+       CAUTION, confirmed live (2026-07-31): calling `findReportBySubmission` right after
+       `TestSession/submit` can race server-side grading--every field below except `best_score`/
+       `validator_shareable` was entirely absent in one observed case (not merely `null`). All of
+       them are therefore Optional here; a report is only "done" once they're all populated. See
+       `CgAsyncReportServiceHelper.find_report_by_submission_when_ready`, which polls until that's
+       true (or a timeout elapses) instead of returning a partial report."""
 
     best_score: float
     """The codingamer's best-ever validator score for this puzzle, 0.0 to 100.0 (may be higher
        than `score` if this submission wasn't their best attempt)."""
 
-    achievements_completed: bool
-    """Whether all achievements for this puzzle have been completed by the codingamer."""
-
-    shared: bool
-    """Whether the codingamer has publicly shared their solution."""
-
     validator_shareable: bool
     """Whether this submission's validator results are eligible to be shared."""
 
-    puzzle_progress: CgReportPuzzleProgress
-    """Lightweight puzzle progress summary."""
+    codingamer_id: int | None = None
+    """The submitting codingamer's numeric ID. Absent while grading is still in progress--see the
+       class docstring."""
 
-    validators: list[CgValidatorResult]
-    """Per-validator results for this submission."""
+    submission_id: int | None = None
+    """Numeric ID of the submission this report is for (matches the `submission_id` argument).
+       Absent while grading is still in progress--see the class docstring."""
 
-    achievements: list[Any]
+    score: float | None = None
+    """The submission's validator score, 0.0 to 100.0. Absent while grading is still in
+       progress--see the class docstring."""
+
+    achievements_completed: bool | None = None
+    """Whether all achievements for this puzzle have been completed by the codingamer. Absent
+       while grading is still in progress--see the class docstring."""
+
+    shared: bool | None = None
+    """Whether the codingamer has publicly shared their solution. Absent while grading is still
+       in progress--see the class docstring."""
+
+    puzzle_progress: CgReportPuzzleProgress | None = None
+    """Lightweight puzzle progress summary. Absent while grading is still in progress--see the
+       class docstring."""
+
+    validators: list[CgValidatorResult] | None = None
+    """Per-validator results for this submission. Absent while grading is still in progress--see
+       the class docstring."""
+
+    achievements: list[Any] | None = None
     """Achievements unlocked by this submission. Only observed as an empty list so far, so
-       element shape is unknown."""
-
-    _completed_time: CgEpochMillis = Alias("completedTime")
-    """When this submission was completed."""
+       element shape is unknown otherwise. Absent while grading is still in progress--see the
+       class docstring."""
 
     extra_data: CatchAll = field(default_factory=dict)
 
@@ -102,14 +114,30 @@ class CgSubmissionReport(JSONWizardX):
     """Community feedback/rating summary for the puzzle. Not confirmed to always be present
        (only a single example observed so far)."""
 
+    _completed_time: CgEpochMillis | None = Alias("completedTime", default=None)
+    """When this submission was completed. Absent while grading is still in progress--see the
+       class docstring."""
+
     @property
-    def completed_time(self) -> datetime:
-        """See the field docstring for `_completed_time`. Always UTC."""
+    def completed_time(self) -> datetime | None:
+        """See the field docstring for `_completed_time`. Always UTC. `None` if not yet done."""
         return self._completed_time
 
     @completed_time.setter
-    def completed_time(self, value: datetime) -> None:
-        self._completed_time = CgEpochMillis.upcast(value)
+    def completed_time(self, value: datetime | None) -> None:
+        self._completed_time = None if value is None else CgEpochMillis.upcast(value)
+
+    def is_ready(self) -> bool:
+        """Whether grading has finished--i.e. every field described as "absent while grading is
+           still in progress" above is now populated. See the class docstring and
+           `CgAsyncReportServiceHelper.find_report_by_submission_when_ready`."""
+        return (
+                self.codingamer_id is not None and self.submission_id is not None
+                and self.score is not None and self.achievements_completed is not None
+                and self.shared is not None and self.puzzle_progress is not None
+                and self.validators is not None and self.achievements is not None
+                and self._completed_time is not None
+            )
 
 
 __all__ = ["CgReportPuzzleProgress", "CgSubmissionReport", "CgValidatorResult"]

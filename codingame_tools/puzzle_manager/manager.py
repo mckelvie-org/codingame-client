@@ -48,11 +48,14 @@ from __future__ import annotations
 
 import dataclasses
 import difflib
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..client.async_.client import CgAsyncClient
+from ..client.async_.raw_client import CgAsyncClientHttpError
 from ..client.common.protocol.last_activities import CgLastActivityPuzzle
+from ..client.common.protocol.report import CgSubmissionReport
 from ..client.common.protocol.schema import CgSolutionLanguage, cg_solution_language_to_extension
 from ..client.common.protocol.test_session import (
     CgMultipleLanguagesTestParams,
@@ -89,6 +92,7 @@ __all__ = [
     "CgPuzzleDiscardResult",
     "CgPuzzleLocalTestResult",
     "CgPuzzleLocalTestFailedError",
+    "CgPuzzleRemoteTestResult",
     "CgPuzzleStatus",
     "CgPuzzleManager",
 ]
@@ -150,6 +154,23 @@ class CgPuzzleLocalTestResult:
 
     timed_out: bool
     """Whether the run was killed for exceeding its timeout rather than running to completion."""
+
+
+@dataclass(frozen=True)
+class CgPuzzleRemoteTestResult:
+    """The outcome of playing one of a puzzle's test cases against the server
+       (`TestSession/play`)--see `CgPuzzleManager.play`."""
+
+    index: int
+    """The test case's 1-based index (see `CgTestSessionTestCase.index`)."""
+
+    label: str
+    """The test case's real label, from `.meta/tests/<index>/` if it's been downloaded--a
+       generic `f"test {index}"` placeholder otherwise (`play()` doesn't require an index to be
+       locally downloaded; the server doesn't need that to run it)."""
+
+    result: CgPlayResult
+    """The raw `TestSession/play` response for this test case."""
 
 
 class CgPuzzleLocalTestFailedError(CgPuzzleManagerError):
@@ -287,6 +308,12 @@ class CgPuzzleManager:
         """Path to this working directory's `data/puzzle-data.json` (user-editable metadata)."""
         return self.data_dir / _PUZZLE_DATA_FILE_NAME
 
+    @property
+    def statement_file(self) -> Path:
+        """Path to this working directory's `.meta/statement.html` (read-only reference copy of
+           the puzzle's rendered problem statement)."""
+        return self.meta_dir / STATEMENT_FILE_NAME
+
     # --- identity / server-data / puzzle-data load ----------------------------------------------
 
     def load_identity(self) -> CgPuzzleIdentity | None:
@@ -294,6 +321,13 @@ class CgPuzzleManager:
         if not self.identity_file.is_file():
             return None
         return CgPuzzleIdentity.load(self.identity_file)
+
+    def load_statement_html(self) -> str | None:
+        """Read `.meta/statement.html`, or None if it doesn't exist (never imported, or `.meta/`
+           needs `repair()`)."""
+        if not self.statement_file.is_file():
+            return None
+        return self.statement_file.read_text(encoding="utf-8")
 
     def load_server_data(self) -> CgPuzzleServerData | None:
         """Load `.meta/puzzle-server-data.json`, or None if it's missing (needs `repair()`--e.g.
@@ -341,16 +375,76 @@ class CgPuzzleManager:
         """
         return self.solution_file.read_text(encoding="utf-8")
 
+    # --- puzzle reference resolution -------------------------------------------------------
+
+    async def _resolve_puzzle_ref(self, puzzle_ref: str) -> str:
+        """Resolve a general puzzle reference to a real pretty ID, trying each of four
+           strategies in order and returning the first that matches:
+
+           1. A numeric puzzle ID (e.g. "10075")--looked up via `Puzzle/findProgressByIds`. If
+              `puzzle_ref` parses as an integer but doesn't match a real puzzle, this raises
+              immediately rather than falling through to the remaining strategies--a bare number
+              is almost certainly meant as an ID, and searching for a puzzle literally *titled*
+              that number would just produce a more confusing error.
+           2. Already a valid pretty ID (e.g. "literary-alfabet-soupe")--validated (and,
+              incidentally, resolved to the server's own canonical copy) via
+              `Puzzle/findProgressByPrettyId`. Confirmed live: an unrecognized pretty ID responds
+              200 with a JSON `null` body, which `service_request_to_dict` rejects with a
+              `CgAsyncClientHttpError` ("expected a JSON dictionary, got NoneType")--that specific
+              case (and only that case, identified by `status_code == 200`) is treated as "not a
+              valid pretty ID," not a real error, and falls through to the next strategy.
+           3. An exact-matching puzzle title (e.g. "Literary Alfabet Soupe")--via `Search/search`
+              (`type_filter="PUZZLE"`). Confirmed live: for `type == "PUZZLE"`, `CgSearchResult.
+              id` *is* the pretty ID directly (not a numeric ID, despite that field's own
+              docstring's general claim for "other types"--puzzles are the documented exception).
+           4. A case-insensitive-matching puzzle title, from that same search result set.
+
+        Raises:
+            CgPuzzleManagerError: if `puzzle_ref` parses as an integer with no matching puzzle,
+                                   or if none of the four strategies resolve to a real puzzle.
+        """
+        stripped = puzzle_ref.strip()
+        if stripped.isdigit():
+            puzzle_id = int(stripped)
+            progress_results = await self.client.services.puzzle.find_progress_by_ids([puzzle_id])
+            match = next((p for p in progress_results if p.id == puzzle_id), None)
+            if match is not None:
+                return match.pretty_id
+            raise CgPuzzleManagerError(f"No puzzle found with numeric ID {puzzle_id}.")
+
+        try:
+            progress = await self.client.services.puzzle.find_progress_by_pretty_id(puzzle_ref)
+            return progress.pretty_id
+        except CgAsyncClientHttpError as e:
+            if e.status_code != 200:
+                raise
+
+        search_results = await self.client.services.search.search(puzzle_ref, type_filter="PUZZLE")
+        exact = next((r for r in search_results if r.name == puzzle_ref), None)
+        if exact is not None:
+            return exact.id
+        lowered = puzzle_ref.lower()
+        case_insensitive = next((r for r in search_results if r.name.lower() == lowered), None)
+        if case_insensitive is not None:
+            return case_insensitive.id
+
+        raise CgPuzzleManagerError(
+                f"Could not resolve {puzzle_ref!r} to a puzzle (tried: numeric ID, pretty ID, "
+                "exact title match, case-insensitive title match)."
+            )
+
     # --- import_ -------------------------------------------------------------------------------
 
     async def import_(
                 self,
-                puzzle_pretty_id: str,
+                puzzle_ref: str,
                 *,
                 language: CgSolutionLanguage = "Python3",
             ) -> CgPuzzleData:
-        """Build this working directory from an existing puzzle: resolves this codingamer's test
-           session for it (`Puzzle/generateSessionFromPuzzlePrettyId`), then
+        """Build this working directory from an existing puzzle: resolves `puzzle_ref` to a real
+           pretty ID (see `_resolve_puzzle_ref`--a numeric ID, a pretty ID, an exact title match,
+           or a case-insensitive title match, tried in that order), then resolves this
+           codingamer's test session for it (`Puzzle/generateSessionFromPuzzlePrettyId`), then
            `TestSession/startTestSession` to fetch its current state.
 
            Writes `data/solution.src` from the codingamer's existing saved answer if there is one
@@ -369,14 +463,16 @@ class CgPuzzleManager:
            these live under `.meta/` rather than `data/`.
 
         Args:
-            puzzle_pretty_id: The puzzle's pretty ID/slug (e.g. "literary-alfabet-soupe").
-            language:         Language for the placeholder starter `solution.src`, if this puzzle
-                               has no existing answer to import instead. Defaults to "Python3".
-                               Ignored if an existing answer is found.
+            puzzle_ref: A general puzzle reference--numeric ID, pretty ID, exact title, or
+                        case-insensitive title (see `_resolve_puzzle_ref`).
+            language:   Language for the placeholder starter `solution.src`, if this puzzle has
+                        no existing answer to import instead. Defaults to "Python3". Ignored if
+                        an existing answer is found.
 
         Raises:
-            CgPuzzleManagerError: if this directory already tracks a puzzle, or if the puzzle
-                                   isn't a supported type (currently, only classic "PUZZLE_INOUT"
+            CgPuzzleManagerError: if this directory already tracks a puzzle, if `puzzle_ref`
+                                   couldn't be resolved to a real puzzle, or if the puzzle isn't a
+                                   supported type (currently, only classic "PUZZLE_INOUT"
                                    puzzles).
         """
         if self.load_identity() is not None:
@@ -385,6 +481,7 @@ class CgPuzzleManager:
                     "been imported."
                 )
 
+        puzzle_pretty_id = await self._resolve_puzzle_ref(puzzle_ref)
         test_session_handle = await self.client.services.puzzle.generate_session_from_puzzle_pretty_id(
                 puzzle_pretty_id)
         session = await self.client.services.test_session.start_test_session(test_session_handle)
@@ -397,7 +494,10 @@ class CgPuzzleManager:
                 )
 
         answer = session.current_question.answer
-        if answer is not None:
+        # `answer` itself can be non-None (an empty placeholder object) even with no solution
+        # ever submitted--`code`/`programming_language_id` are the actual "has a real answer"
+        # signal; see CgTestSessionAnswer's docstring.
+        if answer is not None and answer.code is not None and answer.programming_language_id is not None:
             solution_language = answer.programming_language_id
             solution_code = answer.code
         else:
@@ -514,7 +614,8 @@ class CgPuzzleManager:
         _, server_data, _ = self._require_state()
         session = await self.client.services.test_session.start_test_session(server_data.test_session_handle)
         answer = session.current_question.answer
-        if answer is None:
+        # see the note in import_()--`answer` itself can be non-None with no real answer inside.
+        if answer is None or answer.code is None or answer.programming_language_id is None:
             return None
         return answer.code, answer.programming_language_id
 
@@ -562,9 +663,12 @@ class CgPuzzleManager:
         _refresh_solution_symlink(self.puzzle_dir, solution_language)
         return CgPuzzleDiscardResult(code=code, solution_language=solution_language)
 
-    async def push(self) -> int:
+    async def push(self) -> CgSubmissionReport:
         """Submit the current local `data/solution.src` to the server for credit
-           (`TestSession/submit`), in `data/puzzle-data.json`'s recorded `solution_language`.
+           (`TestSession/submit`), in `data/puzzle-data.json`'s recorded `solution_language`,
+           then fetch and return the resulting results report
+           (`Report/findReportBySubmission`)--score, achievement completion, and per-validator
+           pass/fail.
 
            CAUTION: unlike `codingame_tools.contribution_manager`'s `push()`, this always
            creates a new graded submission--there's no draft/private-staging concept for puzzle
@@ -572,42 +676,73 @@ class CgPuzzleManager:
            unhandled) heavy-validation Cloudflare/524 timeout risk shared with contribution
            submission.
 
+           The report is fetched via `CgAsyncReportServiceHelper.find_report_by_submission_when_ready`
+           rather than the plain `find_report_by_submission`, since calling the latter immediately
+           after submitting can race server-side grading--see `CgSubmissionReport`'s class
+           docstring.
+
         Returns:
-            The new submission's numeric ID (see `Report/findReportBySubmission`).
+            The new submission's `CgSubmissionReport` (its `.submission_id` is the same numeric
+            ID `TestSession/submit` itself returns).
 
         Raises:
             FileNotFoundError: if this working directory has never been imported.
             CgPuzzleManagerError: if `.meta/` is missing (run `repair()` first).
+            TimeoutError: if grading hasn't finished within
+                          `find_report_by_submission_when_ready`'s default timeout.
         """
         _, server_data, puzzle_data = self._require_state()
         code = self.solution_file.read_text(encoding="utf-8")
         request = CgSubmitRequest(code=code, programming_language_id=puzzle_data.solution_language)
-        return await self.client.services.test_session.submit(server_data.test_session_handle, request)
+        submission_id = await self.client.services.test_session.submit(server_data.test_session_handle, request)
+        return await self.client.services.report.helper.find_report_by_submission_when_ready(submission_id)
 
     # --- play ------------------------------------------------------------------------------------
 
-    async def play(self, test_index: int | None = None) -> CgPlayResult:
-        """Run the current local `data/solution.src` against one of the puzzle's test cases
-           (`TestSession/play`--the IDE's "Test"/"Run" button, as opposed to `push()`'s full
-           "Submit").
+    async def play(self, test_indices: list[int] | None = None) -> list[CgPuzzleRemoteTestResult]:
+        """Run the current local `data/solution.src` against one or more of the puzzle's test
+           cases via the server (`TestSession/play`--the IDE's "Test"/"Run" button, as opposed
+           to `push()`'s full "Submit"). Each index is a separate live API call--there is no
+           batch form of `TestSession/play`--run sequentially, in the order given.
 
         Args:
-            test_index: 1-based index selecting which test case to run against (see
-                        `CgTestSessionTestCase.index`). Defaults to `1` (the puzzle's first test
-                        case) if not given.
+            test_indices: 1-based indices to run against (see `CgTestSessionTestCase.index`).
+                          Need not be locally downloaded--the server runs by index alone.
+                          If not given, runs every downloaded test case (`.meta/tests/`, i.e.
+                          every test case this working directory actually knows about--NOT
+                          necessarily every test case the puzzle has).
+
+        Returns:
+            One `CgPuzzleRemoteTestResult` per index, in the order run.
 
         Raises:
-            FileNotFoundError: if this working directory has never been imported.
+            FileNotFoundError: if this working directory has never been imported, or (only when
+                                `test_indices` is not given) has no downloaded test cases at all.
             CgPuzzleManagerError: if `.meta/` is missing (run `repair()` first).
         """
         _, server_data, puzzle_data = self._require_state()
+        downloaded = list_downloaded_test_cases(self.tests_dir)
+        labels_by_index = {tc.index: tc.label for tc in downloaded}
+        if test_indices is None:
+            if not downloaded:
+                raise FileNotFoundError(f"{self.tests_dir} has no downloaded test cases--run `cg puzzle repair` first.")
+            indices = [tc.index for tc in downloaded]
+        else:
+            indices = test_indices
+
         code = self.solution_file.read_text(encoding="utf-8")
-        request = CgPlayRequest(
-                code=code,
-                programming_language_id=puzzle_data.solution_language,
-                multiple_languages=CgMultipleLanguagesTestParams(test_index=test_index if test_index is not None else 1),
-            )
-        return await self.client.services.test_session.play(server_data.test_session_handle, request)
+        results: list[CgPuzzleRemoteTestResult] = []
+        for index in indices:
+            request = CgPlayRequest(
+                    code=code,
+                    programming_language_id=puzzle_data.solution_language,
+                    multiple_languages=CgMultipleLanguagesTestParams(test_index=index),
+                )
+            play_result = await self.client.services.test_session.play(server_data.test_session_handle, request)
+            results.append(CgPuzzleRemoteTestResult(
+                    index=index, label=labels_by_index.get(index, f"test {index}"), result=play_result,
+                ))
+        return results
 
     # --- play_local --------------------------------------------------------------------------
 
@@ -722,3 +857,26 @@ class CgPuzzleManager:
                 local_dirty=local_dirty,
                 progress=progress,
             )
+
+    # --- delete --------------------------------------------------------------------------------
+
+    def delete(self) -> None:
+        """Remove this working directory entirely (`puzzle.json`, `.meta/`, `data/`, and the
+           `solution.<ext>` convenience symlink)--purely local. Unlike `codingame_tools.
+           contribution_manager.CgContributionManager.delete()`, there is no server-side
+           counterpart at all here--a puzzle already exists on the server before you can solve
+           it (see the module docstring), so there is nothing to delete *there*; this only ever
+           removes your own local working directory.
+
+           No confirmation prompt here--that's the CLI's job (`cg puzzle delete`), same as every
+           other method in this class.
+
+        Raises:
+            FileNotFoundError: if this working directory has never been imported.
+        """
+        if self.load_identity() is None:
+            raise FileNotFoundError(
+                    f"{self.identity_file} does not exist--this working directory has never "
+                    "been imported (nothing to delete)."
+                )
+        shutil.rmtree(self.puzzle_dir)

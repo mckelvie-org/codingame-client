@@ -44,13 +44,16 @@ class CgLastActivityContributor(JSONWizardX):
     user_id: int
     """The contributor's numeric ID."""
 
-    pseudo: str
-    """The contributor's display name."""
-
     public_handle: str
     """The contributor's opaque public handle string."""
 
     extra_data: CatchAll = field(default_factory=dict)
+
+    pseudo: str | None = None
+    """The contributor's display name. Not always present--confirmed live (2026-07-31, via `cg
+       puzzle import` resolving a title search to a puzzle with such a contributor): a
+       never-configured/minimal account can omit `pseudo` entirely, same already-documented
+       pattern as `CgCodingamer.pseudo`/`CgCodingamerFollower.pseudo`."""
 
     avatar: int | None = None
     """The binary image ID of the contributor's avatar image."""

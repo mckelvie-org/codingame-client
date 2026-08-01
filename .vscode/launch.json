@@ -6,14 +6,11 @@
       "type": "pickString",
       "description": "CG puzzle test case index to run against (regenerate this list after `cg puzzle import`/`repair` downloads a different puzzle's tests)",
       "options": [
-        { "label": "1: Don Quixote", "value": "1" },
-        { "label": "2: Les Misérables", "value": "2" },
-        { "label": "3: Den grimme ælling", "value": "3" },
-        { "label": "4: Pride and Prejudice", "value": "4" },
-        { "label": "5: Nils Holgerssons underbara resa genom Sverige", "value": "5" },
-        { "label": "6: Die Verwandlung", "value": "6" },
-        { "label": "7: Moby-Dick; or, The Whale", "value": "7" },
-        { "label": "8: Canne al vento", "value": "8" }
+        { "label": "1: Examples", "value": "1" },
+        { "label": "2: Digits", "value": "2" },
+        { "label": "3: Mixed", "value": "3" },
+        { "label": "4: Large Heap", "value": "4" },
+        { "label": "5: Larger Heap", "value": "5" }
       ]
     },
     {

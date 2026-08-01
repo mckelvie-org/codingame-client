@@ -9,14 +9,20 @@ from .cg_settings import (
     SETTINGS_FILE_NAME,
     CgSettings,
     CgSettingsData,
+    overlay_settings_data,
+    relativize_settings_dir,
     resolve_settings,
+    resolve_settings_dir,
     write_settings,
 )
 
 __all__ = [
     "CgSettingsData",
     "CgSettings",
+    "overlay_settings_data",
+    "relativize_settings_dir",
     "resolve_settings",
+    "resolve_settings_dir",
     "write_settings",
     "SETTINGS_FILE_NAME",
 ]

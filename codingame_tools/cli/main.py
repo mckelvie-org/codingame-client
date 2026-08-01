@@ -29,6 +29,7 @@ from ..common.typedefs import Self, override
 from ..config import (
     CONFIG_FILE_NAME,
     CONFIG_SUBDIR_NAME,
+    DATA_SUBDIR_NAME,
     PROJECT_CONFIG_MARKER_DIR_NAME,
     CgConfig,
     CgConfigData,
@@ -63,9 +64,10 @@ from ..puzzle_manager import (
     CgPuzzleManagerError,
     CgPuzzleStatus,
     find_puzzle_dir,
+    parse_statement_html,
     resolve_puzzle_dir,
 )
-from ..settings import CgSettings, resolve_settings
+from ..settings import CgSettings, relativize_settings_dir, resolve_settings
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +108,7 @@ _SYNC_STATUS_TEXT: dict[CgContributionSyncStatus, str] = {
 }
 """Human-readable text for `cg contribution status`'s `CgContributionSyncStatus` display."""
 
-def default_config_template(default_data_dir: Path) -> str:
+def default_config_template(default_data_dir: str) -> str:
     """Build the content for a freshly-`init`'d config.yaml.
 
        Hand-written (not generated via CgConfigData.to_yaml()) so it can carry comments--plain
@@ -115,11 +117,16 @@ def default_config_template(default_data_dir: Path) -> str:
        CgConfigData() (all defaults); update both together if a field is added, renamed, or its
        default changes.
 
-       `default_data_dir` is the actual resolved default for the specific config file being
-       created (project-local sibling "data" dir, or the global per-user data location for
-       --global)--shown as the commented-out example value instead of a static description,
-       since the two cases genuinely differ and a fixed comment describing one would be
-       misleading for the other.
+       `default_data_dir` is the commented-out example value to show for `dataDir`, as a string
+       (not necessarily an absolute path)--the caller decides what's appropriate for the specific
+       config file being created:
+         - project-local: the literal relative path `"../data"` (`DATA_SUBDIR_NAME`), NOT an
+           absolute path resolved for one specific `--at` location--so the freshly-created
+           config.yaml keeps working with its default data directory even if the whole project
+           gets renamed or moved elsewhere. An absolute path here would silently break that.
+         - `--global`: the actual resolved absolute data directory, since there's no comparable
+           sibling relationship between the global config and data directories to express as a
+           relative path (see `default_global_data_dir`'s docstring).
     """
     return f"""\
 # codingame-tools configuration file.
@@ -132,6 +139,15 @@ def default_config_template(default_data_dir: Path) -> str:
 # to the directory containing this file; an absolute path (or a "~"-prefixed path) is used
 # as-is. Currently defaults to (uncomment to pin explicitly):
 #dataDir: {default_data_dir}
+
+# Settings, identical in shape to the app-writable settings.json (see `cg settings dump`), but
+# hand-edited here rather than set via `cg settings set`. If both a global (per-user) and a
+# project-local config.yaml exist, each field below is resolved independently--base to most
+# refined: the global file's settings, then the project file's own, then settings.json.
+#settings:
+#  defaultProfile: my-profile-name
+#  contributionDir: /path/to/my/contribution
+#  puzzleDir: /path/to/my/puzzle
 """
 
 class CgCli(CliBase):
@@ -2575,32 +2591,37 @@ class CgCli(CliBase):
                             "current directory or \"./puzzle\" if it contains puzzle.json.")
         return None  # No handler for the parent command; subcommands will be handled by their own handlers.
 
-    @cli_command("Build a fresh puzzle working directory: resolve this codingamer's test session "
-                 "for the puzzle (Puzzle/generateSessionFromPuzzlePrettyId), then fetch its "
-                 "current state (TestSession/startTestSession). Imports the codingamer's existing "
-                 "saved answer if there is one, in whatever language it was written in; otherwise "
-                 "seeds a placeholder solution.src in --language. Unlike `cg contribution import`, "
-                 "uses the normal --puzzle-dir resolution (with a cwd/./puzzle fallback) rather "
-                 "than requiring an explicit new-directory argument--puzzle working directories "
-                 "are expected to be reused across different puzzles over time, one at a time.")
+    @cli_command("Build a fresh puzzle working directory: resolve PUZZLE to a real puzzle (in "
+                 "order of preference: a numeric puzzle ID; an exact pretty ID, e.g. "
+                 "'literary-alfabet-soupe'; an exact-matching title; a case-insensitive-matching "
+                 "title), then resolve this codingamer's test session for it "
+                 "(Puzzle/generateSessionFromPuzzlePrettyId), then fetch its current state "
+                 "(TestSession/startTestSession). Imports the codingamer's existing saved answer "
+                 "if there is one, in whatever language it was written in; otherwise seeds a "
+                 "placeholder solution.src in --language. Unlike `cg contribution import`, uses "
+                 "the normal --puzzle-dir resolution (with a cwd/./puzzle fallback) rather than "
+                 "requiring an explicit new-directory argument--puzzle working directories are "
+                 "expected to be reused across different puzzles over time, one at a time.")
     async def cmd_puzzle__import(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
-            puzzle_pretty_id: str = self.args.puzzle_pretty_id
+            puzzle_ref: str = self.args.puzzle_ref
             language: str = self.args.language
             puzzle_dir: Path | None = self.args.puzzle_dir
             resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings(), allow_default=True)
             client = await self.get_client()
             manager = CgPuzzleManager(resolved_dir, client)
-            puzzle_data = await manager.import_(puzzle_pretty_id, language=language)
+            puzzle_data = await manager.import_(puzzle_ref, language=language)
             server_data = manager.load_server_data()
             assert server_data is not None
-            self.eprint(f"Imported puzzle {puzzle_pretty_id!r} into {resolved_dir}")
+            self.eprint(f"Imported puzzle {server_data.puzzle_pretty_id!r} into {resolved_dir}")
             self.eprint(f"  title: {server_data.title!r}")
             self.eprint(f"  solutionLanguage: {puzzle_data.solution_language!r}")
         p = cmd.get_parser()
-        p.add_argument("puzzle_pretty_id", type=str, metavar="PUZZLE-PRETTY-ID",
-                       help="The puzzle's pretty ID: displayed title, lowercased with spaces replaced by "
-                            "hyphens, e.g. 'literary-alfabet-soupe'.")
+        p.add_argument("puzzle_ref", type=str, metavar="PUZZLE",
+                       help="A puzzle reference: numeric puzzle ID, pretty ID (displayed title, "
+                            "lowercased with spaces replaced by hyphens, e.g. "
+                            "'literary-alfabet-soupe'), exact title, or case-insensitive title--"
+                            "tried in that order until one resolves to a real puzzle.")
         p.add_argument("--language", "-l", type=str, default="Python3", metavar="LANGUAGE",
                        help="Language for the placeholder solution.src, if this puzzle has never been "
                             "attempted before. Defaults to 'Python3'. Ignored if an existing answer is found.")
@@ -2631,34 +2652,69 @@ class CgCli(CliBase):
             resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
             client = await self.get_client(require_credentials=True)
             manager = CgPuzzleManager(resolved_dir, client)
-            submission_id = await manager.push()
-            self.eprint(f"Pushed {resolved_dir} -> submission {submission_id} (see `cg api report find-report-by-submission`)")
+            report = await manager.push()
+            if self.args.json:
+                print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+                return
+            # push() only returns once find_report_by_submission_when_ready() confirms grading
+            # is done, so every field below is guaranteed populated--see CgSubmissionReport.
+            assert report.is_ready()
+            assert report.score is not None
+            assert report.achievements_completed is not None
+            assert report.validators is not None
+            self.eprint(f"Submission {report.submission_id}: score {report.score:.1f}/100 "
+                        f"(best {report.best_score:.1f}/100)")
+            self.eprint(f"Achievements completed: {'yes' if report.achievements_completed else 'no'}")
+            for validator in report.validators:
+                status = "PASS" if validator.success else "FAIL"
+                self.eprint(f"  [{status}] {validator.name} (difficulty {validator.difficulty})")
         return handler
 
-    @cli_command("Run the current local solution.src against one of the puzzle's test cases "
-                 "(TestSession/play--the IDE's \"Test\" button, not a real submission).")
+    @cli_command("Run the current local solution.src against one or more of the puzzle's test "
+                 "cases (TestSession/play--the IDE's \"Test\" button, not a real submission). "
+                 "With no TEST-INDEX arguments, runs every downloaded test case (.meta/tests/); "
+                 "give one or more 1-based indices to run just those. Exits 1 if any run "
+                 "errored or didn't match the expected output.")
     async def cmd_puzzle__play(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             puzzle_dir: Path | None = self.args.puzzle_dir
-            test_index: int | None = self.args.test_index
+            test_indices: list[int] = self.args.test_indices
             resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
             client = await self.get_client(require_credentials=True)
             manager = CgPuzzleManager(resolved_dir, client)
-            result = await manager.play(test_index)
-            if result.error is not None:
-                self.eprint(f"ERROR: {result.error.message}")
-            self.eprint(f"success: {result.comparison.success}")
-            if result.comparison.expected is not None:
-                self.eprint(f"expected: {result.comparison.expected!r}")
-            if result.comparison.found is not None:
-                self.eprint(f"found: {result.comparison.found!r}")
-            if result.output:
-                self.eprint("--- output ---")
-                print(result.output)
+            items = await manager.play(test_indices or None)
+            multiple = len(items) > 1
+            any_failed = False
+            stderr_console = Console(stderr=True, highlight=False)
+            for i, item in enumerate(items):
+                if multiple:
+                    stderr_console.print(f"--- test {item.index} ({item.label}) ---", style="bold blue", markup=False)
+                result = item.result
+                if result.error is not None:
+                    self.eprint(f"ERROR: {result.error.message}")
+                    any_failed = True
+                elif not result.comparison.success:
+                    any_failed = True
+                stderr_console.print(f"success: {result.comparison.success}", style="bold blue", markup=False)
+                if result.comparison.expected is not None:
+                    self.eprint(f"expected: {result.comparison.expected!r}")
+                if result.comparison.found is not None:
+                    self.eprint(f"found: {result.comparison.found!r}")
+                if result.output:
+                    stderr_console.print("--- output ---", style="bold blue", markup=False)
+                    print(result.output)
+                if multiple and i != len(items) - 1:
+                    print()
+            if multiple:
+                passed = sum(1 for item in items if item.result.error is None and item.result.comparison.success)
+                stderr_console.print(f"{passed}/{len(items)} passed", style="bold blue", markup=False)
+            if any_failed:
+                raise CliExit(1)
         p = cmd.get_parser()
-        p.add_argument("test_index", type=int, nargs="?", default=None, metavar="TEST-INDEX",
-                       help="1-based test case index to run against (see CgTestSessionTestCase.index). "
-                            "Defaults to 1 (the puzzle's first test case).")
+        p.add_argument("test_indices", type=int, nargs="*", metavar="TEST-INDEX",
+                       help="1-based test case index/indices to run against (see "
+                            "CgTestSessionTestCase.index). With none given, runs every "
+                            "downloaded test case (.meta/tests/).")
         return handler
 
     @cli_command("Run the current local solution.src against the downloaded .meta/tests/ test "
@@ -2693,6 +2749,41 @@ class CgCli(CliBase):
         p.add_argument("test_index", type=int, nargs="?", default=None, metavar="TEST-INDEX",
                        help="Only run the downloaded test case with this index (see "
                             ".meta/tests/<index>/). Defaults to running every downloaded test case.")
+        return handler
+
+    @cli_command("Display the puzzle's problem statement, rendered from the cached "
+                 ".meta/statement.html (no network access--run `cg puzzle import`/`repair` "
+                 "first if missing). Section headers and the Example's input/output text are "
+                 "color-highlighted when writing to a real terminal. With --json (top-level "
+                 "option), prints the parsed [{kind, text}, ...] blocks instead.")
+    async def cmd_puzzle__description(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            puzzle_dir: Path | None = self.args.puzzle_dir
+            use_json: bool = self.args.json
+            resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
+            manager = CgPuzzleManager(resolved_dir, cast(CgAsyncClient, None))
+            html = manager.load_statement_html()
+            if html is None:
+                raise CliError(
+                        f"{manager.statement_file} does not exist--run `cg puzzle import` or "
+                        "`cg puzzle repair` first."
+                    )
+            blocks = parse_statement_html(html)
+
+            if use_json:
+                print(json.dumps([{"kind": b.kind, "text": b.text} for b in blocks], indent=2))
+                return
+
+            console = self.get_console()
+            for i, block in enumerate(blocks):
+                if block.kind == "header":
+                    console.print(block.text, style="bold blue", markup=False)
+                elif block.kind in ("example_input", "example_output"):
+                    console.print(block.text, style="yellow", markup=False)
+                else:
+                    console.print(block.text, markup=False)
+                if i != len(blocks) - 1:
+                    console.print()
         return handler
 
     @cli_command("Show a unified diff between the local solution.src and the server's current "
@@ -2813,6 +2904,43 @@ class CgCli(CliBase):
             print(f"Puzzle directory: {found}")
         return handler
 
+    @cli_command("Delete this puzzle working directory. Purely local--there is no server-side "
+                 "counterpart to delete (a puzzle already exists on the server before you can "
+                 "solve it, and isn't yours to remove); this only ever removes your own local "
+                 "files. Destructive--prompts for confirmation unless --force is given; requires "
+                 "--force outright if stdin/stdout aren't a terminal.")
+    async def cmd_puzzle__delete(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            puzzle_dir: Path | None = self.args.puzzle_dir
+            force: bool = self.args.force
+            resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
+            manager = CgPuzzleManager(resolved_dir, cast(CgAsyncClient, None))
+            identity = manager.load_identity()
+            if identity is None:
+                raise CliError(f"{resolved_dir} has never been imported--nothing to delete.")
+            server_data = manager.load_server_data()
+            title = server_data.title if server_data is not None else None
+            if not force:
+                if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                    raise CliError(
+                            "Refusing to delete without confirmation: stdin/stdout aren't a "
+                            "terminal. Pass --force to proceed non-interactively."
+                        )
+                print("About to PERMANENTLY DELETE this local puzzle working directory (the "
+                      "server-side puzzle itself is untouched--this is local-only):")
+                print(f"  directory: {resolved_dir}")
+                print(f"  puzzle id: {identity.puzzle_id}" + (f" (title {title!r})" if title else ""))
+                reply = input("Type DELETE (all caps) to confirm, or anything else to cancel: ")
+                if reply != "DELETE":
+                    raise CliError("Confirmation did not match--aborted, nothing was deleted.")
+            manager.delete()
+            self.eprint(f"{resolved_dir}: local puzzle working directory removed.")
+        p = cmd.get_parser()
+        p.add_argument("--force", "-f", default=False, action="store_true",
+                       help="Skip the interactive confirmation prompt. Required if stdin/stdout "
+                            "aren't a terminal.")
+        return handler
+
     @cli_command("Configuration commands.")
     async def cmd_config(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         return None  # No handler for the parent command; subcommands will be handled by their own handlers.
@@ -2838,12 +2966,16 @@ class CgCli(CliBase):
             if target.is_file() and not force:
                 raise CliError(f"Config file already exists: {target}. Use --force to overwrite.")
             target.parent.mkdir(parents=True, exist_ok=True)
-            # Computed before writing, from an empty CgConfigData, so the template can show the
-            # actual default for this specific file (project-local sibling dir, or the global
-            # per-user location for --global)--not a static description that would be wrong for
-            # one of the two cases.
-            default_data_dir = CgConfig(config_file=target.resolve(), raw_data=CgConfigData()).data_dir
-            target.write_text(default_config_template(default_data_dir))
+            # --global: show the actual resolved absolute data dir (no sibling relationship to
+            # express relatively). Project-local: always the literal "../data"--not an absolute
+            # path resolved for this specific --at location--so the config keeps working with its
+            # default data directory even if the project is later renamed/moved elsewhere.
+            if use_global:
+                default_data_dir_example = str(
+                        CgConfig(config_file=target.resolve(), raw_data=CgConfigData()).data_dir)
+            else:
+                default_data_dir_example = f"../{DATA_SUBDIR_NAME}"
+            target.write_text(default_config_template(default_data_dir_example))
             raw_data = CgConfigData.load_yaml(target)
             resolved = CgConfig(config_file=target.resolve(), raw_data=raw_data)
             resolved.data_dir.mkdir(parents=True, exist_ok=True)
@@ -2921,14 +3053,18 @@ class CgCli(CliBase):
         async def handler() -> None:
             contribution_dir: Path = self.args.contribution_dir
             settings = await self.get_settings()
-            settings.raw_data.contribution_dir = str(contribution_dir)
+            value = relativize_settings_dir(contribution_dir, settings.settings_file.parent)
+            settings.raw_data.contribution_dir = value
             settings.save()
-            self.eprint(f"contributionDir set to {str(contribution_dir)!r} in {settings.settings_file}")
+            self.eprint(f"contributionDir set to {value!r} in {settings.settings_file}")
         p = cmd.get_parser()
         p.add_argument("contribution_dir", type=Path, metavar="DIR",
                        help="Directory to use as the default contribution working directory--used "
                             "whenever --contribution-dir isn't given and CG_CONTRIBUTION_DIR isn't "
-                            "set (see `cg contribution import`/`cg contribution push`).")
+                            "set (see `cg contribution import`/`cg contribution push`). If given as "
+                            "a relative path, it's resolved against the current directory right now "
+                            "and stored relative to settings.json's own directory--so the effective "
+                            "directory doesn't move around depending on where `cg` is later run from.")
         return handler
 
     @cli_command("Set the default puzzle working directory.")
@@ -2936,14 +3072,16 @@ class CgCli(CliBase):
         async def handler() -> None:
             puzzle_dir: Path = self.args.puzzle_dir
             settings = await self.get_settings()
-            settings.raw_data.puzzle_dir = str(puzzle_dir)
+            value = relativize_settings_dir(puzzle_dir, settings.settings_file.parent)
+            settings.raw_data.puzzle_dir = value
             settings.save()
-            self.eprint(f"puzzleDir set to {str(puzzle_dir)!r} in {settings.settings_file}")
+            self.eprint(f"puzzleDir set to {value!r} in {settings.settings_file}")
         p = cmd.get_parser()
         p.add_argument("puzzle_dir", type=Path, metavar="DIR",
                        help="Directory to use as the default puzzle working directory--used "
                             "whenever --puzzle-dir isn't given and CG_PUZZLE_DIR isn't set (see "
-                            "`cg puzzle import`/`cg puzzle push`).")
+                            "`cg puzzle import`/`cg puzzle push`). Same relative-path handling as "
+                            "`cg settings set contribution-dir`--see its help for details.")
         return handler
 
     @cli_command("Delete a settings.json value.")
@@ -2958,7 +3096,7 @@ class CgCli(CliBase):
             settings.save()
             self.eprint(
                     f"defaultProfile unset in {settings.settings_file} "
-                    f"(now falls back to config.yaml's defaultProfile, or \"default\")."
+                    f"(now falls back to config.yaml's settings.defaultProfile, or \"default\")."
                 )
         return handler
 
@@ -2968,7 +3106,10 @@ class CgCli(CliBase):
             settings = await self.get_settings()
             settings.raw_data.contribution_dir = None
             settings.save()
-            self.eprint(f"contributionDir unset in {settings.settings_file}.")
+            self.eprint(
+                    f"contributionDir unset in {settings.settings_file} "
+                    f"(now falls back to config.yaml's settings.contributionDir, if any)."
+                )
         return handler
 
     @cli_command("Delete (unset) the default puzzle working directory override.")
@@ -2977,7 +3118,10 @@ class CgCli(CliBase):
             settings = await self.get_settings()
             settings.raw_data.puzzle_dir = None
             settings.save()
-            self.eprint(f"puzzleDir unset in {settings.settings_file}.")
+            self.eprint(
+                    f"puzzleDir unset in {settings.settings_file} "
+                    f"(now falls back to config.yaml's settings.puzzleDir, if any)."
+                )
         return handler
 
     @cli_command("Codingame client command-line interface.")

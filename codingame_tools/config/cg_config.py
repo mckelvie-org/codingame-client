@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..common.dataclass_wizard_x import CatchAll, JSONWizardX
+from ..settings import CgSettingsData
 
 __all__ = [
     "CgConfigData",
@@ -41,10 +42,27 @@ class CgConfigData(JSONWizardX):
        relative to the directory containing this config file; an absolute path (or a `~`-prefixed
        path) is used as-is. If not set, defaults to a sibling "data" directory next to the
        directory containing this config file (e.g. `.cg/data`, alongside `.cg/config`). See
-       `CgConfig.data_dir` for the resolved value--this raw field is usually not what callers want."""
+       `CgConfig.data_dir` for the resolved value--this raw field is usually not what callers
+       want. Unlike `settings` below, this field is never merged across config files--it governs
+       where *this* config file's own data directory (and thus its settings.json) lives, so only
+       the single config file that discovery actually resolved to (see
+       `codingame_tools.config.resolver.find_config_file`) is consulted for it."""
 
-    default_profile: str | None = None
-    """Override for the default codingame-tools credential profile name to use. If not set,
-       defaults to "default". See `CgConfig.default_profile` for the resolved value, and
-       `CgSettingsData.default_profile` for the app-writable settings.json override that takes
-       precedence over this one."""
+    settings: CgSettingsData = field(default_factory=CgSettingsData)
+    """Settings overridable from this config file--identical shape to settings.json's own
+       `CgSettingsData` (`defaultProfile`/`contributionDir`/`puzzleDir`). Unlike settings.json,
+       this is hand-edited, not app-written--there is no `cg config set`, only `cg settings set`
+       (which only ever touches settings.json, never a config file).
+
+       Resolution order, base to most refined: the global (per-user) config file's `settings`,
+       then--if a *different*, project-local config file resolved--that file's own `settings`,
+       then settings.json. Each tier overrides the previous one field-by-field (not all-or-
+       nothing)--see `CgConfig.settings` for where the first two tiers get combined, and
+       `codingame_tools.settings.CgSettings` for where settings.json gets layered on top as the
+       final tier.
+
+       `contributionDir`/`puzzleDir`, if given here as relative paths, are resolved against the
+       resolved `CgConfig.data_dir` (where settings.json itself lives)--NOT this config file's
+       own directory, and NOT the current working directory--regardless of which tier (global
+       config, project config, or settings.json) actually set them. See
+       `codingame_tools.settings.resolve_settings_dir`."""

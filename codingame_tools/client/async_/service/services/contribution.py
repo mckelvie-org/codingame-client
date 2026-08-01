@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, cast
@@ -59,6 +60,7 @@ class CgAsyncContributionServiceHelper(CgAsyncServiceHelper["CgAsyncContribution
                 prev_version: int,
                 deadline: float | None,
                 submitted_data: CgContributionData,
+                on_poll: Callable[[CgContribution], Awaitable[None]] | None,
             ) -> CgContribution:
         """Poll `find_contribution` every `_POLL_INTERVAL_SECONDS` until its version increments
            past `prev_version` (indicating the server committed the update), or `deadline`
@@ -85,6 +87,8 @@ class CgAsyncContributionServiceHelper(CgAsyncServiceHelper["CgAsyncContribution
                         "update_contribution: committed data for contribution %r does not "
                         "exactly match the submitted data after 524 recovery", contribution_id)
                 return result
+            if on_poll is not None:
+                await on_poll(result)
 
     async def update_contribution(
                 self,
@@ -98,6 +102,7 @@ class CgAsyncContributionServiceHelper(CgAsyncServiceHelper["CgAsyncContribution
                 *,
                 strip_test_final_eols: bool = True,
                 max_wait_seconds: float = 0.0,
+                on_poll: Callable[[CgContribution], Awaitable[None]] | None = None,
             ) -> CgContribution:
         """Submit a new version of a contribution's content, adding retry/polling and data
            normalization on top of the plain `CgAsyncContributionService.update_contribution`.
@@ -121,6 +126,15 @@ class CgAsyncContributionServiceHelper(CgAsyncServiceHelper["CgAsyncContribution
             max_wait_seconds:
                 How long to keep polling after a 524 before giving up, in seconds. 0 (the
                 default) means wait indefinitely. Ignored entirely if no 524 occurs.
+            on_poll: If given, awaited with each `CgContribution` observed while polling after a
+                     524 (i.e. `find_contribution` results still at `prev_version`, before the
+                     final, committed one)--unlike `CgAsyncReportServiceHelper.
+                     find_report_by_submission_when_ready`'s `on_poll`, this one always carries
+                     real (if stale) data. Never called at all if no 524 occurs. Doubles as a
+                     cancellation hook: raise from it (or from an `await` inside it) to abort the
+                     wait immediately, instead of only being able to give up via
+                     `max_wait_seconds`. Any exception it raises propagates out of this method
+                     uncaught.
 
         Returns:
             The updated CgContribution.
@@ -154,7 +168,8 @@ class CgAsyncContributionServiceHelper(CgAsyncServiceHelper["CgAsyncContribution
             contribution_id, "infinite" if max_wait_seconds <= 0 else max_wait_seconds,
         )
         deadline = None if max_wait_seconds <= 0 else time.monotonic() + max_wait_seconds
-        return await self._poll_until_committed(contribution_id, prev_version, deadline, contribution_data)
+        return await self._poll_until_committed(
+                contribution_id, prev_version, deadline, contribution_data, on_poll)
 
     async def create_contribution(
                 self,

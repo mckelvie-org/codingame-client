@@ -2,6 +2,51 @@
 
 ## {{UNRELEASED}}
 
+- Fix `cg config init`'s freshly-created project-local `config.yaml` showing an absolute
+  `#dataDir:` example (resolved for the specific `--at` directory at creation time)--if the
+  project directory is later renamed or moved, that absolute path would silently stop matching
+  the real default. Now shows the literal relative `"../data"` instead, which keeps meaning "the
+  sibling data dir next to wherever this config file actually lives" regardless. `--global` is
+  unaffected--still shows the actual resolved absolute path, since there's no comparable sibling
+  relationship to express relatively for the global (per-user) location. `default_config_template()`
+  now takes the example value as a plain string rather than a `Path`, so the caller can pass
+  either form.
+- Fix `cg config dump` (and `default_profile`/`contribution_dir`/`puzzle_dir` resolution
+  generally) silently masking the global (per-user) `config.yaml` whenever a project-local one
+  existed, even if the project file never mentioned the field in question--previously
+  `resolve_config()`'s single-file "first found wins" discovery meant a project config missing
+  `defaultProfile` entirely still shadowed the global file's `defaultProfile`, discarding it. Fix:
+  `CgConfigData` gains a `settings` sub-object (`CgConfigData.settings`), identical in shape to
+  settings.json's own `CgSettingsData` (`defaultProfile`/`contributionDir`/`puzzleDir`), resolved
+  field-by-field, base to most refined: the global config file's `settings`, then a project
+  config file's own `settings` (if a different one resolved), then settings.json itself. Config
+  files remain hand-edited only (no `cg config set`--only `cg settings set` exists, and only ever
+  touches settings.json). `CgConfigData`'s old top-level `default_profile` field is removed
+  (moved into `settings.defaultProfile`)--an existing config.yaml using the old top-level key
+  needs a one-time manual edit to nest it under `settings:` (`cg config dump`/`cg config where`
+  won't do this automatically; the field just silently stops being read otherwise, landing in
+  `extra_data` instead). `CgConfig` gains `.settings`/`.contribution_dir`/`.puzzle_dir` alongside
+  the existing `.default_profile`. `cg config dump`'s output nests `defaultProfile`/
+  `contributionDir`/`puzzleDir` under a `"settings"` key (mirroring `CgConfigData.settings`'s own
+  shape) rather than flattening them onto the config object directly--only `dataDir` (which isn't
+  part of the merge--see below) stays top-level alongside `configFile`/`rawConfig`.
+  `contribution_dir`/`puzzle_dir` previously had no config.yaml-level fallback at all (settings.json
+  or nothing)--they now participate in the same 3-tier chain as
+  `default_profile`.
+- Fix `contribution_dir`/`puzzle_dir` (settings.json and config.yaml's `settings` alike) resolving
+  a relative value against the *current working directory at read time* instead of a fixed base--
+  meaning the effective directory silently moved around depending on where `cg` happened to be run
+  from. `cg settings set contribution-dir`/`puzzle-dir` now converts whatever path was typed
+  (resolved against cwd *at set time*, the natural way to type a path at the CLI) into one stored
+  relative to settings.json's own directory (`CgSettings.settings_file.parent`, i.e. `data_dir`);
+  absolute input is stored as-is. Reading back (`CgSettings.contribution_dir`/`puzzle_dir`,
+  `CgConfig.contribution_dir`/`puzzle_dir`) now resolves a relative value against that same
+  `data_dir`, never cwd. New `codingame_tools.settings.resolve_settings_dir`/
+  `relativize_settings_dir` implement this pair. The real project `.cg/data/settings.json` here
+  had old-style values (`"contribution"`/`"puzzle"`, implicitly relative to the project root) that
+  would have started resolving to `.cg/data/contribution`/`.cg/data/puzzle` under the new rule--
+  re-set via `cg settings set contribution-dir ./contribution`/`puzzle-dir ./puzzle` to fix (now
+  stored as `"../../contribution"`/`"../../puzzle"`, correctly relative to `.cg/data`).
 - Add `cg contribution status`: a human-friendly summary of a contribution's submission,
   review/approval, and server-sync status (`--refresh` to fetch fresh first, top-level `--json`
   for machine-readable output).
@@ -49,3 +94,55 @@
   documented "duplicate"/"sum of categories" relationships between `codingamer_points`,
   `codingame_points_total`, and the seven `codingame_points_*` category fields are disproven by
   live data (e.g. category fields summed to 43469 against a `codingame_points_total` of 2800).
+- Add `cg puzzle delete`: removes the local puzzle working directory only--there is no
+  server-side counterpart, since a puzzle already exists on the server before you can solve it.
+  Destructive--prompts for confirmation unless `--force` is given; requires `--force` outright
+  if stdin/stdout aren't a terminal (same pattern as `cg contribution delete`).
+- `cg puzzle import` now accepts a general puzzle reference instead of requiring an exact pretty
+  ID--tries, in order: a numeric puzzle ID, an exact pretty ID, an exact-matching title, a
+  case-insensitive-matching title (the latter two via `Search/search`). `CgPuzzleManager.
+  import_()`'s parameter is renamed `puzzle_ref` to match.
+- Fix `cg puzzle import` crashing on puzzles whose TestSession has no recorded submission yet
+  (found live via the new title-search path): `CgLastActivityContributor.pseudo`,
+  `CgTestSessionQuestion.last_submission_id`, `CgTestSessionQuestionSummary.score` are now all
+  correctly Optional (each confirmed live to be entirely absent, not just `null`, in that case),
+  and `CgTestSessionAnswer`'s `code`/`programming_language_id` are Optional too--`answer` itself
+  can be present as an empty placeholder object rather than `null`/absent when nothing's been
+  submitted, which `puzzle_manager` now checks for correctly instead of mistaking it for a real
+  saved answer.
+- Add `cg puzzle description`: renders the cached `.meta/statement.html` (no network access) as
+  readable text--section headers and the Example's input/output test data are color-highlighted
+  when writing to a real terminal (auto-detected, via `rich`), plain elsewhere (piped/redirected
+  output, or `--json`, which emits the parsed `[{kind, text}, ...]` blocks instead). New
+  `codingame_tools.puzzle_manager.statement_render` module (`parse_statement_html`,
+  `CgStatementBlock`)--a small purpose-built parser for CodinGame's specific statement HTML
+  shape (confirmed live), not a general HTML-to-text converter.
+- `cg puzzle play` now runs every downloaded test case (`.meta/tests/`) by default instead of
+  just test 1, or one or more explicit 1-based test indices given as positional arguments (e.g.
+  `cg puzzle play 2 4`--need not be locally downloaded, the server runs by index alone). Exits 1
+  if any run errored or didn't match the expected output. `CgPuzzleManager.play()`'s signature
+  changed to match: `test_indices: list[int] | None = None`, returning
+  `list[CgPuzzleRemoteTestResult]` (index/label/result) instead of a single `CgPlayResult`.
+- `cg puzzle push` now calls `Report/findReportBySubmission` right after submitting and prints a
+  summary (score/best score, achievements-completed, per-validator pass/fail), instead of just
+  the bare new submission ID. `CgPuzzleManager.push()`'s return type changed to match:
+  `CgSubmissionReport` (also now re-exported from `codingame_tools.puzzle_manager`) instead of
+  `int`--its `.submission_id` is the same numeric ID `TestSession/submit` itself returns. `--json`
+  prints the raw report.
+- Fix `cg puzzle push` crashing on a fresh submission: confirmed live that
+  `findReportBySubmission` called immediately after `TestSession/submit` can race server-side
+  grading--every `CgSubmissionReport` field but `best_score`/`validator_shareable` was entirely
+  absent in one observed case, not just `null`. Those fields are now all Optional, with a new
+  `CgSubmissionReport.is_ready()` and `CgAsyncReportServiceHelper.find_report_by_submission_when_ready`
+  (`client.services.report.helper...`)--polls every 3s, up to 60s by default--that `push()` now
+  uses instead of the plain `find_report_by_submission`. `find_report_by_submission_when_ready`
+  also takes an optional async `on_poll` callback, awaited with each not-yet-ready report--
+  currently no real progress info to report (the API gives no partial/percentage signal we've
+  found), but it doubles as a cancellation hook: raise from it (or from an `await` inside it) to
+  abort the wait before `max_wait_seconds`.
+- `CgAsyncContributionServiceHelper.update_contribution`'s existing HTTP-524 retry/polling (for
+  contributions whose test-suite re-validation is slow enough that Cloudflare's edge disconnects
+  the request) gets the same `on_poll` pattern: an optional async callback awaited with each
+  still-stale `CgContribution` observed while polling `find_contribution` after a 524--unlike the
+  Report helper's, this one always carries real (if stale) data. Never called if no 524 occurs;
+  same cancellation-hook behavior (raise to abort early).

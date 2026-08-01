@@ -18,6 +18,7 @@ from json_data_types import JsonDict
 from platformdirs.api import PlatformDirsABC
 
 from ..common.typedefs import DEFAULT_PROFILE_NAME
+from ..settings import CgSettingsData, overlay_settings_data, resolve_settings_dir
 from .cg_config import CgConfigData
 
 __all__ = [
@@ -219,7 +220,14 @@ class CgConfig:
     """A resolved, functional configuration: pairs the raw `CgConfigData` loaded from a
        config.yaml file with that file's own location, and resolves defaults (e.g. `data_dir`)
        reliably--this is the class callers should normally use, rather than `CgConfigData`
-       directly."""
+       directly.
+
+       `data_dir` (and thus `config_file`/`config_dir`) reflect only the single config file that
+       `find_config_file()` actually resolved to--never merged across files, since `data_dir`
+       determines where *this* config's own settings.json lives. `settings` (and the
+       `default_profile`/`contribution_dir`/`puzzle_dir` properties built on it) is different:
+       it's overlaid with the global (per-user) config file's own `settings` whenever a separate
+       project-local config file is the one that resolved--see `settings` below."""
 
     config_file: Path
     """The resolved, absolute path to the config.yaml file that was loaded."""
@@ -256,12 +264,51 @@ class CgConfig:
         return (self.config_dir / ".." / DATA_SUBDIR_NAME).resolve()
 
     @property
+    def settings(self) -> CgSettingsData:
+        """This config file's own `settings` (see `CgConfigData.settings`), overlaid on the
+           global (per-user) config file's `settings`--i.e. the global file's settings.json-
+           shaped fields, then this file's own, each overriding the previous field-by-field.
+
+           If `config_file` *is* the global fallback location (no separate project config
+           resolved), or the global config file doesn't exist, this is just `raw_data.settings`
+           unchanged--there's nothing else to overlay it onto. Re-reads the global config file
+           from disk on every access (uncached)--config files are tiny and this isn't a hot
+           path, so simplicity wins over caching here.
+
+           This is NOT the final resolved value--`codingame_tools.settings.CgSettings` layers
+           settings.json on top of this as the most-refined tier. See `default_profile`/
+           `contribution_dir`/`puzzle_dir` below for this config-level tier's own resolved
+           values (i.e. as if settings.json didn't exist)."""
+        global_file = default_global_config_file()
+        if self.config_file == global_file or not global_file.is_file():
+            return self.raw_data.settings
+        global_settings = CgConfigData.load_yaml(global_file).settings
+        return overlay_settings_data(global_settings, self.raw_data.settings)
+
+    @property
     def default_profile(self) -> str:
-        """The default codingame-tools credential profile name to use, falling back to
-           `DEFAULT_PROFILE_NAME` ("default") if not overridden in config.yaml. See
-           `CgSettings.default_profile` for the app-writable settings.json override that takes
-           precedence over this one."""
-        return self.raw_data.default_profile if self.raw_data.default_profile is not None else DEFAULT_PROFILE_NAME
+        """The default codingame-tools credential profile name to use (see `settings` above for
+           the global/project config merge), falling back to `DEFAULT_PROFILE_NAME` ("default")
+           if neither sets it. See `CgSettings.default_profile` for the app-writable
+           settings.json override that takes precedence over this one."""
+        value = self.settings.default_profile
+        return value if value is not None else DEFAULT_PROFILE_NAME
+
+    @property
+    def contribution_dir(self) -> Path | None:
+        """The configured default contribution working directory (see `settings` above for the
+           global/project config merge), resolved to an absolute path--a relative value is
+           resolved against `data_dir` (where this config's own settings.json lives), NOT the
+           current working directory--or `None` if neither config file sets it. See
+           `CgSettings.contribution_dir` for the settings.json override that takes precedence
+           over this one, and the further cwd-based discovery that follows if even that's unset."""
+        return resolve_settings_dir(self.settings.contribution_dir, self.data_dir)
+
+    @property
+    def puzzle_dir(self) -> Path | None:
+        """The configured default puzzle working directory. Same resolution chain as
+           `contribution_dir`--see `CgSettings.puzzle_dir`."""
+        return resolve_settings_dir(self.settings.puzzle_dir, self.data_dir)
 
     def save(self) -> None:
         """Write `raw_data` back to `config_file`."""
@@ -269,11 +316,17 @@ class CgConfig:
 
     def to_dump_dict(self) -> JsonDict:
         """Assemble a JSON-friendly summary for e.g. `cg config dump`: resolved values at the top
-           level, plus the raw (unresolved) config content under `"rawConfig"`."""
+           level (`"settings"` nested the same way `CgConfigData.settings` itself is, holding the
+           global+project merge--`default_profile`/`contribution_dir`/`puzzle_dir` above), plus
+           the raw (unresolved) config content--this file alone, not merged--under `"rawConfig"`."""
         return {
             "configFile": str(self.config_file),
             "dataDir": str(self.data_dir),
-            "defaultProfile": self.default_profile,
+            "settings": {
+                "defaultProfile": self.default_profile,
+                "contributionDir": str(self.contribution_dir) if self.contribution_dir is not None else None,
+                "puzzleDir": str(self.puzzle_dir) if self.puzzle_dir is not None else None,
+            },
             "rawConfig": self.raw_data.to_dict(),
         }
 

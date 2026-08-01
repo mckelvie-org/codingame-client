@@ -22,15 +22,26 @@ from ..schema import CgSolutionLanguage
 @dataclass
 class CgTestSessionAnswer(JSONWizardX):
     """The codingamer's current saved answer for a test session, as embedded in
-       `CgTestSessionQuestion.answer`."""
+       `CgTestSessionQuestion.answer`.
 
-    code: str
-    """The codingamer's saved source code."""
-
-    programming_language_id: CgSolutionLanguage
-    """The programming language `code` is written in."""
+       `code`/`programming_language_id` are both Optional--confirmed live (2026-07-31): `answer`
+       itself can be present as an empty JSON object (`{}`), NOT `null`/absent, even though no
+       solution was ever submitted--i.e. `CgTestSessionQuestion.answer` being non-None does NOT
+       by itself mean a real answer exists; check `code`/`programming_language_id` here too. The
+       exact trigger for empty-object vs. `null`/absent isn't confirmed--the one observed case
+       had a test session already created (the puzzle had been opened/viewed in the IDE) but no
+       solution ever submitted, which suggests "a session exists for this puzzle" (not literally
+       "ever attempted") may be what actually determines it; not fully verified either way."""
 
     extra_data: CatchAll = field(default_factory=dict)
+
+    code: str | None = None
+    """The codingamer's saved source code. `None` for the empty placeholder object--see class
+       docstring."""
+
+    programming_language_id: CgSolutionLanguage | None = None
+    """The programming language `code` is written in. Same `None`-for-empty-placeholder caveat as
+       `code`."""
 
 
 @dataclass
@@ -155,19 +166,25 @@ class CgTestSessionQuestionDetails(JSONWizardX):
 class CgTestSessionQuestion(JSONWizardX):
     """The active question in a test session, as returned in `CgTestSession.current_question`."""
 
-    last_submission_id: int
-    """Numeric ID of the codingamer's last submission for this question."""
-
     question: CgTestSessionQuestionDetails
     """Full puzzle/question details."""
 
     extra_data: CatchAll = field(default_factory=dict)
 
+    last_submission_id: int | None = None
+    """Numeric ID of the codingamer's last submission for this question. Confirmed live
+       (2026-07-31) to be absent entirely (not just `null`) when no solution has ever been
+       submitted--same underlying "session exists, never submitted" case as `answer`'s
+       empty-object caveat; see `CgTestSessionAnswer`'s docstring."""
+
     answer: CgTestSessionAnswer | None = None
     """The codingamer's current saved answer. Populated (with the codingamer's own previously
-       submitted code) for a puzzle already attempted; presumably absent or stub-only for a
-       puzzle never attempted, but this is unconfirmed (only a previously-solved puzzle has been
-       observed so far)."""
+       submitted code) once a solution has been submitted. Confirmed live (2026-07-31), this
+       field can also be present-but-empty (a `CgTestSessionAnswer` with `code`/
+       `programming_language_id` both `None`) rather than `None`/absent, when no solution was
+       ever submitted--check those two fields, not just `answer is None`, to tell "has a real
+       saved answer" from "no answer yet." See `CgTestSessionAnswer`'s docstring for what is/
+       isn't confirmed about exactly when each shape (`null` vs. empty object) occurs."""
 
 
 @dataclass
@@ -218,10 +235,11 @@ class CgTestSessionQuestionSummary(JSONWizardX):
     has_result: bool
     """Whether the codingamer has a recorded result (e.g. a submission) for this question."""
 
-    score: float
-    """The codingamer's score for this question, from 0.0 to 1.0."""
-
     extra_data: CatchAll = field(default_factory=dict)
+
+    score: float | None = None
+    """The codingamer's score for this question, from 0.0 to 1.0. Confirmed live (2026-07-31) to
+       be absent entirely when `has_result` is `False`--nothing to score yet."""
 
 
 @dataclass

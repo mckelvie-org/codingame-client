@@ -3,10 +3,11 @@
    (`data/solution.src`) is ever editable, so there is no git repository involved at all.
 
    See `CgPuzzleManager` for `import_`/`repair`/`diff`/`discard_local`/`push`/`play`/`play_local`/
-   `status`--
-   its module docstring covers the three-way state-split design in full;
+   `status`/`delete`--its module docstring covers the three-way state-split design in full;
    `codingame_tools.puzzle_manager.schema` for the working directory's three manifest files
    (`CgPuzzleIdentity`/`CgPuzzleServerData`/`CgPuzzleData`);
+   `codingame_tools.puzzle_manager.statement_render` for rendering the cached HTML statement
+   (`CgPuzzleManager.load_statement_html`) into display blocks, used by `cg puzzle description`;
    `codingame_tools.test_runner` (a separate, package-agnostic package--not `puzzle_manager`'s
    own) for how `play_local`/VS Code debugging actually run a solution; and
    `codingame_tools.puzzle_manager.resolver` for how a puzzle directory is located.
@@ -14,6 +15,7 @@
 
 from __future__ import annotations
 
+from ..client.common.protocol.report import CgSubmissionReport
 from .manager import (
     DATA_SUBDIR_NAME,
     META_SUBDIR_NAME,
@@ -26,6 +28,7 @@ from .manager import (
     CgPuzzleLocalTestResult,
     CgPuzzleManager,
     CgPuzzleManagerError,
+    CgPuzzleRemoteTestResult,
     CgPuzzleStatus,
 )
 from .resolver import (
@@ -44,6 +47,7 @@ from .schema import (
     CgPuzzleIdentity,
     CgPuzzleServerData,
 )
+from .statement_render import CgStatementBlock, parse_statement_html
 
 __all__ = [
     "CgPuzzleManager",
@@ -51,10 +55,14 @@ __all__ = [
     "CgPuzzleDiscardResult",
     "CgPuzzleLocalTestResult",
     "CgPuzzleLocalTestFailedError",
+    "CgPuzzleRemoteTestResult",
     "CgPuzzleStatus",
     "CgPuzzleIdentity",
     "CgPuzzleServerData",
     "CgPuzzleData",
+    "CgSubmissionReport",
+    "CgStatementBlock",
+    "parse_statement_html",
     "PUZZLE_IDENTITY_FILE_NAME",
     "PUZZLE_SCHEMA_VERSION",
     "DATA_SUBDIR_NAME",
