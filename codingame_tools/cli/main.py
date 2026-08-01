@@ -19,6 +19,7 @@ from json_data_types import JsonData, JsonList
 from rich.console import Console
 
 from ..client.async_.client import CgAsyncClient
+from ..client.common.protocol.codingamer import CgCodingamePointsStats, CgXpThreshold
 from ..client.common.protocol.contribution import CgContributionData, CgPendingContribution, CgPersonalContribution
 from ..client.common.protocol.test_session import CgMultipleLanguagesTestParams, CgPlayRequest, CgSubmitRequest
 from ..client.common.protocol.user import CgUserProperties
@@ -59,6 +60,8 @@ from ..credentials.cg_credentials import (
 from ..puzzle_manager import (
     CgPuzzleLocalTestFailedError,
     CgPuzzleManager,
+    CgPuzzleManagerError,
+    CgPuzzleStatus,
     find_puzzle_dir,
     resolve_puzzle_dir,
 )
@@ -71,6 +74,27 @@ def _isoformat_z(dt: datetime) -> str:
        equally standard (RFC 3339/ISO 8601's "Zulu time" designator for UTC), "Z" is just the
        more common convention."""
     return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+def _format_xp_progress(xp: int | None, level: int | None, xp_thresholds: list[CgXpThreshold]) -> str:
+    """`"{xp}   ({progress}/{needed} to level {level + 1})"`, using `xp_thresholds`'
+       `cumulative_xp` (total XP required to reach a given level) to derive `progress` (XP earned
+       within the current level) and `needed` (XP required for the current level as a whole)--
+       both already implied by `findCodingamePointsStatsByHandle`'s own response, no separate
+       formula/lookup needed. Falls back to a bare XP number if `xp`/`level` is unknown, or if
+       `xp_thresholds` doesn't include entries for both the current and next level (observed live
+       to include the current level onward, but not documented as guaranteed)."""
+    if xp is None:
+        return "(unknown)"
+    if level is None:
+        return str(xp)
+    cumulative_xp_by_level = {t.level: t.cumulative_xp for t in xp_thresholds}
+    current_base = cumulative_xp_by_level.get(level)
+    next_base = cumulative_xp_by_level.get(level + 1)
+    if current_base is None or next_base is None:
+        return str(xp)
+    progress = xp - current_base
+    needed = next_base - current_base
+    return f"{xp}   ({progress}/{needed} to level {level + 1})"
 
 _SYNC_STATUS_TEXT: dict[CgContributionSyncStatus, str] = {
     CgContributionSyncStatus.NOT_PUSHED: "not yet pushed",
@@ -583,6 +607,95 @@ class CgCli(CliBase):
                     print(f"cgSession cookie: {cg_session}")
 
 
+        return handler
+
+    @cli_command("Summarize the current session: login status, profile details, and points/rank "
+                 "stats for the logged-in codingamer. Always hits the network--there's no "
+                 "cached/local mode, unlike `cg contribution status`/`cg puzzle status` (that's "
+                 "the whole point of this command). \"Gamer stats\" are informational, not a "
+                 "breakdown of one another--see CgCodingamePointsRankingDto's docstring for why. "
+                 "With --json (top-level option), renders as JSON instead of text.")
+    async def cmd_status(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            use_json: bool = self.args.json
+            client = await self.get_client()
+            profile = client.profile_name
+            credentials = client.credentials
+            has_credentials = credentials is not None
+            codingamer_id: int | None = client.codingamer_id
+            credentials_valid: bool | None = None
+            if credentials is not None:
+                try:
+                    await client.validate_credentials()
+                    credentials_valid = True
+                except CgAuthenticationError:
+                    credentials_valid = False
+
+            stats: CgCodingamePointsStats | None = None
+            if codingamer_id is not None and credentials_valid:
+                info = await client.services.codingamer.find_codingamer_public_informations(codingamer_id)
+                stats = await client.services.codingamer.find_codingame_points_stats_by_handle(info.public_handle)
+
+            if use_json:
+                stats_dict: JsonData | None = None
+                if stats is not None:
+                    stats_dict = stats.to_dict()
+                    # rank_history can be thousands of dated snapshots (years of history)--not
+                    # appropriate for a "status" summary; strip it for display (same spirit as
+                    # redacting bulky content elsewhere--see `cg contribution status`).
+                    ranking_dict = stats_dict.get("codingamePointsRankingDto")
+                    if isinstance(ranking_dict, dict):
+                        ranking_dict.pop("rankHistory", None)
+                output: JsonData = {
+                    "profile": profile,
+                    "hasCredentials": has_credentials,
+                    "credentialsValid": credentials_valid,
+                    "codingamerId": codingamer_id,
+                    "stats": stats_dict,
+                }
+                print(json.dumps(output, indent=4, sort_keys=True))
+                return
+
+            def line(label: str, value: object) -> None:
+                print(f"{label:<30}{value}")
+
+            line("Profile:", profile)
+            if credentials_valid:
+                line("Logged in:", "yes")
+            elif has_credentials:
+                line("Logged in:", "no (saved credentials are no longer valid--run `cg login`)")
+            else:
+                line("Logged in:", "no (no saved credentials--run `cg login`)")
+            line("Codingamer id:", codingamer_id if codingamer_id is not None else "(unknown)")
+            if stats is None:
+                return
+
+            codingamer = stats.codingamer
+            print()
+            line("Handle:", codingamer.public_handle)
+            line("Nickname:", codingamer.pseudo or "(not set)")
+            line("Level:", codingamer.level if codingamer.level is not None else "(unknown)")
+            line("Country:", codingamer.country_id or "(not set)")
+            if codingamer.company:
+                line("Company:", codingamer.company)
+            if codingamer.online_since is not None:
+                line("Online since:", _isoformat_z(codingamer.online_since))
+
+            ranking = stats.codingame_points_ranking_dto
+            print()
+            print("Gamer stats:")
+            line("  Points total:", ranking.codingame_points_total)
+            line("  Global rank:", f"{ranking.codingame_points_rank} / {ranking.number_codingamers_global}")
+            line("  XP:", _format_xp_progress(codingamer.xp, codingamer.level, stats.xp_thresholds))
+            line("  Achievements:", ranking.codingame_points_achievements)
+            line("  Contests:", ranking.codingame_points_contests)
+            line("  Optimization puzzles:", ranking.codingame_points_optim)
+            line("  Code golf puzzles:", ranking.codingame_points_codegolf)
+            line("  Multiplayer training:", ranking.codingame_points_multi_training)
+            line("  Clash of Code:", ranking.codingame_points_clash)
+
+            print()
+            line("Achievements unlocked:", stats.achievement_count)
         return handler
 
     @cli_command("Raw (unstructured JSON) API commands.")
@@ -1854,6 +1967,7 @@ class CgCli(CliBase):
                     "localTitle": status.local_title,
                     "localPuzzleType": status.local_puzzle_type,
                     "localSolutionLanguage": status.local_solution_language,
+                    "localDifficulty": status.local_difficulty,
                     "localDraft": status.local_draft,
                     "localReadyForModeration": status.local_ready_for_moderation,
                     "localDirty": status.local_dirty,
@@ -1879,6 +1993,7 @@ class CgCli(CliBase):
             line("Local title:", repr(status.local_title))
             line("Puzzle type:", status.local_puzzle_type or "(not set)")
             line("Language:", status.local_solution_language or "(not set)")
+            line("Difficulty:", status.local_difficulty or "(not set)")
             line("Draft:", "yes" if status.local_draft else "no")
             line("Ready for moderation:", "yes" if status.local_ready_for_moderation else "no")
             line("Handle:", status.contribution_handle if status.pushed else "<not yet pushed>")
@@ -2593,6 +2708,82 @@ class CgCli(CliBase):
                 print(diff_text, end="")
             else:
                 self.eprint(f"{resolved_dir}: no differences from the server's last-submitted answer.")
+        return handler
+
+    @cli_command("Human-friendly summary of this puzzle: title, language, and local-edit status. "
+                 "By default entirely local (no network access); pass --refresh to also check "
+                 "for local edits against the server's last-submitted answer and fetch live "
+                 "progress/score (two live calls--there is no local cache for puzzles, unlike "
+                 "`cg contribution status`, so this is always genuinely live, every time). With "
+                 "--json (top-level option), renders as JSON instead of text.")
+    async def cmd_puzzle__status(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            puzzle_dir: Path | None = self.args.puzzle_dir
+            refresh: bool = self.args.refresh
+            use_json: bool = self.args.json
+            resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
+            client = await self.get_client()
+            manager = CgPuzzleManager(resolved_dir, client)
+            try:
+                status: CgPuzzleStatus = await manager.status(refresh=refresh)
+            except (FileNotFoundError, CgPuzzleManagerError) as e:
+                raise CliError(str(e)) from e
+
+            progress = status.progress
+            last_activity_iso = None if progress is None or progress.last_activity is None else _isoformat_z(progress.last_activity)
+
+            if use_json:
+                output: JsonData = {
+                    "puzzleDir": str(status.puzzle_dir),
+                    "puzzleId": status.puzzle_id,
+                    "puzzleHandle": status.puzzle_handle,
+                    "title": status.title,
+                    "puzzlePrettyId": status.puzzle_pretty_id,
+                    "puzzleType": status.puzzle_type,
+                    "difficulty": status.difficulty,
+                    "solutionLanguage": status.solution_language,
+                    "localDirty": status.local_dirty,
+                    "progress": None if progress is None else progress.to_dict(),
+                }
+                print(json.dumps(output, indent=4, sort_keys=True))
+                return
+
+            def line(label: str, value: object) -> None:
+                print(f"{label:<20}{value}")
+
+            line("Puzzle directory:", status.puzzle_dir)
+            line("Title:", repr(status.title))
+            line("Pretty id:", status.puzzle_pretty_id)
+            line("Puzzle id:", status.puzzle_id)
+            line("Handle:", status.puzzle_handle)
+            line("Puzzle type:", status.puzzle_type or "(unknown--run `cg puzzle repair`)")
+            line("Difficulty:", status.difficulty or "(unknown--run `cg puzzle repair`)")
+            line("Language:", status.solution_language)
+            if status.local_dirty is None:
+                line("Local edits:", "not checked--pass --refresh to check")
+            else:
+                line("Local edits:", "yes (differs from server)" if status.local_dirty else "none")
+            if not refresh:
+                return
+            if progress is None:
+                print()
+                print("No live progress found for this puzzle id.")
+                return
+            print()
+            print("Live progress below is current as of this call.")
+            print()
+            line("Level:", progress.level)
+            solved = progress.validator_score == 100
+            line("Solved:", f"{'yes' if solved else 'no'} ({progress.validator_score}/100)")
+            line("Solved by:", f"{progress.solved_count} codingamers")
+            line("Attempts:", progress.attempt_count)
+            line("XP:", progress.xp_points)
+            if last_activity_iso is not None:
+                line("Last activity:", last_activity_iso)
+        p = cmd.get_parser()
+        p.add_argument("--refresh", default=False, action="store_true",
+                       help="Also check for local edits against the server's last-submitted "
+                            "answer and fetch live progress/score (two live calls).")
         return handler
 
     @cli_command("Discard local edits: overwrite solution.src with the server's current "

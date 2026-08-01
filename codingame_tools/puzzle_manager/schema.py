@@ -99,6 +99,19 @@ class CgPuzzleServerData(JSONWizardX):
 
     extra_data: CatchAll = field(default_factory=dict)
 
+    puzzle_type: str | None = None
+    """The puzzle's contribution type (e.g. "PUZZLE_INOUT"--currently the only type this package
+       supports at all, so always that value in practice today), as of when this was last (re)
+       written. Purely informational, same caching spirit as `title`/`puzzle_pretty_id`. `None`
+       for a cache file written before this field existed--not re-backfilled automatically; run
+       `cg puzzle repair` (after deleting `.meta/`) to populate it."""
+
+    difficulty: str | None = None
+    """The puzzle's difficulty level (`CgTestSessionPuzzle.level`/`CgLastActivityPuzzle.level`,
+       e.g. "easy", "medium", "hard"), as of when this was last (re)written. Purely informational,
+       same caching spirit as `title`/`puzzle_pretty_id`. `None` for a cache file written before
+       this field existed--same backfill note as `puzzle_type`."""
+
 
 @dataclass
 class CgPuzzleData(JSONWizardX):

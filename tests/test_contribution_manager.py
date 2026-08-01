@@ -1149,6 +1149,7 @@ async def test_status_up_to_date_after_import_uses_cached_server_data(tmp_path: 
     assert status.server is not None
     assert status.server.status == "PENDING"
     assert status.server.public_handle == "handle-1"
+    assert status.local_difficulty == "easy"
     # served from .meta/contribution-status.json (written by import_()), not a fresh findContribution
     assert service.find_call_count == find_calls_after_import
     # import_() already refreshed the status cache (including moderator votes)--populated (as

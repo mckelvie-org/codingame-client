@@ -287,13 +287,18 @@ class CgContributionStatus:
        server rationale as `local_puzzle_type`--this is versioned (content) state, changed only
        via `push()`, not part of `CgContributionStatusCache`'s non-versioned metadata."""
 
+    local_difficulty: str | None
+    """`data/contribution-data.json`'s `data.difficulty` (e.g. "easy"). May be None if not set
+       yet. Same local-vs-server rationale as `local_puzzle_type`/`local_solution_language`--
+       versioned content state, not part of `CgContributionStatusCache`."""
+
     server: CgContribution | None
     """The last-known full, unredacted contribution record from the server (from `.meta/
        contribution-status.json`'s `contribution` field--see `CgContributionStatusCache`), or
        None if never pushed or never fetched under a version of this package new enough to write
        that cache. Reflects the server's state as of `status_cache_refreshed_at`, which may lag
        behind local edits--see `local_draft`/`local_ready_for_moderation`/`local_puzzle_type`/
-       `local_solution_language` for what's actually on disk right now."""
+       `local_solution_language`/`local_difficulty` for what's actually on disk right now."""
 
     moderator_approvals: list[CgContributionModerator] | None
     """Moderators who had cast a `"validate"` (approve) vote on this contribution's privileged
@@ -1714,6 +1719,7 @@ class CgContributionManager:
                 local_ready_for_moderation=view.ready_for_moderation,
                 local_puzzle_type=view.puzzle_type,
                 local_solution_language=view.data.solution_language,
+                local_difficulty=view.data.difficulty,
                 server=server_contribution,
                 moderator_approvals=moderator_approvals,
                 moderator_denials=moderator_denials,

@@ -137,34 +137,55 @@ class CgRankHistoryEntry(JSONWizardX):
 
 @dataclass
 class CgCodingamePointsRankingDto(JSONWizardX):
-    """Points-ranking summary and history for a codingamer."""
+    """Points-ranking summary and history for a codingamer.
+
+       Per CodinGame's own ranking rework documentation (https://www.codingame.com/help/rank,
+       https://www.codingame.com/blog/ranking-rework-competition/): rewards are split into XP
+       (contributes to Level, i.e. platform activity) and CodinPoints/"CP" (contributes to rank,
+       i.e. multiplayer performance), and CP is tracked as five *separate* per-category
+       leaderboards (contests, bot programming, Clash of Code, optimization, code golf), each
+       computed per-game via `(BASE * min(N/500, 1)) ^ ((N-C+1)/N)` with a category-specific
+       `BASE`--i.e. the per-category fields below are NOT simple counts of "points earned" on a
+       shared scale, and are NOT meant to be summed. Confirmed live (2026-08-01): summing all
+       seven `codingame_points_*` fields below does *not* reproduce `codingame_points_total`
+       (off by more than an order of magnitude)--whatever `codingame_points_total`/
+       `codingame_points_rank` are actually derived from isn't fully understood; treat the
+       per-category fields as informational only, not as a breakdown of the total/rank."""
 
     codingame_points_total: int
-    """The codingamer's current total points (sum of the category points below)."""
+    """The codingamer's current total points, used for `codingame_points_rank`. NOT confirmed to
+       be a sum of the `codingame_points_*` category fields below--see the class docstring."""
 
     codingame_points_rank: int
     """The codingamer's current global points rank."""
 
     codingame_points_contests: int
-    """Current points earned from contests."""
+    """Current CodinPoints in the contests leaderboard category--see the class docstring for why
+       this isn't a simple "points earned" count comparable across categories."""
 
     codingame_points_achievements: int
-    """Current points earned from achievements."""
+    """Current points attributed to achievements. Per CodinGame's ranking rework, achievement
+       rewards now convert to XP rather than CP--this field's exact current meaning/scale is
+       unconfirmed."""
 
     codingame_points_xp: int
-    """Current points earned from XP/leveling."""
+    """Observed live to exactly equal `CgCodingamer.xp` (raw lifetime XP)--i.e. this appears to
+       just mirror XP for display here, not a CP-scaled value; see the class docstring."""
 
     codingame_points_optim: int
-    """Current points earned from optimization puzzles."""
+    """Current CodinPoints in the optimization-puzzles leaderboard category--see the class
+       docstring."""
 
     codingame_points_codegolf: int
-    """Current points earned from code golf puzzles."""
+    """Current CodinPoints in the code-golf-puzzles leaderboard category--see the class
+       docstring."""
 
     codingame_points_multi_training: int
-    """Current points earned from multiplayer training games."""
+    """Current CodinPoints in the multiplayer-training-games leaderboard category--see the class
+       docstring."""
 
     codingame_points_clash: int
-    """Current points earned from Clash of Code."""
+    """Current CodinPoints in the Clash of Code leaderboard category--see the class docstring."""
 
     number_codingamers: int
     """Total number of codingamers ranked in the codingamer's local ranking scope."""
@@ -203,10 +224,15 @@ class CgXpThreshold(JSONWizardX):
 class CgCodingamePointsStats(JSONWizardX):
     """The complete response to findCodingamePointsStatsByHandle.
 
-       `codingamer_points` is Optional--confirmed live (the same fresh/minimal "dev" test account
-       that exposed `CgCodingamer.pseudo`/`country_id` being Optional): the top-level
-       `codingamerPoints` key was entirely absent, even though its duplicate,
-       `codingame_points_ranking_dto.codingame_points_total`, was present (as 0)."""
+       `codingamer_points` is Optional--confirmed live (a fresh/minimal "dev" test account, the
+       same one that exposed `CgCodingamer.pseudo`/`country_id` being Optional): the top-level
+       `codingamerPoints` key was entirely absent for that account. Originally documented here as
+       "duplicating" `codingame_points_ranking_dto.codingame_points_total`, based on both being 0
+       for that same degenerate (all-zero) test account--**since disproven** on a real account
+       (2026-08-01): `codingamer_points` was `7150` while `codingame_points_total` was `2800` at
+       the same moment--they are two distinct values, not a duplicate pair. See
+       `CgCodingamePointsRankingDto`'s docstring for more on what is/isn't understood about how
+       these numbers relate to each other."""
 
     achievement_count: int
     """The number of achievements the codingamer has unlocked."""
@@ -220,8 +246,9 @@ class CgCodingamePointsStats(JSONWizardX):
     extra_data: CatchAll = field(default_factory=dict)
 
     codingamer_points: int | None = None
-    """The codingamer's current total points. Duplicates `codingame_points_ranking_dto.codingame_points_total`.
-       Not always present; see class docstring."""
+    """The codingamer's current total points--**not** confirmed equal to `codingame_points_ranking_dto.
+       codingame_points_total` (disproven live--see class docstring); exact relationship
+       unconfirmed. Not always present; see class docstring."""
 
     xp_thresholds: list[CgXpThreshold] = field(default_factory=list)
     """The per-level XP threshold/progression table, up to (at least) the codingamer's current level."""

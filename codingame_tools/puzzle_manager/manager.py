@@ -52,6 +52,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..client.async_.client import CgAsyncClient
+from ..client.common.protocol.last_activities import CgLastActivityPuzzle
 from ..client.common.protocol.schema import CgSolutionLanguage, cg_solution_language_to_extension
 from ..client.common.protocol.test_session import (
     CgMultipleLanguagesTestParams,
@@ -88,6 +89,7 @@ __all__ = [
     "CgPuzzleDiscardResult",
     "CgPuzzleLocalTestResult",
     "CgPuzzleLocalTestFailedError",
+    "CgPuzzleStatus",
     "CgPuzzleManager",
 ]
 
@@ -159,6 +161,57 @@ class CgPuzzleLocalTestFailedError(CgPuzzleManagerError):
         failed = [r for r in results if not r.passed]
         summary = ", ".join(f"#{r.index} ({r.label})" for r in failed)
         super().__init__(f"{len(failed)}/{len(results)} local test case(s) failed: {summary}")
+
+
+@dataclass(frozen=True)
+class CgPuzzleStatus:
+    """A point-in-time summary of a puzzle working directory--see `CgPuzzleManager.status()`.
+       Much simpler than `codingame_tools.contribution_manager.CgContributionStatus`--no
+       versioning, no draft/moderation gate, no sync-state machine--matching this whole package's
+       "much simpler than contribution_manager" design (see the module docstring)."""
+
+    puzzle_dir: Path
+    """The working directory this status describes."""
+
+    puzzle_id: int
+    """Numeric ID of the puzzle (`CgPuzzleIdentity.puzzle_id`)."""
+
+    puzzle_handle: str
+    """Opaque handle for the puzzle (`CgPuzzleIdentity.puzzle_handle`)."""
+
+    title: str
+    """`.meta/puzzle-server-data.json`'s cached title--informational only, may be stale (see
+       `CgPuzzleServerData.title`'s docstring)."""
+
+    puzzle_pretty_id: str
+    """`.meta/puzzle-server-data.json`'s cached pretty ID/slug--informational only, may be stale
+       (see `CgPuzzleServerData.puzzle_pretty_id`'s docstring--never trusted as ground truth by
+       this package itself either)."""
+
+    puzzle_type: str | None
+    """`.meta/puzzle-server-data.json`'s cached contribution type (e.g. "PUZZLE_INOUT"), or
+       `None` for a cache file written before this field existed (see `CgPuzzleServerData.
+       puzzle_type`)--run `cg puzzle repair` (after deleting `.meta/`) to populate it."""
+
+    difficulty: str | None
+    """`.meta/puzzle-server-data.json`'s cached difficulty level (e.g. "easy"), or `None` for a
+       cache file written before this field existed (see `CgPuzzleServerData.difficulty`)--same
+       backfill note as `puzzle_type`."""
+
+    solution_language: CgSolutionLanguage
+    """`data/puzzle-data.json`'s `solution_language`--the language `data/solution.src` is
+       currently written in."""
+
+    local_dirty: bool | None
+    """Whether `data/solution.src` currently differs from the server's last-submitted answer for
+       this puzzle (`bool(diff())`)--`None` unless `status(refresh=True)` checked (a live
+       `TestSession/startTestSession` call; there is no local cache of the server's answer to
+       compare against, unlike `codingame_tools.contribution_manager`)."""
+
+    progress: CgLastActivityPuzzle | None
+    """This codingamer's live progress/score summary for the puzzle (`Puzzle/findProgressByIds`--
+       `level`/`validator_score`/`solved_count`/`attempt_count`/`xp_points`/`last_activity`), or
+       `None` unless `status(refresh=True)` fetched it."""
 
 
 def _refresh_solution_symlink(puzzle_dir: Path, solution_language: str | None) -> None:
@@ -365,7 +418,8 @@ class CgPuzzleManager:
             ).save(self.identity_file)
         CgPuzzleServerData(
                 test_session_handle=test_session_handle, title=question.title,
-                puzzle_pretty_id=puzzle_pretty_id,
+                puzzle_pretty_id=puzzle_pretty_id, puzzle_type=contribution_type,
+                difficulty=session.puzzle.level,
             ).save(self.server_data_file)
         puzzle_data = CgPuzzleData(solution_language=solution_language)
         puzzle_data.save(self.puzzle_data_file)
@@ -441,6 +495,8 @@ class CgPuzzleManager:
         server_data = CgPuzzleServerData(
                 test_session_handle=test_session_handle, title=progress.title,
                 puzzle_pretty_id=progress.pretty_id,
+                puzzle_type=question.contribution.contribution_type,
+                difficulty=session.puzzle.level,
             )
         server_data.save(self.server_data_file)
 
@@ -624,3 +680,45 @@ class CgPuzzleManager:
         if any(not r.passed for r in results):
             raise CgPuzzleLocalTestFailedError(results)
         return results
+
+    # --- status ----------------------------------------------------------------------------
+
+    async def status(self, *, refresh: bool = False) -> CgPuzzleStatus:
+        """A point-in-time summary of this working directory--see `CgPuzzleStatus`.
+
+           By default, entirely local/cheap: no network access at all--just the three on-disk
+           manifests. Pass `refresh=True` to also check `local_dirty` (a live
+           `TestSession/startTestSession` call, same as `diff()`) and fetch `progress` (a live
+           `Puzzle/findProgressByIds` call)--both stay `None` otherwise. Unlike
+           `codingame_tools.contribution_manager`'s `status()`, there is no cache file this writes
+           to for next time--puzzle working directories have no such cache at all (see the module
+           docstring); every `refresh=True` call is genuinely live, every time.
+
+        Args:
+            refresh: If True, also check for local edits against the server's last-submitted
+                     answer and fetch live progress/score info. Defaults to False.
+
+        Raises:
+            FileNotFoundError: if this working directory has never been imported.
+            CgPuzzleManagerError: if `.meta/` is missing (run `repair()` first).
+        """
+        identity, server_data, puzzle_data = self._require_state()
+        local_dirty: bool | None = None
+        progress: CgLastActivityPuzzle | None = None
+        if refresh:
+            local_dirty = bool(await self.diff())
+            progress_results = await self.client.services.puzzle.find_progress_by_ids([identity.puzzle_id])
+            if progress_results and progress_results[0].id == identity.puzzle_id:
+                progress = progress_results[0]
+        return CgPuzzleStatus(
+                puzzle_dir=self.puzzle_dir,
+                puzzle_id=identity.puzzle_id,
+                puzzle_handle=identity.puzzle_handle,
+                title=server_data.title,
+                puzzle_pretty_id=server_data.puzzle_pretty_id,
+                puzzle_type=server_data.puzzle_type,
+                difficulty=server_data.difficulty,
+                solution_language=puzzle_data.solution_language,
+                local_dirty=local_dirty,
+                progress=progress,
+            )

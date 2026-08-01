@@ -2,7 +2,8 @@
    `codingame_tools.contribution_manager` (which authors/edits a contribution): exactly one file
    (`data/solution.src`) is ever editable, so there is no git repository involved at all.
 
-   See `CgPuzzleManager` for `import_`/`repair`/`diff`/`discard_local`/`push`/`play`/`play_local`--
+   See `CgPuzzleManager` for `import_`/`repair`/`diff`/`discard_local`/`push`/`play`/`play_local`/
+   `status`--
    its module docstring covers the three-way state-split design in full;
    `codingame_tools.puzzle_manager.schema` for the working directory's three manifest files
    (`CgPuzzleIdentity`/`CgPuzzleServerData`/`CgPuzzleData`);
@@ -25,6 +26,7 @@ from .manager import (
     CgPuzzleLocalTestResult,
     CgPuzzleManager,
     CgPuzzleManagerError,
+    CgPuzzleStatus,
 )
 from .resolver import (
     CG_PUZZLE_DIR_ENV_VAR,
@@ -49,6 +51,7 @@ __all__ = [
     "CgPuzzleDiscardResult",
     "CgPuzzleLocalTestResult",
     "CgPuzzleLocalTestFailedError",
+    "CgPuzzleStatus",
     "CgPuzzleIdentity",
     "CgPuzzleServerData",
     "CgPuzzleData",

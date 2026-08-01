@@ -27,3 +27,25 @@
 - Add `cg contributions`: a one-line-per-contribution listing (handle/id/status/type/title) of
   all pending contributions community-wide by default, or just your own with `--personal`;
   top-level `--json` for the raw underlying list.
+- Add `cg puzzle status`: a human-friendly summary of a puzzle working directory (title, pretty
+  id, puzzle type, difficulty, language, local-edit status vs. the server's last-submitted
+  answer). By default entirely local (no network access, unlike `cg contribution status` there
+  is no local cache to refresh either); `--refresh` also checks for local edits and fetches live
+  progress/score (level/solved/score/solved-by/attempts/XP/last activity). Top-level `--json`
+  for machine-readable output.
+- Add `puzzle_type`/`difficulty` to `.meta/puzzle-server-data.json` (cached at `import_()`/
+  `repair()` time, alongside `title`/`puzzle_pretty_id`)--`None` for a cache written by an older
+  version until the next `cg puzzle repair`. Add `difficulty` to `cg contribution status` too
+  (`local_difficulty`, from `data/contribution-data.json`, same as `puzzle_type`/language).
+- Add `cg status`: a session-wide summary (login status, profile, points/rank stats, achievement
+  count)--always hits the network (no cached/local mode, unlike the other `status` commands).
+  Top-level `--json` for machine-readable output (`rankHistory`--thousands of dated snapshots--
+  trimmed out, not appropriate for a status summary). Points/rank/per-category numbers are
+  grouped under one "Gamer stats" label (informational only, not a breakdown of one
+  another--rationale lives in `CgCodingamePointsRankingDto`'s docstring, not printed every run).
+  `XP` shows progress toward the next level (e.g. `34019   (1855/2250 to level 37)`), derived
+  from the already-fetched per-level `xp_thresholds` table--no separate formula/lookup needed.
+- Correct `CgCodingamePointsRankingDto`/`CgCodingamePointsStats` docstrings: two previously
+  documented "duplicate"/"sum of categories" relationships between `codingamer_points`,
+  `codingame_points_total`, and the seven `codingame_points_*` category fields are disproven by
+  live data (e.g. category fields summed to 43469 against a `codingame_points_total` of 2800).

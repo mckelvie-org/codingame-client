@@ -36,6 +36,7 @@ from codingame_tools.puzzle_manager.manager import (
     CgPuzzleManager,
     CgPuzzleManagerError,
 )
+from codingame_tools.puzzle_manager.schema import CgPuzzleServerData
 from codingame_tools.puzzle_manager.test_cases_dir import (
     TEST_META_FILE_NAME,
     CgPuzzleTestCaseMeta,
@@ -221,6 +222,8 @@ async def test_import_with_existing_answer_uses_it(tmp_path: Path) -> None:
     assert server_data.puzzle_pretty_id == "literary-alfabet-soupe"
     assert server_data.test_session_handle == "session-handle-1"
     assert server_data.title == "Literary Alfabet Soupe"
+    assert server_data.puzzle_type == "PUZZLE_INOUT"
+    assert server_data.difficulty == "medium"
 
     assert puzzle_data.solution_language == "Java"  # from the existing answer, not the --language default
     assert manager.load_puzzle_data() == puzzle_data
@@ -309,6 +312,8 @@ async def test_repair_reconstructs_meta_reusing_cached_test_session_handle(tmp_p
     assert puzzle_service.find_progress_calls == [[10075]]
     assert puzzle_service.generate_calls == []  # reused the cached-affinity handle, no re-generation
     assert server_data.test_session_handle == "session-handle-1"
+    assert server_data.puzzle_type == "PUZZLE_INOUT"
+    assert server_data.difficulty == "medium"
     assert (tmp_path / ".meta" / "statement.html").is_file()
     assert (tmp_path / ".gitignore").read_text() == ".meta/\n"
     assert manager.load_server_data() == server_data
@@ -609,3 +614,110 @@ async def test_play_local_requires_downloaded_tests(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError):
         manager.play_local()
+
+
+# --- status ------------------------------------------------------------------------------------
+
+
+async def test_status_default_is_local_only(tmp_path: Path) -> None:
+    answer = CgTestSessionAnswer(code="print('same')\n", programming_language_id="Python3")
+    session = _make_test_session(answer=answer)
+    client, puzzle_service, test_session_service, _ = _make_fake_client(session)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe")
+    start_calls_after_import = len(test_session_service.start_calls)
+    find_progress_calls_after_import = len(puzzle_service.find_progress_calls)
+
+    status = await manager.status()
+
+    assert status.puzzle_id == 10075
+    assert status.puzzle_handle == "puzzle-handle-1"
+    assert status.title == "Literary Alfabet Soupe"
+    assert status.puzzle_pretty_id == "literary-alfabet-soupe"
+    assert status.puzzle_type == "PUZZLE_INOUT"
+    assert status.difficulty == "medium"
+    assert status.solution_language == "Python3"
+    assert status.local_dirty is None
+    assert status.progress is None
+    # no network calls beyond whatever import_() itself already made
+    assert len(test_session_service.start_calls) == start_calls_after_import
+    assert len(puzzle_service.find_progress_calls) == find_progress_calls_after_import
+
+
+async def test_status_puzzle_type_and_difficulty_none_for_pre_existing_cache(tmp_path: Path) -> None:
+    """A `.meta/puzzle-server-data.json` written before `puzzle_type`/`difficulty` existed should
+       still load fine, with those two fields simply absent (None), not raise/crash."""
+    session = _make_test_session()
+    client, _, _, _ = _make_fake_client(session)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe")
+    server_data = manager.load_server_data()
+    assert server_data is not None
+    CgPuzzleServerData(
+            test_session_handle=server_data.test_session_handle, title=server_data.title,
+            puzzle_pretty_id=server_data.puzzle_pretty_id,
+        ).save(manager.server_data_file)
+
+    status = await manager.status()
+
+    assert status.puzzle_type is None
+    assert status.difficulty is None
+
+
+async def test_status_refresh_detects_matching_and_diverging_local_edits(tmp_path: Path) -> None:
+    answer = CgTestSessionAnswer(code="print('same')\n", programming_language_id="Python3")
+    session = _make_test_session(answer=answer)
+    client, _, _, _ = _make_fake_client(session)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe")
+
+    status = await manager.status(refresh=True)
+    assert status.local_dirty is False
+
+    (tmp_path / "data" / "solution.src").write_text("print('local edit')\n")
+    status2 = await manager.status(refresh=True)
+    assert status2.local_dirty is True
+
+
+async def test_status_refresh_fetches_progress(tmp_path: Path) -> None:
+    session = _make_test_session()
+    client, puzzle_service, _, _ = _make_fake_client(session)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe")
+    progress = _make_progress()
+    puzzle_service.progress_results = [progress]
+
+    status = await manager.status(refresh=True)
+
+    assert status.progress == progress
+    assert puzzle_service.find_progress_calls[-1] == [10075]
+
+
+async def test_status_refresh_progress_none_when_no_matching_result(tmp_path: Path) -> None:
+    session = _make_test_session()
+    client, puzzle_service, _, _ = _make_fake_client(session)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe")
+    puzzle_service.progress_results = []  # no match at all
+
+    status = await manager.status(refresh=True)
+
+    assert status.progress is None
+
+
+async def test_status_requires_prior_import(tmp_path: Path) -> None:
+    manager = CgPuzzleManager(tmp_path, object())  # type: ignore[arg-type]
+    with pytest.raises(FileNotFoundError):
+        await manager.status()
+
+
+async def test_status_requires_meta_present(tmp_path: Path) -> None:
+    session = _make_test_session()
+    client, _, _, _ = _make_fake_client(session)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe")
+
+    shutil.rmtree(tmp_path / ".meta")
+
+    with pytest.raises(CgPuzzleManagerError):
+        await manager.status()
