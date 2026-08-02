@@ -4,8 +4,8 @@ Runs TARGET_FILE in-process (via `runpy.run_path`--not a subprocess) with INPUT_
 bound to stdin. Meant to be launched directly under a debugger--e.g. from a VS Code
 `launch.json` entry with `"module": "codingame_tools.test_runner.debug_stdin"`--not run
 standalone for its own sake. `codingame_tools.test_runner.runner.run_solution_locally` is the
-subprocess-based, non-debugger equivalent used by `cg puzzle play-local`/`cg contribution
-play-local`; this module exists specifically because a subprocess can't be stepped into by a
+subprocess-based, non-debugger equivalent used by `cg puzzle play`/`cg contribution play`;
+this module exists specifically because a subprocess can't be stepped into by a
 debugger attached to the parent process, and in-process execution is what makes a breakpoint
 placed directly in a solution file actually get hit.
 

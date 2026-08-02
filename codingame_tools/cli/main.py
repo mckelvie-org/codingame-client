@@ -59,7 +59,6 @@ from ..credentials.cg_credentials import (
     validate_profile_name,
 )
 from ..puzzle_manager import (
-    CgPuzzleLocalTestFailedError,
     CgPuzzleManager,
     CgPuzzleManagerError,
     CgPuzzleStatus,
@@ -76,6 +75,15 @@ def _isoformat_z(dt: datetime) -> str:
        equally standard (RFC 3339/ISO 8601's "Zulu time" designator for UTC), "Z" is just the
        more common convention."""
     return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+def _print_captured_output(text: str) -> None:
+    """Print a test run's captured stdout verbatim (no extra blank line if it already ends with
+       "\\n"), but guarantee a trailing newline regardless--so whatever's printed next (the next
+       test's header, a shell prompt) never gets glued onto the same line just because the
+       program under test didn't itself end its output with one. A no-op for empty output."""
+    if not text:
+        return
+    print(text, end="" if text.endswith("\n") else "\n")
 
 def _format_xp_progress(xp: int | None, level: int | None, xp_thresholds: list[CgXpThreshold]) -> str:
     """`"{xp}   ({progress}/{needed} to level {level + 1})"`, using `xp_thresholds`'
@@ -2199,14 +2207,18 @@ class CgCli(CliBase):
                  "local and validator sides by default; --local/--validator narrow to one. With "
                  "no ORDINAL arguments, runs every test case; give one or more ordinals (e.g. "
                  "\"3 5 7\", matching tests/'s directory names, zero-padding optional) to run only "
-                 "those. Exits non-zero if any test case fails.")
-    async def cmd_contribution__play_local(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+                 "those. Exits non-zero if any test case fails. Output matches `cg puzzle "
+                 "play`'s format (with the ordinal/side/title in place of an index/label). "
+                 "Captured stdout is only printed for a failing test (or with --update-expected), "
+                 "unless --show-stdout is given.")
+    async def cmd_contribution__play(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             contribution_dir: Path | None = self.args.contribution_dir
             ordinals: list[str] = self.args.ordinals
             only_local: bool = self.args.local
             only_validator: bool = self.args.validator
             update_expected: bool = self.args.update_expected
+            show_stdout: bool = self.args.show_stdout
             resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
             manager = CgContributionManager(resolved_dir, cast(CgClient, None))
 
@@ -2222,45 +2234,45 @@ class CgCli(CliBase):
                 raise CliError(f"No matching local test cases found under {manager.tests_dir}.")
 
             multi = len(test_cases) > 1
+            stderr_console = Console(stderr=True, highlight=False)
             results: list[CgContributionLocalTestResult] = []
             for test_case in test_cases:
-                self.eprint(f"=== {test_case.ordinal} {test_case.side}: {test_case.title} ===")
                 try:
                     result = manager.run_local_test(test_case, solution_language, update_expected=update_expected)
                 except Exception as e:
-                    self.eprint(f"EXCEPTION: {e}")
-                    results.append(CgContributionLocalTestResult(
+                    result = CgContributionLocalTestResult(
                             ordinal=test_case.ordinal, side=test_case.side, title=test_case.title,
                             passed=False, updated=False, input=test_case.input_text,
                             expected_output=test_case.output_text, actual_output="", stderr="",
                             timed_out=False, returncode=-1, exception=str(e),
-                        ))
-                    continue
+                        )
                 results.append(result)
-                print(result.actual_output, end="")
-                if multi:
-                    if not result.actual_output.endswith("\n"):
-                        print()
-                    print("-" * 72)
 
-            self.eprint("")
-            self.eprint("=== Summary ===")
-            for result in results:
                 status = "PASS" if result.passed else "FAIL"
-                detail = ""
+                stderr_console.print(
+                        f"[{status}] {result.ordinal} {result.side}: {result.title}",
+                        style="bold blue", markup=False,
+                    )
                 if not result.passed:
                     if result.exception is not None:
-                        detail = f" -- exception: {result.exception}"
+                        self.eprint(f"  EXCEPTION: {result.exception}")
                     elif result.timed_out:
-                        detail = " -- timed out"
+                        self.eprint("  timed out")
                     elif result.returncode != 0:
-                        detail = f" -- crashed (returncode {result.returncode})"
-                    elif update_expected:
-                        detail = " -- not updated"
-                    else:
-                        detail = " -- output mismatch"
-                self.eprint(f"[{status}] {result.ordinal} {result.side}: {result.title}{detail}")
+                        self.eprint(f"  crashed (returncode {result.returncode})")
+                    elif not update_expected:
+                        self.show_diff(result.expected_output, result.actual_output)
+                    if result.stderr:
+                        stderr_console.print("--- stderr ---", style="bold blue", markup=False)
+                        self.eprint(result.stderr)
+                if show_stdout or update_expected:
+                    _print_captured_output(result.actual_output)
+                    if multi:
+                        print("-" * 72)
 
+            if multi:
+                passed_count = sum(1 for r in results if r.passed)
+                stderr_console.print(f"{passed_count}/{len(results)} passed", style="bold blue", markup=False)
             if any(not r.passed for r in results):
                 raise CliExit(1)
         p = cmd.get_parser()
@@ -2273,7 +2285,11 @@ class CgCli(CliBase):
                        help="Overwrite each test case's output.txt with its actual output instead "
                             "of comparing against it--for accepting the solution's current "
                             "behavior as the new known-good baseline. Only written for runs that "
-                            "complete without crashing/timing out.")
+                            "complete without crashing/timing out. Implies --show-stdout, since "
+                            "the point is to review the new output.")
+        p.add_argument("--show-stdout", default=False, action="store_true",
+                       help="Print captured stdout even for a passing test. Always printed for a "
+                            "failing test, or with --update-expected, regardless.")
         return handler
 
     @cli_command("Detect drift between the server and this working directory, resolving it "
@@ -2645,9 +2661,10 @@ class CgCli(CliBase):
         return handler
 
     @cli_command("Submit the current local solution.src to the server for credit "
-                 "(TestSession/submit)--a real, permanent graded submission, unlike `cg puzzle play`. "
-                 "Note `cg puzzle play` also durably updates the server's copy of the code as a side "
-                 "effect of running a test case--this command is the one that actually grades it.")
+                 "(TestSession/submit)--a real, permanent graded submission, unlike `cg puzzle "
+                 "play-server`. Note `cg puzzle play-server` also durably updates the server's "
+                 "copy of the code as a side effect of running a test case--this command is the "
+                 "one that actually grades it.")
     async def cmd_puzzle__submit(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             puzzle_dir: Path | None = self.args.puzzle_dir
@@ -2674,43 +2691,49 @@ class CgCli(CliBase):
         return handler
 
     @cli_command("Run the current local solution.src against one or more of the puzzle's test "
-                 "cases (TestSession/play--the IDE's \"Test\" button, not a real submission). "
-                 "With no TEST-INDEX arguments, runs every downloaded test case (.meta/tests/); "
-                 "give one or more 1-based indices to run just those. Exits 1 if any run "
-                 "errored or didn't match the expected output.")
-    async def cmd_puzzle__play(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+                 "cases via the server (TestSession/play--the IDE's \"Test\" button, not a real "
+                 "submission; see `cg puzzle play` for the entirely-local, no-network "
+                 "equivalent). With no TEST-INDEX arguments, runs every downloaded test case "
+                 "(.meta/tests/); give one or more 1-based indices to run just those. Exits 1 if "
+                 "any run errored or didn't match the expected output. Output matches `cg "
+                 "puzzle play`'s format. Captured stdout is only printed for a failing test, "
+                 "unless --show-stdout is given.")
+    async def cmd_puzzle__play_server(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             puzzle_dir: Path | None = self.args.puzzle_dir
             test_indices: list[int] = self.args.test_indices
+            show_stdout: bool = self.args.show_stdout
             resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
             client = await self.get_client(require_credentials=True)
             manager = CgPuzzleManager(resolved_dir, client)
-            items = await manager.play(test_indices or None)
-            multiple = len(items) > 1
+            # Resolved and looped here, rather than delegating the whole batch to manager.play(),
+            # specifically so each result can be displayed as soon as it's available--one test
+            # case's server-side run can take a while, and buffering every result before showing
+            # any of them would make a multi-test run look stalled for no reason.
+            indices = manager.resolve_play_indices(test_indices or None)
             any_failed = False
+            passed_count = 0
             stderr_console = Console(stderr=True, highlight=False)
-            for i, item in enumerate(items):
-                if multiple:
-                    stderr_console.print(f"--- test {item.index} ({item.label}) ---", style="bold blue", markup=False)
+            for index in indices:
+                item = await manager.play_one(index)
                 result = item.result
-                if result.error is not None:
-                    self.eprint(f"ERROR: {result.error.message}")
-                    any_failed = True
-                elif not result.comparison.success:
-                    any_failed = True
-                stderr_console.print(f"success: {result.comparison.success}", style="bold blue", markup=False)
-                if result.comparison.expected is not None:
-                    self.eprint(f"expected: {result.comparison.expected!r}")
-                if result.comparison.found is not None:
-                    self.eprint(f"found: {result.comparison.found!r}")
-                if result.output:
-                    stderr_console.print("--- output ---", style="bold blue", markup=False)
-                    print(result.output)
-                if multiple and i != len(items) - 1:
-                    print()
-            if multiple:
-                passed = sum(1 for item in items if item.result.error is None and item.result.comparison.success)
-                stderr_console.print(f"{passed}/{len(items)} passed", style="bold blue", markup=False)
+                failed = result.error is not None or not result.comparison.success
+                any_failed = any_failed or failed
+                passed_count += 0 if failed else 1
+                status = "FAIL" if failed else "PASS"
+                stderr_console.print(f"[{status}] test {item.index} ({item.label})", style="bold blue", markup=False)
+                if failed:
+                    if result.error is not None:
+                        self.eprint(f"  ERROR: {result.error.message}")
+                    if result.comparison.expected is not None and result.comparison.found is not None:
+                        self.show_diff(result.comparison.expected, result.comparison.found)
+                    if result.output:
+                        stderr_console.print("--- output ---", style="bold blue", markup=False)
+                        _print_captured_output(result.output)
+                elif show_stdout:
+                    _print_captured_output(result.output)
+            if len(indices) > 1:
+                stderr_console.print(f"{passed_count}/{len(indices)} passed", style="bold blue", markup=False)
             if any_failed:
                 raise CliExit(1)
         p = cmd.get_parser()
@@ -2718,40 +2741,63 @@ class CgCli(CliBase):
                        help="1-based test case index/indices to run against (see "
                             "CgTestSessionTestCase.index). With none given, runs every "
                             "downloaded test case (.meta/tests/).")
+        p.add_argument("--show-stdout", default=False, action="store_true",
+                       help="Print captured stdout even for a passing test. Always printed for "
+                            "a failing/errored test regardless.")
         return handler
 
     @cli_command("Run the current local solution.src against the downloaded .meta/tests/ test "
                  "cases entirely locally (no network access at all)--by shelling out to the "
                  "appropriate interpreter as a subprocess, comparing captured stdout to each "
-                 "test's expected output. Currently only Python3 solutions are supported. Exits "
-                 "non-zero if any test case fails.")
-    async def cmd_puzzle__play_local(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+                 "test's expected output (see `cg puzzle play-server` for the real, server-side "
+                 "equivalent). Currently only Python3 solutions are supported. With no "
+                 "TEST-INDEX arguments, runs every downloaded test case; give one or more "
+                 "1-based indices to run just those. Exits non-zero if any test case fails. "
+                 "Captured stdout is only printed for a failing test (as part of its diff), "
+                 "unless --show-stdout is given.")
+    async def cmd_puzzle__play(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             puzzle_dir: Path | None = self.args.puzzle_dir
-            test_index: int | None = self.args.test_index
+            test_indices: list[int] = self.args.test_indices
+            show_stdout: bool = self.args.show_stdout
             resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
             manager = CgPuzzleManager(resolved_dir, cast(CgClient, None))
-            try:
-                results = manager.play_local(test_index)
-            except CgPuzzleLocalTestFailedError as e:
-                results = e.results
-                for result in results:
-                    status = "PASS" if result.passed else "FAIL"
-                    self.eprint(f"[{status}] test {result.index} ({result.label})")
-                    if not result.passed:
-                        if result.timed_out:
-                            self.eprint("  timed out")
-                        self.show_diff(result.expected_output, result.actual_output)
-                        if result.stderr:
-                            self.eprint("--- stderr ---")
-                            self.eprint(result.stderr)
-                raise CliExit(1) from e
-            for result in results:
-                self.eprint(f"[PASS] test {result.index} ({result.label})")
+            stderr_console = Console(stderr=True, highlight=False)
+            # Resolved and looped here, rather than delegating the whole batch to
+            # manager.play_local(), so each result is displayed as soon as it's available--see
+            # `cg puzzle play-server`'s handler for the same reasoning (network latency there;
+            # a slow/near-timeout local subprocess run here).
+            test_cases = manager.resolve_play_local_test_cases(test_indices or None)
+            any_failed = False
+            passed_count = 0
+            for test_case in test_cases:
+                result = manager.play_local_one(test_case)
+                status = "PASS" if result.passed else "FAIL"
+                stderr_console.print(f"[{status}] test {result.index} ({result.label})", style="bold blue", markup=False)
+                if not result.passed:
+                    any_failed = True
+                    if result.timed_out:
+                        self.eprint("  timed out")
+                    self.show_diff(result.expected_output, result.actual_output)
+                    if result.stderr:
+                        stderr_console.print("--- stderr ---", style="bold blue", markup=False)
+                        self.eprint(result.stderr)
+                else:
+                    passed_count += 1
+                    if show_stdout:
+                        _print_captured_output(result.actual_output)
+            if len(test_cases) > 1:
+                stderr_console.print(f"{passed_count}/{len(test_cases)} passed", style="bold blue", markup=False)
+            if any_failed:
+                raise CliExit(1)
         p = cmd.get_parser()
-        p.add_argument("test_index", type=int, nargs="?", default=None, metavar="TEST-INDEX",
-                       help="Only run the downloaded test case with this index (see "
-                            ".meta/tests/<index>/). Defaults to running every downloaded test case.")
+        p.add_argument("test_indices", type=int, nargs="*", metavar="TEST-INDEX",
+                       help="1-based downloaded test case index/indices to run (see "
+                            ".meta/tests/<index>/). With none given, runs every downloaded test "
+                            "case.")
+        p.add_argument("--show-stdout", default=False, action="store_true",
+                       help="Print captured stdout even for a passing test. Always shown for a "
+                            "failing test (as part of its diff) regardless.")
         return handler
 
     @cli_command("Display the puzzle's problem statement, rendered from the cached "

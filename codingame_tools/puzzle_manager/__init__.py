@@ -3,7 +3,11 @@
    (`data/solution.src`) is ever editable, so there is no git repository involved at all.
 
    See `CgPuzzleManager` for `import_`/`repair`/`diff`/`discard_local`/`submit`/`play`/`play_local`/
-   `status`/`delete`--its module docstring covers the three-way state-split design in full;
+   `status`/`delete`--its module docstring covers the three-way state-split design in full.
+   `play`/`play_local` each have a `resolve_*`/`*_one` pair too (`resolve_play_indices`/
+   `play_one`, `resolve_play_local_test_cases`/`play_local_one`), for a caller (e.g. `cg puzzle
+   play-server`/`cg puzzle play`'s own CLI handlers) that wants to act on each result as it comes
+   in rather than waiting for the whole batch.
    `codingame_tools.puzzle_manager.schema` for the working directory's three manifest files
    (`CgPuzzleIdentity`/`CgPuzzleServerData`/`CgPuzzleData`);
    `codingame_tools.puzzle_manager.statement_render` for rendering the cached HTML statement

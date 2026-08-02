@@ -2,6 +2,69 @@
 
 ## {{UNRELEASED}}
 
+- Fix `cg puzzle play` (the local one) missing the final `N/M passed` summary line that `cg
+  puzzle play-server` already had--lost when it was restructured to stream results one at a time.
+  Also added the same summary line to `cg contribution play`, which never had one.
+
+- `cg puzzle play` (the local one) gets the same streaming treatment as `cg puzzle play-server`:
+  displays each test's result as it finishes instead of running the whole batch first.
+  `CgPuzzleManager.play_local()` is split the same way `play()` was: `resolve_play_local_test_cases()`
+  (sync, resolves the given/default test case list) and `play_local_one()` (runs a single
+  downloaded test case, never raising just because it failed)--`play_local()` itself is now just
+  a loop over those two, kept as a convenience for callers that want the whole batch (and still
+  raises `CgPuzzleLocalTestFailedError` if any failed, as before). `cg contribution play` already
+  worked this way (it was never restructured to batch-collect-then-display), so no change was
+  needed there.
+
+- `cg puzzle play-server` now displays each test's result as soon as it's available, instead of
+  running every requested test first and only then printing anything--a multi-test run no longer
+  looks stalled while the server works through earlier tests. `CgPuzzleManager.play()`'s single
+  batch call is split into two pieces a caller can use directly for this: `resolve_play_indices()`
+  (sync, resolves the given/default index list, no network) and `play_one()` (one `TestSession/
+  play` call for a single index)--`play()` itself is now just `[await play_one(i) for i in
+  resolve_play_indices(...)]`, kept as a convenience for callers that do want the whole batch.
+
+- **Breaking**: renamed CLI play commands for consistency--the entirely-local, no-network variant
+  is now plain `play` in both working-directory types, freeing up the old `play`/`play-local`
+  names' asymmetry:
+  - `cg puzzle play-local` -> `cg puzzle play`
+  - `cg puzzle play` (the real server-side `TestSession/play` call) -> `cg puzzle play-server`
+  - `cg contribution play-local` -> `cg contribution play` (unchanged behavior/output--
+    contribution has no server-side "play" equivalent, so no swap was needed there)
+
+- `cg contribution play-local`'s output now matches `cg puzzle play-local`'s format: a single
+  colored `[PASS]`/`[FAIL] ordinal side: title` line per test (folding in the ordinal/side/title
+  that used to be a separate `=== ... ===` announcement before each run), printed as each test
+  finishes rather than deferred to a separate `=== Summary ===` section at the end (removed). On
+  failure, shows a diff (via the same `show_diff` helper, instead of an unconditional raw dump)
+  for a genuine output mismatch, or the exception/timeout/crash reason otherwise, then `---
+  stderr ---` (also now colored) if there's any. `--show-stdout`/`--update-expected` still print
+  the raw captured output as before.
+- `cg puzzle play-local` now accepts one or more 1-based TEST-INDEX arguments (previously just
+  one, or none for "all downloaded")--matching `cg puzzle play`'s already-normalized argument
+  style. `CgPuzzleManager.play_local()`'s signature changed to match: `test_indices: list[int] |
+  None = None`, run in the order given.
+
+- Fix `cg puzzle play`/`play-local` and `cg contribution play-local` running captured stdout
+  straight into whatever gets printed next (the following test's `[PASS]`/`[FAIL]` header, or the
+  shell prompt) when the program under test didn't itself end its output with a newline--`print(
+  ..., end="")` preserved the output byte-for-byte but assumed it already ended in `\n`, which
+  isn't guaranteed. New `_print_captured_output()` helper prints the captured text verbatim and
+  then guarantees exactly one trailing newline regardless.
+
+- `cg puzzle play`, `cg puzzle play-local`, and `cg contribution play-local` no longer dump a
+  passing test's captured stdout by default--only a failing (or errored) test's output is shown,
+  same as before. Pass `--show-stdout` to always print it regardless of pass/fail.
+  `cg contribution play-local --update-expected` implies `--show-stdout` (the point of that flag
+  is to review the new output being accepted as the baseline).
+- `cg puzzle play`'s output now matches `cg puzzle play-local`'s format: `[PASS]`/`[FAIL] test N
+  (label)` per test (bold blue, like the section headers below it) instead of the old `--- test N
+  ---`/`success: True`/`expected:`/`found:` lines. On failure, shows a unified diff (via the same
+  `show_diff` play-local uses) when the server's comparison data has both `expected`/`found`, then
+  the raw combined output under a `--- output ---` header (bold blue)--the closest remote analog
+  to play-local's `--- stderr ---` section. `cg puzzle play-local`'s own `[PASS]`/`[FAIL]`/
+  `--- stderr ---` lines are now colored the same way (previously plain).
+
 - **Breaking**: collapsed the never-built sync/async client split. `codingame_tools.client.sync`
   (an empty placeholder) is deleted; `codingame_tools.client.async_` is flattened up to
   `codingame_tools.client` (e.g. `codingame_tools.client.async_.client` -> `codingame_tools.

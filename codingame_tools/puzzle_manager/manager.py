@@ -85,7 +85,12 @@ from .schema import (
     CgPuzzleIdentity,
     CgPuzzleServerData,
 )
-from .test_cases_dir import TESTS_SUBDIR_NAME, download_test_cases, list_downloaded_test_cases
+from .test_cases_dir import (
+    TESTS_SUBDIR_NAME,
+    CgPuzzleDownloadedTestCase,
+    download_test_cases,
+    list_downloaded_test_cases,
+)
 
 __all__ = [
     "DATA_SUBDIR_NAME",
@@ -712,30 +717,87 @@ class CgPuzzleManager:
 
     # --- play ------------------------------------------------------------------------------------
 
-    async def play(self, test_indices: list[int] | None = None) -> list[CgPuzzleRemoteTestResult]:
-        """Run the current local `data/solution.src` against one or more of the puzzle's test
+    def resolve_play_indices(self, test_indices: list[int] | None = None) -> list[int]:
+        """Resolve which 1-based test indices `play()`/`play_one()` should run against:
+           `test_indices` if given, unchanged; otherwise every downloaded test case's index
+           (`.meta/tests/`, i.e. every test case this working directory actually knows about--NOT
+           necessarily every test case the puzzle has). No network access--for a caller that wants
+           to loop over `play_one()` itself (e.g. to display each result as it comes in, rather
+           than waiting for the whole batch--see `play()`), this is the piece that used to be
+           done implicitly inside `play()`.
+
+        Raises:
+            FileNotFoundError: if this working directory has never been imported, or (only when
+                                `test_indices` is not given) has no downloaded test cases at all.
+            CgPuzzleManagerError: if `.meta/` is missing (run `repair()` first).
+        """
+        self._require_state()
+        if test_indices is not None:
+            return test_indices
+        downloaded = list_downloaded_test_cases(self.tests_dir)
+        if not downloaded:
+            raise FileNotFoundError(f"{self.tests_dir} has no downloaded test cases--run `cg puzzle repair` first.")
+        return [tc.index for tc in downloaded]
+
+    async def play_one(self, index: int) -> CgPuzzleRemoteTestResult:
+        """Run the current local `data/solution.src` against a single one of the puzzle's test
            cases via the server (`TestSession/play`--the IDE's "Test"/"Run" button, as opposed
-           to `submit()`'s full "Submit"). Each index is a separate live API call--there is no
-           batch form of `TestSession/play`--run sequentially, in the order given.
+           to `submit()`'s full "Submit"). One live API call.
 
            CONFIRMED LIVE (2026-08-01): this call has a side effect beyond just running the given
-           test case(s)--the server durably persists whatever `code` was sent as the test
-           session's current answer (the same "current answer" returned by
-           `TestSession/startTestSession`, and visible in the web IDE from any browser), whether
-           or not the test case actually passes. This is NOT a grading/submission event (no
-           `Report`/score is produced), and there's no separate "just save, don't run" call--the
-           web IDE itself has no autosave either (confirmed: editing code there without running a
-           test, then navigating away, prompts "All changes will be lost")--so running at least
-           one test case is, in effect, the only way to persist a change short of a real
-           submission. `submit()` also persists the code this way (again regardless of whether
-           the submission scores well), as a side effect of grading it.
+           test case--the server durably persists whatever `code` was sent as the test session's
+           current answer (the same "current answer" returned by `TestSession/startTestSession`,
+           and visible in the web IDE from any browser), whether or not the test case actually
+           passes. This is NOT a grading/submission event (no `Report`/score is produced), and
+           there's no separate "just save, don't run" call--the web IDE itself has no autosave
+           either (confirmed: editing code there without running a test, then navigating away,
+           prompts "All changes will be lost")--so running at least one test case is, in effect,
+           the only way to persist a change short of a real submission. `submit()` also persists
+           the code this way (again regardless of whether the submission scores well), as a side
+           effect of grading it.
+
+        Args:
+            index: 1-based index to run against (see `CgTestSessionTestCase.index`). Need not be
+                   locally downloaded--the server runs by index alone.
+
+        Returns:
+            The `CgPuzzleRemoteTestResult` for this index.
+
+        Raises:
+            FileNotFoundError: if this working directory has never been imported.
+            CgPuzzleManagerError: if `.meta/` is missing (run `repair()` first).
+        """
+        _, server_data, puzzle_data = self._require_state()
+        downloaded = list_downloaded_test_cases(self.tests_dir)
+        labels_by_index = {tc.index: tc.label for tc in downloaded}
+        code = self.solution_file.read_text(encoding="utf-8")
+        request = CgPlayRequest(
+                code=code,
+                programming_language_id=puzzle_data.solution_language,
+                multiple_languages=CgMultipleLanguagesTestParams(test_index=index),
+            )
+        play_result = await self.client.services.test_session.play(server_data.test_session_handle, request)
+        return CgPuzzleRemoteTestResult(
+                index=index, label=labels_by_index.get(index, f"test {index}"), result=play_result,
+            )
+
+    async def play(self, test_indices: list[int] | None = None) -> list[CgPuzzleRemoteTestResult]:
+        """Run the current local `data/solution.src` against one or more of the puzzle's test
+           cases via the server (`TestSession/play`). Convenience batch wrapper around
+           `play_one()`--each index is a separate live API call (there is no batch form of
+           `TestSession/play`), run sequentially, in the order given; see `play_one()`'s docstring
+           for the shared side-effect caveat.
+
+           A caller that wants to display/act on each result as soon as it's available, rather
+           than waiting for every index to finish first, should call `resolve_play_indices()` and
+           `play_one()` directly in its own loop instead of this method (see `cg puzzle
+           play-server`'s CLI implementation for exactly that).
 
         Args:
             test_indices: 1-based indices to run against (see `CgTestSessionTestCase.index`).
                           Need not be locally downloaded--the server runs by index alone.
-                          If not given, runs every downloaded test case (`.meta/tests/`, i.e.
-                          every test case this working directory actually knows about--NOT
-                          necessarily every test case the puzzle has).
+                          If not given, runs every downloaded test case (`.meta/tests/`)--see
+                          `resolve_play_indices()`.
 
         Returns:
             One `CgPuzzleRemoteTestResult` per index, in the order run.
@@ -745,68 +807,27 @@ class CgPuzzleManager:
                                 `test_indices` is not given) has no downloaded test cases at all.
             CgPuzzleManagerError: if `.meta/` is missing (run `repair()` first).
         """
-        _, server_data, puzzle_data = self._require_state()
-        downloaded = list_downloaded_test_cases(self.tests_dir)
-        labels_by_index = {tc.index: tc.label for tc in downloaded}
-        if test_indices is None:
-            if not downloaded:
-                raise FileNotFoundError(f"{self.tests_dir} has no downloaded test cases--run `cg puzzle repair` first.")
-            indices = [tc.index for tc in downloaded]
-        else:
-            indices = test_indices
-
-        code = self.solution_file.read_text(encoding="utf-8")
-        results: list[CgPuzzleRemoteTestResult] = []
-        for index in indices:
-            request = CgPlayRequest(
-                    code=code,
-                    programming_language_id=puzzle_data.solution_language,
-                    multiple_languages=CgMultipleLanguagesTestParams(test_index=index),
-                )
-            play_result = await self.client.services.test_session.play(server_data.test_session_handle, request)
-            results.append(CgPuzzleRemoteTestResult(
-                    index=index, label=labels_by_index.get(index, f"test {index}"), result=play_result,
-                ))
-        return results
+        indices = self.resolve_play_indices(test_indices)
+        return [await self.play_one(index) for index in indices]
 
     # --- play_local --------------------------------------------------------------------------
 
-    def play_local(
+    def resolve_play_local_test_cases(
                 self,
-                test_index: int | None = None,
-                *,
-                timeout: float = DEFAULT_RUN_TIMEOUT_SECONDS,
-            ) -> list[CgPuzzleLocalTestResult]:
-        """Run the current local `data/solution.src` against the downloaded `.meta/tests/` test
-           cases entirely locally--no network access at all, unlike `play()`--by shelling out to
-           the appropriate interpreter/compiler as a subprocess (see
-           `codingame_tools.test_runner.run_solution_locally`) and comparing captured stdout to
-           each test case's expected `output.txt`.
-
-           This is the general-purpose, batch runner. For stepping through `solution.src` in a
-           debugger against a specific test case's input instead, see
-           `codingame_tools.test_runner.debug_stdin` (launched directly, not through this
-           method--a subprocess like this one spawns can't be stepped into).
-
-        Args:
-            test_index: If given, only run the test case with this index (the same numbering
-                        `.meta/tests/`'s directory names and `play()`'s own `test_index` use).
-                        Defaults to running every downloaded test case.
-            timeout:    Per-test-case wall-clock timeout in seconds--see
-                        `codingame_tools.test_runner.DEFAULT_RUN_TIMEOUT_SECONDS`.
-
-        Returns:
-            One `CgPuzzleLocalTestResult` per test case run, in index order.
+                test_indices: list[int] | None = None,
+            ) -> list[CgPuzzleDownloadedTestCase]:
+        """Resolve which downloaded test cases `play_local()`/`play_local_one()` should run
+           against: the downloaded test cases matching `test_indices`, in the order given, if
+           given; otherwise every downloaded test case (`.meta/tests/`). No subprocess execution
+           --for a caller that wants to loop over `play_local_one()` itself (e.g. to display each
+           result as it comes in, rather than waiting for the whole batch--see `play_local()`),
+           this is the piece that used to be done implicitly inside `play_local()`.
 
         Raises:
             FileNotFoundError: if this working directory has never been imported, or has no
                                 downloaded test cases at all (run `cg puzzle repair` first).
-            CgPuzzleManagerError: if `test_index` doesn't match any downloaded test case.
-            CgLocalRunUnsupportedLanguageError: if `data/puzzle-data.json`'s `solution_language`
-                                                 isn't yet supported by `codingame_tools.
-                                                 test_runner.run_solution_locally`.
-            CgPuzzleLocalTestFailedError: if any test case's output didn't match (or the solution
-                                           crashed/timed out)--carries every result via `.results`.
+            CgPuzzleManagerError: if `test_indices` contains an index with no downloaded test
+                                   case.
         """
         identity = self.load_identity()
         if identity is None:
@@ -814,29 +835,110 @@ class CgPuzzleManager:
                     f"{self.identity_file} does not exist--this working directory has never "
                     "been imported (see `cg puzzle import`)."
                 )
-        puzzle_data = self.load_puzzle_data()
-        if puzzle_data is None:
+        if self.load_puzzle_data() is None:
             raise FileNotFoundError(f"{self.puzzle_data_file} does not exist--this working directory is in an inconsistent state.")
         downloaded = list_downloaded_test_cases(self.tests_dir)
         if not downloaded:
             raise FileNotFoundError(f"{self.tests_dir} has no downloaded test cases--run `cg puzzle repair` first.")
-        if test_index is not None:
-            downloaded = [tc for tc in downloaded if tc.index == test_index]
-            if not downloaded:
-                raise CgPuzzleManagerError(f"No downloaded test case with index {test_index}.")
+        if test_indices is None:
+            return downloaded
+        by_index = {tc.index: tc for tc in downloaded}
+        test_cases: list[CgPuzzleDownloadedTestCase] = []
+        for index in test_indices:
+            test_case = by_index.get(index)
+            if test_case is None:
+                raise CgPuzzleManagerError(f"No downloaded test case with index {index}.")
+            test_cases.append(test_case)
+        return test_cases
 
-        results: list[CgPuzzleLocalTestResult] = []
-        for test_case in downloaded:
-            run_result = run_solution_locally(
-                    self.solution_file, puzzle_data.solution_language, test_case.input_text, timeout=timeout)
-            passed = not run_result.timed_out and run_result.returncode == 0 \
-                and outputs_match(run_result.output, test_case.output_text)
-            results.append(CgPuzzleLocalTestResult(
-                    index=test_case.index, label=test_case.label, passed=passed,
-                    input=test_case.input_text, expected_output=test_case.output_text,
-                    actual_output=run_result.output, stderr=run_result.stderr,
-                    timed_out=run_result.timed_out,
-                ))
+    def play_local_one(
+                self,
+                test_case: CgPuzzleDownloadedTestCase,
+                *,
+                timeout: float = DEFAULT_RUN_TIMEOUT_SECONDS,
+            ) -> CgPuzzleLocalTestResult:
+        """Run the current local `data/solution.src` against a single downloaded test case
+           entirely locally--no network access at all, unlike `play_one()`--by shelling out to
+           the appropriate interpreter/compiler as a subprocess (see
+           `codingame_tools.test_runner.run_solution_locally`) and comparing captured stdout to
+           the test case's expected `output.txt`.
+
+           Never raises just because the test failed (crashed, timed out, or mismatched)--that's
+           reflected in the returned result's `passed`, same spirit as `codingame_tools.
+           contribution_manager.manager.CgContributionManager.run_local_test`. See `play_local()`,
+           which raises `CgPuzzleLocalTestFailedError` if any of a batch failed.
+
+           For stepping through `solution.src` in a debugger against a specific test case's input
+           instead, see `codingame_tools.test_runner.debug_stdin` (launched directly, not through
+           this method--a subprocess like this one spawns can't be stepped into).
+
+        Args:
+            test_case: Which downloaded test case to run (see `resolve_play_local_test_cases()`).
+            timeout:   Wall-clock timeout in seconds--see `codingame_tools.test_runner.
+                       DEFAULT_RUN_TIMEOUT_SECONDS`.
+
+        Returns:
+            The outcome--see `CgPuzzleLocalTestResult`.
+
+        Raises:
+            FileNotFoundError: if this working directory has never been imported.
+            CgLocalRunUnsupportedLanguageError: if `data/puzzle-data.json`'s `solution_language`
+                                                 isn't yet supported by `codingame_tools.
+                                                 test_runner.run_solution_locally`.
+        """
+        puzzle_data = self.load_puzzle_data()
+        if puzzle_data is None:
+            raise FileNotFoundError(f"{self.puzzle_data_file} does not exist--this working directory is in an inconsistent state.")
+        run_result = run_solution_locally(
+                self.solution_file, puzzle_data.solution_language, test_case.input_text, timeout=timeout)
+        passed = not run_result.timed_out and run_result.returncode == 0 \
+            and outputs_match(run_result.output, test_case.output_text)
+        return CgPuzzleLocalTestResult(
+                index=test_case.index, label=test_case.label, passed=passed,
+                input=test_case.input_text, expected_output=test_case.output_text,
+                actual_output=run_result.output, stderr=run_result.stderr,
+                timed_out=run_result.timed_out,
+            )
+
+    def play_local(
+                self,
+                test_indices: list[int] | None = None,
+                *,
+                timeout: float = DEFAULT_RUN_TIMEOUT_SECONDS,
+            ) -> list[CgPuzzleLocalTestResult]:
+        """Run the current local `data/solution.src` against the downloaded `.meta/tests/` test
+           cases entirely locally--no network access at all, unlike `play()`. Convenience batch
+           wrapper around `play_local_one()`, run sequentially, in the order given.
+
+           A caller that wants to display/act on each result as soon as it's available, rather
+           than waiting for every test case to finish first, should call
+           `resolve_play_local_test_cases()` and `play_local_one()` directly in its own loop
+           instead of this method (see `cg puzzle play`'s CLI implementation for exactly that).
+
+        Args:
+            test_indices: If given, only run the downloaded test cases with these indices (the
+                          same numbering `.meta/tests/`'s directory names and `play()`'s own
+                          `test_indices` use), run in the order given. Defaults to running every
+                          downloaded test case--see `resolve_play_local_test_cases()`.
+            timeout:    Per-test-case wall-clock timeout in seconds--see
+                        `codingame_tools.test_runner.DEFAULT_RUN_TIMEOUT_SECONDS`.
+
+        Returns:
+            One `CgPuzzleLocalTestResult` per test case run, in the order run.
+
+        Raises:
+            FileNotFoundError: if this working directory has never been imported, or has no
+                                downloaded test cases at all (run `cg puzzle repair` first).
+            CgPuzzleManagerError: if `test_indices` contains an index with no downloaded test
+                                   case.
+            CgLocalRunUnsupportedLanguageError: if `data/puzzle-data.json`'s `solution_language`
+                                                 isn't yet supported by `codingame_tools.
+                                                 test_runner.run_solution_locally`.
+            CgPuzzleLocalTestFailedError: if any test case's output didn't match (or the solution
+                                           crashed/timed out)--carries every result via `.results`.
+        """
+        test_cases = self.resolve_play_local_test_cases(test_indices)
+        results = [self.play_local_one(test_case, timeout=timeout) for test_case in test_cases]
         if any(not r.passed for r in results):
             raise CgPuzzleLocalTestFailedError(results)
         return results

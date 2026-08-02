@@ -662,6 +662,76 @@ async def test_play_with_no_downloaded_tests_and_no_args_raises(tmp_path: Path) 
         await manager.play()
 
 
+# --- resolve_play_indices / play_one (the pieces play() is built from, exposed for a caller ----
+# --- that wants to stream results one at a time--see `cg puzzle play-server`'s CLI handler) -----
+
+
+async def test_resolve_play_indices_returns_given_indices_unchanged(tmp_path: Path) -> None:
+    session = _make_test_session()
+    client, _, _, _ = _make_fake_client(session)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe")
+
+    assert manager.resolve_play_indices([5, 2, 5]) == [5, 2, 5]
+
+
+async def test_resolve_play_indices_defaults_to_every_downloaded_test_case(tmp_path: Path) -> None:
+    session = _make_test_session()  # 2 downloaded test cases: index 1 "Test 1", index 2 "Test 2"
+    client, _, _, _ = _make_fake_client(session)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe")
+
+    assert manager.resolve_play_indices() == [1, 2]
+
+
+async def test_resolve_play_indices_requires_prior_import(tmp_path: Path) -> None:
+    manager = CgPuzzleManager(tmp_path, object())  # type: ignore[arg-type]
+    with pytest.raises(FileNotFoundError):
+        manager.resolve_play_indices()
+
+
+async def test_resolve_play_indices_with_no_downloaded_tests_and_no_args_raises(tmp_path: Path) -> None:
+    session = _make_test_session()
+    client, _, _, _ = _make_fake_client(session)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe")
+    shutil.rmtree(manager.tests_dir)
+
+    with pytest.raises(FileNotFoundError):
+        manager.resolve_play_indices()
+
+
+async def test_play_one_runs_a_single_index(tmp_path: Path) -> None:
+    session = _make_test_session()
+    play_result = CgPlayResult(output="1\n", comparison=CgPlayComparison(success=True))
+    client, _, test_session_service, _ = _make_fake_client(session, play_result=play_result)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe")
+
+    item = await manager.play_one(2)
+
+    assert item.index == 2
+    assert item.label == "Test 2"
+    assert item.result is play_result
+    assert len(test_session_service.play_calls) == 1
+
+
+async def test_play_is_equivalent_to_looping_resolve_play_indices_and_play_one(tmp_path: Path) -> None:
+    """play() is documented as a thin convenience wrapper--confirm it actually behaves like one."""
+    session = _make_test_session()
+    play_result = CgPlayResult(output="1\n", comparison=CgPlayComparison(success=True))
+    client, _, test_session_service, _ = _make_fake_client(session, play_result=play_result)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe")
+
+    via_play = await manager.play([2, 1])
+    test_session_service.play_calls.clear()
+    via_manual_loop = [await manager.play_one(index) for index in manager.resolve_play_indices([2, 1])]
+
+    assert [i.index for i in via_play] == [i.index for i in via_manual_loop]
+    assert [i.label for i in via_play] == [i.label for i in via_manual_loop]
+
+
 # --- diff ------------------------------------------------------------------------------------
 
 
@@ -795,17 +865,26 @@ async def test_play_local_all_pass(tmp_path: Path) -> None:
 async def test_play_local_with_explicit_test_index_runs_only_that_one(tmp_path: Path) -> None:
     manager = await _import_with_doubling_solution(tmp_path)
 
-    results = manager.play_local(2)
+    results = manager.play_local([2])
 
     assert [r.index for r in results] == [2]
     assert results[0].passed
+
+
+async def test_play_local_with_multiple_explicit_indices_runs_each_in_given_order(tmp_path: Path) -> None:
+    manager = await _import_with_doubling_solution(tmp_path)
+
+    results = manager.play_local([2, 1])
+
+    assert [r.index for r in results] == [2, 1]
+    assert all(r.passed for r in results)
 
 
 async def test_play_local_unknown_test_index_raises(tmp_path: Path) -> None:
     manager = await _import_with_doubling_solution(tmp_path)
 
     with pytest.raises(CgPuzzleManagerError):
-        manager.play_local(99)
+        manager.play_local([99])
 
 
 async def test_play_local_raises_and_reports_mismatch(tmp_path: Path) -> None:
@@ -837,6 +916,74 @@ async def test_play_local_requires_downloaded_tests(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError):
         manager.play_local()
+
+
+# --- resolve_play_local_test_cases / play_local_one (the pieces play_local() is built from, ----
+# --- exposed for a caller that wants to stream results--see `cg puzzle play`'s CLI handler) -----
+
+
+async def test_resolve_play_local_test_cases_returns_given_indices_in_order(tmp_path: Path) -> None:
+    manager = await _import_with_doubling_solution(tmp_path)
+
+    test_cases = manager.resolve_play_local_test_cases([2, 1])
+
+    assert [tc.index for tc in test_cases] == [2, 1]
+
+
+async def test_resolve_play_local_test_cases_defaults_to_every_downloaded_test_case(tmp_path: Path) -> None:
+    manager = await _import_with_doubling_solution(tmp_path)
+
+    test_cases = manager.resolve_play_local_test_cases()
+
+    assert [tc.index for tc in test_cases] == [1, 2]
+
+
+async def test_resolve_play_local_test_cases_unknown_index_raises(tmp_path: Path) -> None:
+    manager = await _import_with_doubling_solution(tmp_path)
+
+    with pytest.raises(CgPuzzleManagerError):
+        manager.resolve_play_local_test_cases([99])
+
+
+async def test_resolve_play_local_test_cases_requires_prior_import(tmp_path: Path) -> None:
+    manager = CgPuzzleManager(tmp_path, object())  # type: ignore[arg-type]
+    with pytest.raises(FileNotFoundError):
+        manager.resolve_play_local_test_cases()
+
+
+async def test_play_local_one_runs_a_single_test_case(tmp_path: Path) -> None:
+    manager = await _import_with_doubling_solution(tmp_path)
+    test_case = manager.resolve_play_local_test_cases([2])[0]
+
+    result = manager.play_local_one(test_case)
+
+    assert result.index == 2
+    assert result.passed
+    assert result.actual_output == "20\n"
+
+
+async def test_play_local_one_never_raises_for_a_failing_test(tmp_path: Path) -> None:
+    manager = await _import_with_doubling_solution(tmp_path)
+    (tmp_path / "data" / "solution.src").write_text("n = int(input())\nprint(n * 3)\n")  # wrong
+    test_case = manager.resolve_play_local_test_cases([1])[0]
+
+    result = manager.play_local_one(test_case)
+
+    assert not result.passed
+    assert result.actual_output == "63\n"
+
+
+async def test_play_local_is_equivalent_to_looping_resolve_and_play_local_one(tmp_path: Path) -> None:
+    """play_local() is documented as a thin convenience wrapper--confirm it behaves like one."""
+    manager = await _import_with_doubling_solution(tmp_path)
+
+    via_play_local = manager.play_local([2, 1])
+    via_manual_loop = [
+            manager.play_local_one(tc) for tc in manager.resolve_play_local_test_cases([2, 1])
+        ]
+
+    assert [r.index for r in via_play_local] == [r.index for r in via_manual_loop]
+    assert [r.actual_output for r in via_play_local] == [r.actual_output for r in via_manual_loop]
 
 
 # --- status ------------------------------------------------------------------------------------

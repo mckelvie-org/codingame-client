@@ -41,12 +41,12 @@ cg whoami
 
 cg puzzle import <puzzle-id> my-puzzle
 cd my-puzzle && $EDITOR data/solution.src
-cg puzzle play-local               # run locally against downloaded test cases
+cg puzzle play                     # run locally against downloaded test cases
 cg puzzle submit                   # submit to CodinGame for credit
 
 cg contribution import <handle> my-contribution
 cd my-contribution && $EDITOR data/solution.src
-cg contribution play-local
+cg contribution play
 cg contribution push               # push local commits to the server
 ```
 

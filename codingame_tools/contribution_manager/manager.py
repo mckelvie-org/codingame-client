@@ -368,7 +368,7 @@ class CgContributionLocalTestResult:
     exception: str | None = None
     """Set by a caller (not by `run_local_test` itself, which raises rather than returning a
        result if something goes genuinely wrong) when a batch runner catches and continues past an
-       unexpected exception for this one test case--see `cg contribution play-local`."""
+       unexpected exception for this one test case--see `cg contribution play`."""
 
 
 class CgContributionLocalTestFailedError(CgContributionManagerError):
@@ -1771,7 +1771,7 @@ class CgContributionManager:
 
            Never raises just because the test failed (crashed, timed out, or mismatched)--that's
            reflected in the returned result's `passed`, for a caller running a batch of these to
-           collect and report on afterward (see `cg contribution play-local`, which is also where
+           collect and report on afterward (see `cg contribution play`, which is also where
            "a test raising an unexpected exception" is caught and turned into a result with
            `exception` set--this method itself doesn't do that, since it only ever runs one test).
 
@@ -1827,7 +1827,7 @@ class CgContributionManager:
             ) -> list[CgContributionLocalTestResult]:
         """Convenience batch wrapper around `run_local_test`: run every test case in `test_cases`
            (e.g. from `list_local_tests`) and raise if any failed--for programmatic callers that
-           just want a pass/fail outcome without `cg contribution play-local`'s own interleaved
+           just want a pass/fail outcome without `cg contribution play`'s own interleaved
            per-test console output (which needs its own loop, to catch and continue past an
            unexpected exception for one test case rather than aborting the whole batch--see the
            CLI command itself for that version).
