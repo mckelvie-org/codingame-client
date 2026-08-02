@@ -62,7 +62,22 @@ from ..client.common.protocol.contribution import (
 from ..client.common.protocol.schema import CgSolutionLanguage
 from ..client.common.raw_client import compute_content_hash
 from ..common.dataclass_wizard_x import CgEpochMillis
-from ..language import DEFAULT_RUN_TIMEOUT_SECONDS, get_language
+from ..config.resolver import default_global_data_dir
+from ..language import (
+    DEFAULT_BUILD_TIMEOUT_SECONDS,
+    DEFAULT_RUN_TIMEOUT_SECONDS,
+    TOOLCHAIN_SUBDIR_NAME,
+    CgBuildProfile,
+    CgBuildResult,
+    CgDebugSession,
+    CgLanguageContext,
+    CgLaunchTestCase,
+    CgVsCodeRequest,
+    find_workspace_root,
+    get_language,
+    remove_containers_for_root,
+    write_provisioning,
+)
 from ..test_runner import outputs_match
 from .contribution_commit_data import (
     CONTRIBUTION_COMMIT_DATA_FILE_NAME,
@@ -384,6 +399,20 @@ class CgContributionLocalTestFailedError(CgContributionManagerError):
         super().__init__(f"{len(failed)}/{len(results)} local test case(s) failed: {summary}")
 
 
+class CgContributionBuildFailedError(CgContributionManagerError):
+    """Raised by `CgContributionManager.run_local_tests` when `build_solution()` failed, so no test
+       case was run at all. Carries the full `CgBuildResult` (compiler diagnostics in
+       `.result.output`) via `.result`.
+
+       Note `build_solution()` itself does *not* raise this--it returns the result, so a caller
+       driving the build directly can display diagnostics however it likes. This exists for the
+       batch wrapper, which has no other way to say "nothing ran"."""
+
+    def __init__(self, result: CgBuildResult) -> None:
+        self.result = result
+        super().__init__(f"solution failed to build:\n{result.output}")
+
+
 def _ensure_trailing_newline(text: str) -> str:
     """See `test_cases_dir._ensure_trailing_newline`--same rationale, used here for the other
        sidecar text files (statement.cgmd, solution.src, etc.)."""
@@ -581,7 +610,13 @@ class CgContributionManager:
     contribution_dir: Path
     client: CgClient
 
-    def __init__(self, contribution_dir: Path | str, client: CgClient) -> None:
+    def __init__(
+                self,
+                contribution_dir: Path | str,
+                client: CgClient,
+                *,
+                toolchain_dir: Path | None = None,
+            ) -> None:
         # Always resolved to an absolute path: git_repo.py's subprocess calls set `cwd` to
         # `git_dir`/`work_tree` themselves (see CgGitRepo._run), so a relative `contribution_dir`
         # here would make `--git-dir=`/`--work-tree=` (built from it) resolve against the *wrong*
@@ -591,6 +626,10 @@ class CgContributionManager:
         # `contribution/data`, not the original cwd).
         self.contribution_dir = Path(contribution_dir).resolve()
         self.client = client
+        self.toolchain_dir = (
+                Path(toolchain_dir) if toolchain_dir is not None
+                else default_global_data_dir() / TOOLCHAIN_SUBDIR_NAME
+            )
 
     # --- paths -------------------------------------------------------------------------------
 
@@ -619,6 +658,21 @@ class CgContributionManager:
     def _meta_dir_for(self, git_dir_in_data: bool) -> Path:
         root = self.data_dir if git_dir_in_data else self.contribution_dir
         return root / META_SUBDIR_NAME
+
+    @property
+    def meta_dir(self) -> Path:
+        """This working directory's `.meta/`--which is bistable: `data/.meta` when the git-dir lives
+           in `data/`, else `<contribution_dir>/.meta` (see the module docstring).
+
+           Unlike `git_dir`/`status_cache_file`, this **never raises**: a working directory that has
+           never been imported has no `contribution.json` to say which layout it uses, and this
+           returns the non-`data/` default rather than failing. That matters because
+           `language_context()` needs a meta dir and must stay infallible--`cg contribution play`
+           works today on a directory holding nothing but `data/contribution-data.json`, and that
+           must keep working. Callers that genuinely need the *authoritative* location for an
+           imported directory (anything touching the git-dir) must go through `git_dir`."""
+        identity = self.load_identity()
+        return self._meta_dir_for(identity.git_dir_in_data if identity is not None else False)
 
     def _git_dir_for(self, git_dir_in_data: bool) -> Path:
         return self._meta_dir_for(git_dir_in_data) / GIT_METADATA_SUBDIR_NAME
@@ -1642,6 +1696,10 @@ class CgContributionManager:
             repo.delete_ref(f"refs/heads/{VERSION_DATA_BRANCH_NAME}")
             self._write_contribution_handle(None)
         else:
+            # See CgPuzzleManager.delete: a containerized language leaves a container bind-mounted
+            # to this directory, and its name derives from the path--orphaning one means a future
+            # working directory at the same path silently attaches to it.
+            await remove_containers_for_root(self.contribution_dir)
             shutil.rmtree(self.contribution_dir)
 
     # --- status ----------------------------------------------------------------------------
@@ -1758,6 +1816,127 @@ class CgContributionManager:
             test_cases = [tc for tc in test_cases if tc.side != "validator"]
         return test_cases
 
+    def language_context(self, solution_language: CgSolutionLanguage | None = None) -> CgLanguageContext:
+        """Describe this working directory to `codingame_tools.language`--see `CgLanguageContext`.
+
+           Infallible by design: never requires this directory to have been imported (`meta_dir`
+           falls back to the non-`data/` layout when there's no `contribution.json` to say
+           otherwise). `solution_language` is only used to locate the `solution.<ext>` symlink; pass
+           `None` (or a language with no known extension) and `solution_link` is simply `None`.
+        """
+        extension = get_language(solution_language).extension if solution_language else None
+        link = self.contribution_dir / f"solution.{extension}" if extension else None
+        return CgLanguageContext(
+                root=self.contribution_dir,
+                solution_file=self.solution_file,
+                solution_link=link if link is not None and link.exists() else None,
+                meta_dir=self.meta_dir,
+                toolchain_dir=self.toolchain_dir,
+            )
+
+    async def provision_vscode(
+                self,
+                solution_language: CgSolutionLanguage,
+                *,
+                workspace_root: Path | None = None,
+                force: bool = False,
+            ) -> list[Path]:
+        """Generate this working directory's VS Code run/debug configuration, if `solution_language`
+           has any (currently only Python3), and write it into the workspace.
+
+           The test-case dropdown is generated from what's on disk right now, so it can't go stale.
+           Ordinals are deduplicated across local/validator sides--the side is its own picker.
+
+        Args:
+            solution_language: The language `data/solution.src` is written in.
+            workspace_root:    Where `.vscode/` goes. Defaults to `find_workspace_root()`--VS Code
+                                reads `launch.json` only from the workspace *root*, which is often
+                                not this working directory (see `codingame_tools.language.vscode`).
+            force:             Overwrite an existing config file that isn't strict JSON (i.e. uses
+                                JSONC comments) instead of refusing.
+
+        Returns:
+            Every path written, in write order. Empty if this language has no VS Code integration.
+
+        Raises:
+            CgVsCodeMergeError: if an existing config file can't be safely merged into.
+        """
+        resolved_workspace_root = (
+                Path(workspace_root).resolve() if workspace_root is not None
+                else find_workspace_root(self.contribution_dir)
+            )
+        seen: dict[str, str] = {}
+        for tc in self.list_local_tests():
+            seen.setdefault(tc.ordinal, tc.title)
+        test_cases = tuple(CgLaunchTestCase(id=o, label=t) for o, t in seen.items())
+        request = CgVsCodeRequest(
+                ctx=self.language_context(solution_language), kind="contribution",
+                test_cases=test_cases, workspace_root=resolved_workspace_root,
+            )
+        provisioning = await get_language(solution_language).build_vscode_provisioning(request)
+        if provisioning is None:
+            return []
+        return write_provisioning(
+                provisioning, root=self.contribution_dir,
+                workspace_root=resolved_workspace_root, force=force)
+
+    async def start_debug_session(
+                self,
+                solution_language: CgSolutionLanguage,
+                ordinal: str,
+                side: str,
+                *,
+                timeout: float = DEFAULT_BUILD_TIMEOUT_SECONDS,
+            ) -> CgDebugSession:
+        """Get the solution ready for a debugger to attach to, fed by the given test case's input--
+           see `codingame_tools.language.CgLanguage.start_debug_session`.
+
+           Only meaningful for a language whose debugger attaches to a running target (C++ via
+           gdbserver). Python3's debugger launches the program itself, so it never calls this.
+
+        Raises:
+            CgContributionManagerError: if no test case matches `ordinal`/`side`.
+            CgLanguageOperationNotSupportedError: if this language has no attach-style debugging.
+        """
+        matching = self.list_local_tests(
+                [ordinal], local=side == "local", validator=side == "validator")
+        if not matching:
+            raise CgContributionManagerError(
+                    f"No {side} test case with ordinal {ordinal!r} under {self.tests_dir}.")
+        ctx = self.language_context(solution_language)
+        return await get_language(solution_language).start_debug_session(
+                ctx, matching[0].input_file, timeout=timeout)
+
+    async def stop_debug_session(self, solution_language: CgSolutionLanguage) -> None:
+        """Tear down whatever `start_debug_session()` started. Safe to call when nothing is
+           running."""
+        await get_language(solution_language).stop_debug_session(
+                self.language_context(solution_language))
+
+    async def build_solution(
+                self,
+                solution_language: CgSolutionLanguage,
+                *,
+                profile: CgBuildProfile = "run",
+                timeout: float = DEFAULT_BUILD_TIMEOUT_SECONDS,
+            ) -> CgBuildResult:
+        """Build `data/solution.src` for local execution, if `solution_language` needs building at
+           all (Python3 doesn't--this is then an immediate no-op success).
+
+           A separate step from `run_local_test()` so a caller can display build diagnostics apart
+           from program output, report a compile error once rather than once per test case, and give
+           building its own generous timeout. Cheap to call repeatedly: an unchanged source since the
+           last successful build returns `up_to_date=True` having done nothing.
+
+           `run_local_tests()` calls this for you. A caller driving `run_local_test()` itself (as
+           `cg contribution play` does, to stream results) must call this first.
+
+        Returns:
+            A `CgBuildResult`--check `.ok`; a build failure is reported, never raised.
+        """
+        ctx = self.language_context(solution_language)
+        return await get_language(solution_language).build(ctx, profile=profile, timeout=timeout)
+
     async def run_local_test(
                 self,
                 test_case: CgContributionLocalTestCase,
@@ -1775,6 +1954,10 @@ class CgContributionManager:
            collect and report on afterward (see `cg contribution play`, which is also where
            "a test raising an unexpected exception" is caught and turned into a result with
            `exception` set--this method itself doesn't do that, since it only ever runs one test).
+
+           **Does not build.** For a language that needs compiling, call `build_solution()` first
+           (`run_local_tests()` does this for you); this method only runs the already-built
+           artifact.
 
         Args:
             test_case:         Which test case to run (see `list_local_tests`).
@@ -1794,8 +1977,9 @@ class CgContributionManager:
             CgLanguageOperationNotSupportedError: if `solution_language` isn't yet supported by
                                                    `codingame_tools.language`.
         """
+        ctx = self.language_context(solution_language)
         run_result = await get_language(solution_language).run(
-                self.solution_file, test_case.input_text, timeout=timeout)
+                ctx, test_case.input_text, timeout=timeout)
         ok = not run_result.timed_out and run_result.returncode == 0
         if update_expected:
             if ok:
@@ -1824,18 +2008,21 @@ class CgContributionManager:
                 *,
                 update_expected: bool = False,
                 timeout: float = DEFAULT_RUN_TIMEOUT_SECONDS,
+                build_timeout: float = DEFAULT_BUILD_TIMEOUT_SECONDS,
             ) -> list[CgContributionLocalTestResult]:
-        """Convenience batch wrapper around `run_local_test`: run every test case in `test_cases`
-           (e.g. from `list_local_tests`) and raise if any failed--for programmatic callers that
-           just want a pass/fail outcome without `cg contribution play`'s own interleaved
-           per-test console output (which needs its own loop, to catch and continue past an
-           unexpected exception for one test case rather than aborting the whole batch--see the
-           CLI command itself for that version).
+        """Convenience batch wrapper: call `build_solution()` once, then run every test case in
+           `test_cases` (e.g. from `list_local_tests`) via `run_local_test`, and raise if any
+           failed--for programmatic callers that just want a pass/fail outcome without
+           `cg contribution play`'s own interleaved per-test console output (which needs its own
+           loop, to catch and continue past an unexpected exception for one test case rather than
+           aborting the whole batch--see the CLI command itself for that version).
 
         Returns:
             One `CgContributionLocalTestResult` per test case, in `test_cases`' order.
 
         Raises:
+            CgContributionBuildFailedError: if the solution failed to build--carries the build
+                                             output; no test case is run.
             CgLanguageOperationNotSupportedError: if `solution_language` isn't yet supported--
                                                    raised immediately, from whichever test case
                                                    hits it first (every other test case would fail
@@ -1843,6 +2030,9 @@ class CgContributionManager:
             CgContributionLocalTestFailedError: if any test case failed--carries every result via
                                                  `.results`.
         """
+        build_result = await self.build_solution(solution_language, timeout=build_timeout)
+        if not build_result.ok:
+            raise CgContributionBuildFailedError(build_result)
         results = [
                 await self.run_local_test(tc, solution_language, update_expected=update_expected, timeout=timeout)
                 for tc in test_cases

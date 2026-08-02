@@ -9,12 +9,74 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 
 from .base import CgRunEvent, CgRunFinished, CgRunOutputChunk, CgRunResult, CgRunStream
 
-__all__ = ["run_argv_streaming"]
+__all__ = ["CgCapturedRun", "run_argv_capture", "run_argv_streaming"]
 
 _CHUNK_READ_SIZE = 4096
+
+
+@dataclass(frozen=True)
+class CgCapturedRun:
+    """The outcome of `run_argv_capture`--a whole-output batch result, for commands whose output is
+       reported after the fact rather than streamed (a compile, a `docker` control command)."""
+
+    returncode: int
+    stdout: str
+    stderr: str
+    timed_out: bool
+
+    @property
+    def ok(self) -> bool:
+        return self.returncode == 0 and not self.timed_out
+
+    @property
+    def combined(self) -> str:
+        """stdout and stderr concatenated, in that order--for diagnostics where the split doesn't
+           matter and a caller just wants everything the command said."""
+        return self.stdout + self.stderr
+
+
+async def run_argv_capture(
+            argv: list[str],
+            *,
+            timeout: float,
+            input_text: str = "",
+            env: dict[str, str] | None = None,
+            inherit_stderr: bool = False,
+        ) -> CgCapturedRun:
+    """Run `argv` to completion, capturing its output.
+
+       The batch counterpart to `run_argv_streaming`, for commands where progressive delivery isn't
+       the point--compiling, or driving `docker` itself.
+
+    Args:
+        inherit_stderr: Let the child write straight to this process's stderr instead of capturing
+                         it. Used for `docker build`, whose progress output is the only feedback
+                         during a slow cold start and would otherwise be invisible until it
+                         finished. `stderr` is then empty in the result.
+    """
+    process = await asyncio.create_subprocess_exec(
+            *argv,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=None if inherit_stderr else asyncio.subprocess.PIPE, env=env,
+        )
+    try:
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                process.communicate(input_text.encode("utf-8")), timeout=timeout)
+    except (TimeoutError, asyncio.TimeoutError):
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+        await process.wait()
+        return CgCapturedRun(returncode=-1, stdout="", stderr="", timed_out=True)
+    return CgCapturedRun(
+            returncode=process.returncode if process.returncode is not None else -1,
+            stdout=(stdout_bytes or b"").decode("utf-8", errors="replace"),
+            stderr=(stderr_bytes or b"").decode("utf-8", errors="replace"),
+            timed_out=False,
+        )
 
 
 async def run_argv_streaming(

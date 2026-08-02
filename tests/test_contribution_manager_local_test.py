@@ -189,3 +189,47 @@ async def test_run_local_tests_returns_results_when_all_pass(tmp_path: Path) -> 
 
     assert len(results) == 1
     assert results[0].passed
+
+
+# --- language context / build (infallibility invariants the Docker work depends on) --------------
+
+
+def test_meta_dir_does_not_require_an_imported_directory(tmp_path: Path) -> None:
+    """`meta_dir` must never raise, unlike `git_dir`/`status_cache_file`: `language_context()` needs
+       it, and `cg contribution play` works today on a directory holding nothing but
+       `data/contribution-data.json`. With no contribution.json to say which layout is in use, it
+       reports the non-`data/` default."""
+    manager = CgContributionManager(tmp_path, object())  # type: ignore[arg-type]
+
+    assert manager.meta_dir == manager.contribution_dir / ".meta"
+    with pytest.raises(FileNotFoundError):
+        _ = manager.git_dir  # the contrast: this one *does* require an import
+
+
+def test_language_context_is_infallible_on_a_bare_directory(tmp_path: Path) -> None:
+    manager = CgContributionManager(tmp_path, object())  # type: ignore[arg-type]
+
+    ctx = manager.language_context("Python3")
+
+    assert ctx.root == manager.contribution_dir
+    assert ctx.solution_file == manager.solution_file
+    assert ctx.solution_link is None  # no symlink on disk
+    assert ctx.meta_dir == manager.contribution_dir / ".meta"
+
+
+def test_language_context_finds_the_solution_symlink_when_present(tmp_path: Path) -> None:
+    manager = _setup(tmp_path, [_tc("A", "1\n", "1\n", is_test=True, is_validator=False)])
+    (tmp_path / "solution.py").symlink_to(Path("data") / "solution.src")
+
+    ctx = manager.language_context("Python3")
+
+    assert ctx.solution_link == tmp_path / "solution.py"
+
+
+async def test_build_solution_is_a_no_op_success_for_python(tmp_path: Path) -> None:
+    manager = _setup(tmp_path, [_tc("A", "1\n", "1\n", is_test=True, is_validator=False)])
+
+    result = await manager.build_solution("Python3")
+
+    assert result.ok
+    assert result.up_to_date

@@ -63,12 +63,13 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-ra -m \"not live and not live_unauthenticated\""
+addopts = "-ra -m \"not live and not live_unauthenticated and not docker\""
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "live_unauthenticated: hits the real CodinGame API directly (no cassette), no login required; excluded by default, never runs in CI",
     "live: hits the real CodinGame API directly (no cassette), requires a prior browser login with real credentials; excluded by default, never runs in CI",
+    "docker: builds/runs real containers via the docker CLI; slow (pulls a base image on first run) and needs a working daemon, so excluded by default. Run with `-m docker`",
 ]
 
 [tool.ruff]

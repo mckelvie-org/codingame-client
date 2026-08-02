@@ -2,6 +2,106 @@
 
 ## {{UNRELEASED}}
 
+- Containers are now strictly **one per working directory**. Container names are per-language, so
+  changing a working directory's `solution_language` previously orphaned the old language's
+  container--still running, still bind-mounted, never referenced again. Creating a container now
+  sweeps away any other one bound to the same directory first, and `cg puzzle delete` /
+  `cg contribution delete` already removed theirs (matched by label, so every language's is caught).
+  Toolchain state is decided entirely from labels read back off Docker (`cg.root`/`cg.spec` on
+  containers, `cg.managed` on images) rather than from any cache beside them, so removing a
+  container or image out-of-band--`docker rm`, Docker Desktop, `cg docker clean`--just works and cg
+  rebuilds on the next command. Speed comes from asking once instead of remembering: the common
+  path is a single `docker ps` that answers existence, spec match, running state, and strays
+  together, and a container that passes vouches for its image still existing. `cg puzzle play` over
+  20 C++ test cases went from 2.6s to 1.7s.
+
+- New `cg docker clean`: remove every container and image cg created, across all working
+  directories. Deliberately never prompts and has no `--force`--a container holds nothing but build
+  artifacts and an image is rebuilt from Dockerfiles on disk, so there is no user work in either and
+  the next build recreates whatever is needed. Useful for reclaiming disk space or forcing a clean
+  rebuild. Images are now labelled `cg.managed` when built, so they're identified by label rather
+  than guessed from tag names (an unrelated image that happens to be called `cg-*` is never
+  touched); containers are found by the `cg.root` label they already carry, which also catches ones
+  for working directories that no longer exist.
+
+- **Real C++ debugging in VS Code, with no local toolchain and no local debugger.** `cg puzzle
+  vscode` now generates a `cppdbg` configuration that breaks at the first statement, binds
+  breakpoints to the file you actually have open, and feeds the solution a test case's input on
+  stdin. The host needs nothing but Docker.
+
+  Both `gdbserver` and `gdb` run inside the container--VS Code reaches gdb through `pipeTransport`
+  shelling out to `docker exec`, and gdb then dials the container's own localhost, so no port is
+  published. Feeding stdin from a file is why a debug session is set up by `cg puzzle debug start`
+  rather than left to the debug adapter: doing the redirection in a shell we control sidesteps
+  cppdbg's stdin handling entirely. The debug profile compiles the `solution.<ext>` symlink
+  specifically so the path recorded in the debug info maps back to the file in your editor, and
+  `sourceFileMap` uses an absolute host path because the workspace root is usually a *parent* of the
+  working directory. A `devcontainer.json` is generated too, for IntelliSense over the container's
+  headers--optional, and not on the run/debug path.
+
+  New: `cg puzzle debug start|stop` and `cg contribution debug start|stop` (normally invoked by the
+  generated tasks, not by hand). Containers now run with `--init` and the ptrace allowances gdb
+  needs; the drift check that decides whether to reuse a container covers all creation flags, not
+  just the image, so changes like these recreate it automatically.
+
+- **C++ solutions now build and run, entirely inside Docker--no local toolchain required.** The
+  first non-Python language to go beyond a file extension. `cg puzzle play` / `cg contribution play`
+  work on a C++ solution exactly as they do on a Python one, and `cg puzzle build` /
+  `cg contribution build` compile without running.
+
+  How it works: one long-lived container per (working directory x language), with the working
+  directory bind-mounted **read-only** at `/src` and build artifacts living at `/build/` inside the
+  container--so the solution source stays the only durable state outside it. Rebuilds are skipped
+  when the source is unchanged (hashing the source file alone, never a tree, since `/src` contains a
+  contribution's whole git object database); failed builds are cached too, so a repeat replays the
+  same diagnostics instantly rather than recompiling. Runs enforce their timeout *inside* the
+  container, because killing the local `docker exec` client doesn't stop the process in it, and
+  force unbuffered output so a C++ solution streams progressively like Python3 does.
+
+  The toolchain image is defined by two files under `<cg data dir>/docker/<lang>/`: a cg-owned
+  `base.dockerfile` carrying a template version, and a `custom.dockerfile` that is **yours, appended
+  verbatim, and never touched by cg**. That split is what makes upgrades safe--adding a library is
+  purely additive, so cg can ship a new base without ever needing to merge with your edits (an
+  unmodified stale base upgrades silently; an edited one is left alone with a warning). Image tags
+  are content-addressed, so any change to either file rebuilds automatically, and a per-working-
+  directory `.meta/docker/<lang>/` overrides the global files when one puzzle needs something
+  different.
+
+  Deleting a working directory now also removes its containers--orphaning one would matter, not just
+  be untidy, since container names derive from the directory path and a future working directory at
+  the same path would otherwise silently attach to the stale container and its stale artifacts.
+  (`CgPuzzleManager.delete()` is `async` as a result.)
+
+  Docker-requiring tests are marked `docker` and excluded by default; run them with
+  `pdm run pytest -m docker`.
+
+- New `cg puzzle vscode` / `cg contribution vscode`: generate this working directory's VS Code
+  run/debug configuration instead of hand-maintaining it. The test-case dropdown is built from the
+  test cases actually on disk, so it can't go stale--the hand-written configuration this replaces
+  carried a note telling you to regenerate its 25-entry list by hand after every `cg puzzle import`.
+  Languages describe what they need via the new `CgLanguage.build_vscode_provisioning`; where it
+  goes and how it merges is `codingame_tools.language.vscode`'s job. Three things worth knowing:
+  configuration is written to the **workspace root**'s `.vscode/` (VS Code never reads `launch.json`
+  from a subdirectory, and a working directory is usually a subdirectory of the real workspace),
+  with `--workspace-dir` to override; re-running replaces only the entries owned by that working
+  directory, so your own configurations and other working directories' configurations survive; and
+  since `launch.json` is really JSONC, a file with comments is **refused rather than rewritten**
+  (`--force` overrides). This repo's own `.vscode/launch.json` is now generated.
+
+- Groundwork for Docker-backed language toolchains: building a solution is now an explicit step
+  separate from running it. `CgLanguage` gains `build()` (returning a `CgBuildResult`--never
+  raising, since a compile error is a routine outcome to display, not a crash) and takes a new
+  `CgLanguageContext` (working-directory root, solution file, `solution.<ext>` symlink, meta dir,
+  toolchain dir) in place of a bare solution path. Both managers gain `language_context()` and
+  `build_solution()`; `play_local()`/`run_local_tests()` build once before looping, while
+  `play_local_one()`/`run_local_test()` deliberately do not build. `cg puzzle play` and
+  `cg contribution play` build up front and report a build failure as such, instead of letting a
+  compile error surface once per test case (or, for `cg puzzle play`, as a traceback), and both
+  gain `--timeout` / `--build-timeout` (the build budget is far more generous, since a cold build
+  may pull a container image and compile from scratch). No behavior change for Python3, which needs
+  no build. `CgContributionManager` also gains a public, never-raising `meta_dir` property--unlike
+  `git_dir`, it works on a directory that was never imported, which `language_context()` requires.
+
 - New `codingame_tools.language` package: centralizes all per-language behavior (local execution,
   file extension, comment syntax, contribution-create starter stub) behind a single `CgLanguage`
   abstract interface, discovered by walking `language/languages/`'s flat modules at load time

@@ -69,7 +69,22 @@ from ..client.common.protocol.test_session import (
     CgSubmitRequest,
 )
 from ..client.common.raw_client import CgClientHttpError
-from ..language import DEFAULT_RUN_TIMEOUT_SECONDS, get_language
+from ..config.resolver import default_global_data_dir
+from ..language import (
+    DEFAULT_BUILD_TIMEOUT_SECONDS,
+    DEFAULT_RUN_TIMEOUT_SECONDS,
+    TOOLCHAIN_SUBDIR_NAME,
+    CgBuildProfile,
+    CgBuildResult,
+    CgDebugSession,
+    CgLanguageContext,
+    CgLaunchTestCase,
+    CgVsCodeRequest,
+    find_workspace_root,
+    get_language,
+    remove_containers_for_root,
+    write_provisioning,
+)
 from ..test_runner import outputs_match
 from .layout import (
     DATA_SUBDIR_NAME,
@@ -196,6 +211,20 @@ class CgPuzzleLocalTestFailedError(CgPuzzleManagerError):
         super().__init__(f"{len(failed)}/{len(results)} local test case(s) failed: {summary}")
 
 
+class CgPuzzleBuildFailedError(CgPuzzleManagerError):
+    """Raised by `CgPuzzleManager.play_local` when `build_solution()` failed, so no test case was
+       run at all. Carries the full `CgBuildResult` (compiler diagnostics in `.result.output`) via
+       `.result`.
+
+       Note `build_solution()` itself does *not* raise this--it returns the result, so a caller
+       driving the build directly can display diagnostics however it likes. This exists for the
+       batch wrapper, which has no other way to say "nothing ran"."""
+
+    def __init__(self, result: CgBuildResult) -> None:
+        self.result = result
+        super().__init__(f"solution failed to build:\n{result.output}")
+
+
 @dataclass(frozen=True)
 class CgPuzzleStatus:
     """A point-in-time summary of a puzzle working directory--see `CgPuzzleManager.status()`.
@@ -280,9 +309,25 @@ class CgPuzzleManager:
     puzzle_dir: Path
     client: CgClient
 
-    def __init__(self, puzzle_dir: Path | str, client: CgClient) -> None:
+    toolchain_dir: Path
+    """Per-user global directory holding user-tweakable per-language toolchain (container image)
+       definitions--see `codingame_tools.language.CgLanguageContext.toolchain_dir`. Global rather
+       than per-working-directory so one tweak applies everywhere. The CLI passes the value resolved
+       from config; the default keeps library/test use working with no config at all."""
+
+    def __init__(
+                self,
+                puzzle_dir: Path | str,
+                client: CgClient,
+                *,
+                toolchain_dir: Path | None = None,
+            ) -> None:
         self.puzzle_dir = Path(puzzle_dir).resolve()
         self.client = client
+        self.toolchain_dir = (
+                Path(toolchain_dir) if toolchain_dir is not None
+                else default_global_data_dir() / TOOLCHAIN_SUBDIR_NAME
+            )
 
     # --- paths -------------------------------------------------------------------------------
 
@@ -859,6 +904,138 @@ class CgPuzzleManager:
             test_cases.append(test_case)
         return test_cases
 
+    def language_context(self, solution_language: CgSolutionLanguage | None = None) -> CgLanguageContext:
+        """Describe this working directory to `codingame_tools.language`--see `CgLanguageContext`.
+
+           Infallible by design: never reads `puzzle.json`, never needs the directory to have been
+           imported. `solution_language` is only used to locate the `solution.<ext>` symlink; pass
+           `None` (or a language with no known extension) and `solution_link` is simply `None`.
+        """
+        extension = get_language(solution_language).extension if solution_language else None
+        link = self.puzzle_dir / f"solution.{extension}" if extension else None
+        return CgLanguageContext(
+                root=self.puzzle_dir,
+                solution_file=self.solution_file,
+                solution_link=link if link is not None and link.exists() else None,
+                meta_dir=self.meta_dir,
+                toolchain_dir=self.toolchain_dir,
+            )
+
+    async def provision_vscode(
+                self,
+                *,
+                workspace_root: Path | None = None,
+                force: bool = False,
+            ) -> list[Path]:
+        """Generate this working directory's VS Code run/debug configuration, if its language has
+           any (currently only Python3), and write it into the workspace.
+
+           The test-case dropdown is generated from what's on disk right now, so it can't go stale.
+
+        Args:
+            workspace_root: Where `.vscode/` goes. Defaults to `find_workspace_root()`--VS Code
+                             reads `launch.json` only from the workspace *root*, which is often
+                             not this working directory (see `codingame_tools.language.vscode`).
+            force:          Overwrite an existing config file that isn't strict JSON (i.e. uses
+                             JSONC comments) instead of refusing.
+
+        Returns:
+            Every path written, in write order. Empty if this language has no VS Code integration.
+
+        Raises:
+            FileNotFoundError: if this working directory has never been imported.
+            CgVsCodeMergeError: if an existing config file can't be safely merged into.
+        """
+        puzzle_data = self.load_puzzle_data()
+        if puzzle_data is None:
+            raise FileNotFoundError(f"{self.puzzle_data_file} does not exist--this working directory is in an inconsistent state.")
+        resolved_workspace_root = (
+                Path(workspace_root).resolve() if workspace_root is not None
+                else find_workspace_root(self.puzzle_dir)
+            )
+        test_cases = tuple(
+                CgLaunchTestCase(id=str(tc.index), label=tc.label)
+                for tc in list_downloaded_test_cases(self.tests_dir)
+            )
+        request = CgVsCodeRequest(
+                ctx=self.language_context(puzzle_data.solution_language), kind="puzzle",
+                test_cases=test_cases, workspace_root=resolved_workspace_root,
+            )
+        provisioning = await get_language(puzzle_data.solution_language).build_vscode_provisioning(request)
+        if provisioning is None:
+            return []
+        return write_provisioning(
+                provisioning, root=self.puzzle_dir, workspace_root=resolved_workspace_root, force=force)
+
+    async def start_debug_session(
+                self,
+                test_index: int,
+                *,
+                timeout: float = DEFAULT_BUILD_TIMEOUT_SECONDS,
+            ) -> CgDebugSession:
+        """Get the solution ready for a debugger to attach to, fed by test case `test_index`'s
+           input--see `codingame_tools.language.CgLanguage.start_debug_session`.
+
+           Only meaningful for a language whose debugger attaches to a running target (C++ via
+           gdbserver). Python3's debugger launches the program itself, so it never calls this.
+
+        Raises:
+            FileNotFoundError: if this working directory has never been imported.
+            CgPuzzleManagerError: if there's no downloaded test case with that index.
+            CgLanguageOperationNotSupportedError: if this language has no attach-style debugging.
+        """
+        puzzle_data = self.load_puzzle_data()
+        if puzzle_data is None:
+            raise FileNotFoundError(f"{self.puzzle_data_file} does not exist--this working directory is in an inconsistent state.")
+        test_case = next(
+                (tc for tc in list_downloaded_test_cases(self.tests_dir) if tc.index == test_index),
+                None,
+            )
+        if test_case is None:
+            raise CgPuzzleManagerError(f"No downloaded test case with index {test_index}.")
+        ctx = self.language_context(puzzle_data.solution_language)
+        return await get_language(puzzle_data.solution_language).start_debug_session(
+                ctx, test_case.input_file, timeout=timeout)
+
+    async def stop_debug_session(self) -> None:
+        """Tear down whatever `start_debug_session()` started. Safe to call when nothing is
+           running."""
+        puzzle_data = self.load_puzzle_data()
+        if puzzle_data is None:
+            return
+        ctx = self.language_context(puzzle_data.solution_language)
+        await get_language(puzzle_data.solution_language).stop_debug_session(ctx)
+
+    async def build_solution(
+                self,
+                *,
+                profile: CgBuildProfile = "run",
+                timeout: float = DEFAULT_BUILD_TIMEOUT_SECONDS,
+            ) -> CgBuildResult:
+        """Build `data/solution.src` for local execution, if its language needs building at all
+           (Python3 doesn't--this is then an immediate no-op success).
+
+           A separate step from `play_local_one()` so a caller can display build diagnostics apart
+           from program output, report a compile error once rather than once per test case, and give
+           building its own generous timeout. Cheap to call repeatedly: an unchanged source since the
+           last successful build returns `up_to_date=True` having done nothing.
+
+           `play_local()` calls this for you. A caller driving `play_local_one()` itself (as
+           `cg puzzle play` does, to stream results) must call this first.
+
+        Returns:
+            A `CgBuildResult`--check `.ok`; a build failure is reported, never raised.
+
+        Raises:
+            FileNotFoundError: if this working directory has never been imported.
+        """
+        puzzle_data = self.load_puzzle_data()
+        if puzzle_data is None:
+            raise FileNotFoundError(f"{self.puzzle_data_file} does not exist--this working directory is in an inconsistent state.")
+        language = get_language(puzzle_data.solution_language)
+        ctx = self.language_context(puzzle_data.solution_language)
+        return await language.build(ctx, profile=profile, timeout=timeout)
+
     async def play_local_one(
                 self,
                 test_case: CgPuzzleDownloadedTestCase,
@@ -875,6 +1052,9 @@ class CgPuzzleManager:
            reflected in the returned result's `passed`, same spirit as `codingame_tools.
            contribution_manager.manager.CgContributionManager.run_local_test`. See `play_local()`,
            which raises `CgPuzzleLocalTestFailedError` if any of a batch failed.
+
+           **Does not build.** For a language that needs compiling, call `build_solution()` first
+           (`play_local()` does this for you); this method only runs the already-built artifact.
 
            For stepping through `solution.src` in a debugger against a specific test case's input
            instead, see `codingame_tools.test_runner.debug_stdin` (launched directly, not through
@@ -897,8 +1077,9 @@ class CgPuzzleManager:
         puzzle_data = self.load_puzzle_data()
         if puzzle_data is None:
             raise FileNotFoundError(f"{self.puzzle_data_file} does not exist--this working directory is in an inconsistent state.")
+        ctx = self.language_context(puzzle_data.solution_language)
         run_result = await get_language(puzzle_data.solution_language).run(
-                self.solution_file, test_case.input_text, timeout=timeout)
+                ctx, test_case.input_text, timeout=timeout)
         passed = not run_result.timed_out and run_result.returncode == 0 \
             and outputs_match(run_result.output, test_case.output_text)
         return CgPuzzleLocalTestResult(
@@ -913,13 +1094,15 @@ class CgPuzzleManager:
                 test_indices: list[int] | None = None,
                 *,
                 timeout: float = DEFAULT_RUN_TIMEOUT_SECONDS,
+                build_timeout: float = DEFAULT_BUILD_TIMEOUT_SECONDS,
             ) -> list[CgPuzzleLocalTestResult]:
         """Run the current local `data/solution.src` against the downloaded `.meta/tests/` test
            cases entirely locally--no network access at all, unlike `play()`. Convenience batch
-           wrapper around `play_local_one()`, run sequentially, in the order given.
+           wrapper that calls `build_solution()` once and then loops `play_local_one()`
+           sequentially, in the order given.
 
            A caller that wants to display/act on each result as soon as it's available, rather
-           than waiting for every test case to finish first, should call
+           than waiting for every test case to finish first, should call `build_solution()`,
            `resolve_play_local_test_cases()` and `play_local_one()` directly in its own loop
            instead of this method (see `cg puzzle play`'s CLI implementation for exactly that).
 
@@ -930,6 +1113,8 @@ class CgPuzzleManager:
                           downloaded test case--see `resolve_play_local_test_cases()`.
             timeout:    Per-test-case wall-clock timeout in seconds--see
                         `codingame_tools.language.DEFAULT_RUN_TIMEOUT_SECONDS`.
+            build_timeout: Wall-clock timeout for the one-time build step--see
+                        `codingame_tools.language.DEFAULT_BUILD_TIMEOUT_SECONDS`.
 
         Returns:
             One `CgPuzzleLocalTestResult` per test case run, in the order run.
@@ -939,6 +1124,7 @@ class CgPuzzleManager:
                                 downloaded test cases at all (run `cg puzzle repair` first).
             CgPuzzleManagerError: if `test_indices` contains an index with no downloaded test
                                    case.
+            CgPuzzleBuildFailedError: if the solution failed to build--carries the build output.
             CgLanguageOperationNotSupportedError: if `data/puzzle-data.json`'s `solution_language`
                                                    isn't yet supported by `codingame_tools.
                                                    language`.
@@ -946,6 +1132,9 @@ class CgPuzzleManager:
                                            crashed/timed out)--carries every result via `.results`.
         """
         test_cases = self.resolve_play_local_test_cases(test_indices)
+        build_result = await self.build_solution(timeout=build_timeout)
+        if not build_result.ok:
+            raise CgPuzzleBuildFailedError(build_result)
         results = [await self.play_local_one(test_case, timeout=timeout) for test_case in test_cases]
         if any(not r.passed for r in results):
             raise CgPuzzleLocalTestFailedError(results)
@@ -995,7 +1184,7 @@ class CgPuzzleManager:
 
     # --- delete --------------------------------------------------------------------------------
 
-    def delete(self) -> None:
+    async def delete(self) -> None:
         """Remove this working directory entirely (`puzzle.json`, `.meta/`, `data/`, and the
            `solution.<ext>` convenience symlink)--purely local. Unlike `codingame_tools.
            contribution_manager.CgContributionManager.delete()`, there is no server-side
@@ -1014,4 +1203,9 @@ class CgPuzzleManager:
                     f"{self.identity_file} does not exist--this working directory has never "
                     "been imported (nothing to delete)."
                 )
+        # Before removing the directory: a containerized language leaves a long-lived container
+        # bind-mounted to it. Orphaning one is worse than untidy--container names are derived from
+        # the directory path, so a new working directory later created at the same path would
+        # otherwise silently attach to the stale container (and its stale build artifacts).
+        await remove_containers_for_root(self.puzzle_dir)
         shutil.rmtree(self.puzzle_dir)

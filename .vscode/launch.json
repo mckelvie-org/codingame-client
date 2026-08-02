@@ -2,64 +2,187 @@
   "version": "0.2.0",
   "inputs": [
     {
-      "id": "cgPuzzleTestIndex",
+      "id": "cg_puzzle_testCase",
       "type": "pickString",
-      "description": "CG puzzle test case index to run against (regenerate this list after `cg puzzle import`/`repair` downloads a different puzzle's tests)",
+      "description": "Test case to run puzzle's solution against",
       "options": [
-        { "label": "1: Basic North", "value": "1" },
-        { "label": "2: Basic East", "value": "2" },
-        { "label": "3: Basic South", "value": "3" },
-        { "label": "4: Basic West", "value": "4" },
-        { "label": "5: Basic North-East", "value": "5" },
-        { "label": "6: Basic South-East", "value": "6" },
-        { "label": "7: Basic South-West", "value": "7" },
-        { "label": "8: Basic North-West", "value": "8" },
-        { "label": "9: North and NE (Open)", "value": "9" },
-        { "label": "10: East and SE (Open)", "value": "10" },
-        { "label": "11: South and SW (Open)", "value": "11" },
-        { "label": "12: West and NW (Open)", "value": "12" },
-        { "label": "13: Simple Horizontal Journey", "value": "13" },
-        { "label": "14: Simple Vertical Journey", "value": "14" },
-        { "label": "15: Simple Diagonal Journey", "value": "15" },
-        { "label": "16: Simple Diagonal Journey 2", "value": "16" },
-        { "label": "17: Around the World 1", "value": "17" },
-        { "label": "18: Around the World 2", "value": "18" },
-        { "label": "19: Maze 1", "value": "19" },
-        { "label": "20: Maze 2", "value": "20" },
-        { "label": "21: Large Maze", "value": "21" },
-        { "label": "22: Simple Outside Traversal", "value": "22" },
-        { "label": "23: Horizontal Outside Traversal", "value": "23" },
-        { "label": "24: Vertical Outside Traversal", "value": "24" },
-        { "label": "25: Complete Traversal", "value": "25" }
+        {
+          "label": "1: Basic North",
+          "value": "1"
+        },
+        {
+          "label": "2: Basic East",
+          "value": "2"
+        },
+        {
+          "label": "3: Basic South",
+          "value": "3"
+        },
+        {
+          "label": "4: Basic West",
+          "value": "4"
+        },
+        {
+          "label": "5: Basic North-East",
+          "value": "5"
+        },
+        {
+          "label": "6: Basic South-East",
+          "value": "6"
+        },
+        {
+          "label": "7: Basic South-West",
+          "value": "7"
+        },
+        {
+          "label": "8: Basic North-West",
+          "value": "8"
+        },
+        {
+          "label": "9: North and NE (Open)",
+          "value": "9"
+        },
+        {
+          "label": "10: East and SE (Open)",
+          "value": "10"
+        },
+        {
+          "label": "11: South and SW (Open)",
+          "value": "11"
+        },
+        {
+          "label": "12: West and NW (Open)",
+          "value": "12"
+        },
+        {
+          "label": "13: Simple Horizontal Journey",
+          "value": "13"
+        },
+        {
+          "label": "14: Simple Vertical Journey",
+          "value": "14"
+        },
+        {
+          "label": "15: Simple Diagonal Journey",
+          "value": "15"
+        },
+        {
+          "label": "16: Simple Diagonal Journey 2",
+          "value": "16"
+        },
+        {
+          "label": "17: Around the World 1",
+          "value": "17"
+        },
+        {
+          "label": "18: Around the World 2",
+          "value": "18"
+        },
+        {
+          "label": "19: Maze 1",
+          "value": "19"
+        },
+        {
+          "label": "20: Maze 2",
+          "value": "20"
+        },
+        {
+          "label": "21: Large Maze",
+          "value": "21"
+        },
+        {
+          "label": "22: Simple Outside Traversal",
+          "value": "22"
+        },
+        {
+          "label": "23: Horizontal Outside Traversal",
+          "value": "23"
+        },
+        {
+          "label": "24: Vertical Outside Traversal",
+          "value": "24"
+        },
+        {
+          "label": "25: Complete Traversal",
+          "value": "25"
+        }
       ]
     },
     {
-      "id": "cgContributionOrdinal",
+      "id": "cg_contribution_testCase",
       "type": "pickString",
-      "description": "CG contribution test case ordinal to run against (regenerate this list after tests/ changes)",
+      "description": "Test case to run contribution's solution against",
       "options": [
-        { "label": "01: Problem statement example", "value": "01" },
-        { "label": "02: Up-to-date check and partial rebuild", "value": "02" },
-        { "label": "03: Single rule with no actions", "value": "03" },
-        { "label": "04: Up-to-date ages", "value": "04" },
-        { "label": "05: Multiple required targets", "value": "05" },
-        { "label": "06: No-action intermediates and unused rules", "value": "06" },
-        { "label": "07: Multiple targets with identical prerequisites", "value": "07" },
-        { "label": "08: Built-in macros and comments", "value": "08" },
-        { "label": "09: Multi-target rule with same-age staleness", "value": "09" },
-        { "label": "10: Same target in multiple rules", "value": "10" },
-        { "label": "11: Large partial rebuild", "value": "11" },
-        { "label": "12: Cycle detection", "value": "12" },
-        { "label": "13: Unreachable cycle detection", "value": "13" },
-        { "label": "14: All rebuild features combined", "value": "14" },
-        { "label": "15: Multiple action lines per rule", "value": "15" },
-        { "label": "16: Kitchen sink", "value": "16" }
+        {
+          "label": "01: Problem statement example",
+          "value": "01"
+        },
+        {
+          "label": "02: Up-to-date check and partial rebuild",
+          "value": "02"
+        },
+        {
+          "label": "03: Single rule with no actions",
+          "value": "03"
+        },
+        {
+          "label": "04: Up-to-date ages",
+          "value": "04"
+        },
+        {
+          "label": "05: Multiple required targets",
+          "value": "05"
+        },
+        {
+          "label": "06: No-action intermediates and unused rules",
+          "value": "06"
+        },
+        {
+          "label": "07: Multiple targets with identical prerequisites",
+          "value": "07"
+        },
+        {
+          "label": "08: Built-in macros and comments",
+          "value": "08"
+        },
+        {
+          "label": "09: Multi-target rule with same-age staleness",
+          "value": "09"
+        },
+        {
+          "label": "10: Same target in multiple rules",
+          "value": "10"
+        },
+        {
+          "label": "11: Large partial rebuild",
+          "value": "11"
+        },
+        {
+          "label": "12: Cycle detection",
+          "value": "12"
+        },
+        {
+          "label": "13: Unreachable cycle detection",
+          "value": "13"
+        },
+        {
+          "label": "14: All rebuild features combined",
+          "value": "14"
+        },
+        {
+          "label": "15: Multiple action lines per rule",
+          "value": "15"
+        },
+        {
+          "label": "16: Kitchen sink",
+          "value": "16"
+        }
       ]
     },
     {
-      "id": "cgContributionSide",
+      "id": "cg_contribution_side",
       "type": "pickString",
-      "description": "CG contribution test case side",
+      "description": "Test case side",
       "options": [
         "local",
         "validator"
@@ -67,31 +190,6 @@
     }
   ],
   "configurations": [
-    {
-      "name": "CG Puzzle: Debug solution against test case",
-      "type": "debugpy",
-      "request": "launch",
-      "module": "codingame_tools.puzzle_manager.debug",
-      "args": [
-        "${file}",
-        "${input:cgPuzzleTestIndex}"
-      ],
-      "console": "integratedTerminal",
-      "justMyCode": true
-    },
-    {
-      "name": "CG Contribution: Debug solution against test case",
-      "type": "debugpy",
-      "request": "launch",
-      "module": "codingame_tools.contribution_manager.debug",
-      "args": [
-        "${file}",
-        "${input:cgContributionOrdinal}",
-        "${input:cgContributionSide}"
-      ],
-      "console": "integratedTerminal",
-      "justMyCode": true
-    },
     {
       "name": "Python: Current File",
       "type": "debugpy",
@@ -120,6 +218,31 @@
       "args": [
         "-q",
         "tests"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "CG puzzle: Debug solution against test case",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "codingame_tools.puzzle_manager.debug",
+      "args": [
+        "${file}",
+        "${input:cg_puzzle_testCase}"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "CG contribution: Debug solution against test case",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "codingame_tools.contribution_manager.debug",
+      "args": [
+        "${file}",
+        "${input:cg_contribution_testCase}",
+        "${input:cg_contribution_side}"
       ],
       "console": "integratedTerminal",
       "justMyCode": true

@@ -8,14 +8,22 @@ from __future__ import annotations
 
 from abc import ABC
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from .vscode import CgVsCodeProvisioning, CgVsCodeRequest
+
 __all__ = [
+    "TOOLCHAIN_SUBDIR_NAME",
     "DEFAULT_RUN_TIMEOUT_SECONDS",
+    "DEFAULT_BUILD_TIMEOUT_SECONDS",
     "CgLanguage",
+    "CgLanguageContext",
     "CgLanguageOperationNotSupportedError",
+    "CgBuildProfile",
+    "CgBuildResult",
+    "CgDebugSession",
     "CgRunStream",
     "CgRunOutputChunk",
     "CgRunResult",
@@ -23,12 +31,104 @@ __all__ = [
     "CgRunEvent",
 ]
 
+TOOLCHAIN_SUBDIR_NAME = "docker"
+"""Name of the per-user global toolchain directory under the cg data dir--see
+   `CgLanguageContext.toolchain_dir`."""
+
 DEFAULT_RUN_TIMEOUT_SECONDS = 10.0
 """Default wall-clock timeout for a single local run--a solution under active development can
    easily infinite-loop; this keeps a bad run from hanging indefinitely rather than reporting it
    as a (timed-out) failure."""
 
+DEFAULT_BUILD_TIMEOUT_SECONDS = 120.0
+"""Default wall-clock timeout for `CgLanguage.build`--deliberately far more generous than
+   `DEFAULT_RUN_TIMEOUT_SECONDS`, because a cold build can involve pulling/building a container
+   image and compiling from scratch. Keeping the two separate is the whole reason building is its
+   own step: a slow first compile must never be reported as a test case timing out."""
+
 CgRunStream = Literal["stdout", "stderr"]
+
+CgBuildProfile = Literal["run", "debug"]
+"""Which flavor of build to produce. `"run"` is for normal local test execution; `"debug"` is built
+   for debuggability instead of speed (no optimization, full symbols) and may compile from a
+   different source path so a debugger's recorded paths map back to the file the user actually has
+   open. Interpreted languages ignore this entirely."""
+
+
+@dataclass(frozen=True)
+class CgLanguageContext:
+    """Everything a `CgLanguage` needs to know about *where* a solution lives, independent of any
+       particular run.
+
+       Deliberately **infallible and identity-free**: constructing one must never require a working
+       directory to have been imported (no reading `puzzle.json`/`contribution.json`, no network, no
+       failure modes). A manager can hand one out for a directory holding nothing but a solution
+       file. `input_text`/`timeout` are deliberately *not* here--those are per-call, not per-context,
+       and folding them in would defeat the "build once, run many" split."""
+
+    root: Path
+    """The puzzle/contribution working directory root (resolved absolute)--the directory holding
+       `data/`, `.meta/`, and the `solution.<ext>` symlink. For a containerized language this is the
+       mount source, which is why it's the root and not just `data/`."""
+
+    solution_file: Path
+    """`<root>/data/solution.src`--the one real, editable, submittable file."""
+
+    solution_link: Path | None
+    """`<root>/solution.<ext>` (the convenience symlink to `solution_file`) if it currently exists,
+       else `None`. Kept distinct from `solution_file` because a debug build wants to compile *this*
+       path when available: it's the path the user actually has open in an editor, so it's the one a
+       debugger's recorded source paths need to match (same reasoning as
+       `codingame_tools.test_runner.debug_stdin`'s no-realpath rule)."""
+
+    meta_dir: Path
+    """The working directory's `.meta/`--gitignored scratch space. Used for per-root toolchain
+       overrides. Note this is *not* always `<root>/.meta`: a contribution whose git-dir lives in
+       `data/` puts it at `<root>/data/.meta`."""
+
+    toolchain_dir: Path
+    """The per-user global toolchain directory (`<cg data dir>/docker`), holding the shared,
+       user-tweakable per-language image definitions. Global rather than per-root so that tweaking a
+       language's toolchain once applies to every puzzle and contribution using that language."""
+
+
+@dataclass(frozen=True)
+class CgDebugSession:
+    """A running, ready-to-attach debug target--see `CgLanguage.start_debug_session`."""
+
+    ok: bool
+    """Whether the target actually came up. A *result* rather than an exception for the same reason
+       `CgBuildResult` is: this is driven by an editor's preLaunchTask, where a failed build is a
+       routine outcome that needs displaying, not a crash."""
+
+    output: str
+    """What to show the user--build diagnostics when startup failed, otherwise usually empty."""
+
+    details: dict[str, str] = field(default_factory=dict)
+    """Language-specific facts the editor's launch configuration needs, e.g. the container name and
+       the address `gdbserver` is listening on. Deliberately untyped: what a debug adapter needs
+       varies enough per language that a fixed schema would be wrong for the second one."""
+
+
+@dataclass(frozen=True)
+class CgBuildResult:
+    """The outcome of `CgLanguage.build`.
+
+       A *result*, never an exception, even on failure: a compile error is an expected, routine
+       outcome that callers need to display (not a crash), and raising would make
+       `cg puzzle play`--which does not wrap its loop in a try/except--traceback on a typo."""
+
+    ok: bool
+    """Whether a usable artifact now exists. Always True for languages that need no build."""
+
+    output: str
+    """Compiler/build diagnostics (warnings even on success, errors on failure). Empty when there
+       was nothing to do. Never contains program output--build is a separate subprocess from run
+       precisely so that build noise can never contaminate a solution's stdout."""
+
+    up_to_date: bool
+    """True when nothing had to be rebuilt because the source was unchanged since the last
+       successful build. Lets a caller stay quiet on the common no-op path."""
 
 
 @dataclass(frozen=True)
@@ -134,17 +234,87 @@ class CgLanguage(ABC):  # noqa: B024 -- deliberately no @abstractmethod; see doc
            implementation: `None`."""
         return None
 
+    async def start_debug_session(
+                self,
+                ctx: CgLanguageContext,
+                input_file: Path,
+                *,
+                timeout: float = DEFAULT_BUILD_TIMEOUT_SECONDS,
+            ) -> CgDebugSession:
+        """Get the solution ready to be attached to by a debugger, with `input_file` as its stdin,
+           and return how to reach it.
+
+           For a compiled, containerized language this builds the debug profile and starts a stopped
+           `gdbserver`; the editor then attaches. Languages whose debugger launches the program
+           itself (Python3, via `debugpy` running `codingame_tools.puzzle_manager.debug`) don't need
+           this at all and leave it unimplemented.
+
+           Feeding stdin from a *file* is the whole reason this exists as a separate step: it lets
+           the redirection happen in a command we control, rather than relying on a debug adapter's
+           own stdin handling.
+
+        Raises:
+            CgLanguageOperationNotSupportedError: base implementation always raises.
+        """
+        raise CgLanguageOperationNotSupportedError(self, "start_debug_session")
+
+    async def stop_debug_session(self, ctx: CgLanguageContext) -> None:
+        """Tear down whatever `start_debug_session` started. Idempotent, and safe to call when
+           nothing is running--it's wired to a `postDebugTask`, which fires even if the session
+           never really began. Base implementation: no-op, so a language that needs no teardown
+           inherits correct behavior."""
+        return None
+
+    async def build_vscode_provisioning(self, request: CgVsCodeRequest) -> CgVsCodeProvisioning | None:
+        """Describe the VS Code run/debug configuration this language wants for the working
+           directory in `request`, or `None` if it has no editor integration yet.
+
+           Returns a description; it does not write anything. Where the files go and how they merge
+           with the user's existing config is `codingame_tools.language.vscode`'s job--a plugin
+           deliberately has no say in (and no knowledge of) workspace-root resolution.
+
+           Base implementation: `None`."""
+        return None
+
+    async def build(
+                self,
+                ctx: CgLanguageContext,
+                *,
+                profile: CgBuildProfile = "run",
+                timeout: float = DEFAULT_BUILD_TIMEOUT_SECONDS,
+            ) -> CgBuildResult:
+        """Produce whatever artifact `run_streaming()` needs, if this language needs one at all.
+
+           A **separate, explicit step** rather than something `run_streaming()` does implicitly, so
+           that a caller can display build diagnostics separately from program output, report a
+           compile error once instead of once per test case, and give building its own (much more
+           generous) timeout. It must be cheap to call repeatedly: a language that compiles is
+           expected to detect that the source is unchanged since the last successful build and
+           return `up_to_date=True` having done nothing.
+
+           Base implementation: an immediate no-op success, which is correct for every interpreted
+           language.
+
+        Returns:
+            A `CgBuildResult`. Never raises on a *build* failure (a compile error is a routine
+            outcome, not a crash)--check `.ok`.
+        """
+        return CgBuildResult(ok=True, output="", up_to_date=True)
+
     def run_streaming(
                 self,
-                solution_file: Path,
+                ctx: CgLanguageContext,
                 input_text: str,
                 *,
                 timeout: float = DEFAULT_RUN_TIMEOUT_SECONDS,
             ) -> AsyncIterator[CgRunEvent]:
-        """Run `solution_file` as a subprocess, feeding `input_text` to stdin, yielding
+        """Run the solution described by `ctx`, feeding `input_text` to stdin, yielding
            `CgRunOutputChunk`s tagged by stream as they're produced and ending with exactly one
            `CgRunFinished` carrying the aggregated `CgRunResult`. See `CgRunOutputChunk` for the
            stdout/stderr ordering caveat.
+
+           Does **not** build. A language that needs a build artifact expects `build()` to have been
+           called first and should fail cleanly if it hasn't.
 
         Raises:
             CgLanguageOperationNotSupportedError: the base implementation always raises this,
@@ -156,7 +326,7 @@ class CgLanguage(ABC):  # noqa: B024 -- deliberately no @abstractmethod; see doc
 
     async def run(
                 self,
-                solution_file: Path,
+                ctx: CgLanguageContext,
                 input_text: str,
                 *,
                 timeout: float = DEFAULT_RUN_TIMEOUT_SECONDS,
@@ -168,7 +338,7 @@ class CgLanguage(ABC):  # noqa: B024 -- deliberately no @abstractmethod; see doc
         Raises:
             CgLanguageOperationNotSupportedError: see `run_streaming()`.
         """
-        async for event in self.run_streaming(solution_file, input_text, timeout=timeout):
+        async for event in self.run_streaming(ctx, input_text, timeout=timeout):
             if isinstance(event, CgRunFinished):
                 return event.result
         raise AssertionError("run_streaming() ended without a CgRunFinished event")

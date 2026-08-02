@@ -1120,7 +1120,7 @@ async def test_delete_removes_the_whole_working_directory(tmp_path: Path) -> Non
     await manager.import_("literary-alfabet-soupe")
     assert tmp_path.is_dir()
 
-    manager.delete()
+    await manager.delete()
 
     assert not tmp_path.exists()
 
@@ -1128,4 +1128,50 @@ async def test_delete_removes_the_whole_working_directory(tmp_path: Path) -> Non
 async def test_delete_requires_prior_import(tmp_path: Path) -> None:
     manager = CgPuzzleManager(tmp_path, object())  # type: ignore[arg-type]
     with pytest.raises(FileNotFoundError):
-        manager.delete()
+        await manager.delete()
+
+
+# --- language context / build (invariants the Docker work depends on) --------------------------
+
+
+async def test_language_context_is_infallible_on_a_bare_directory(tmp_path: Path) -> None:
+    """The context is documented as infallible--constructible over a directory that was never
+       imported, with no puzzle.json and no solution file."""
+    manager = CgPuzzleManager(tmp_path, object())  # type: ignore[arg-type]
+
+    ctx = manager.language_context("Python3")
+
+    assert ctx.root == manager.puzzle_dir
+    assert ctx.solution_file == manager.solution_file
+    assert ctx.solution_link is None
+    assert ctx.meta_dir == manager.meta_dir
+
+
+async def test_language_context_finds_the_solution_symlink_when_present(tmp_path: Path) -> None:
+    manager = await _import_with_doubling_solution(tmp_path)
+
+    ctx = manager.language_context("Python3")
+
+    assert ctx.solution_link == tmp_path / "solution.py"
+
+
+async def test_language_context_has_no_symlink_for_a_language_with_no_extension(tmp_path: Path) -> None:
+    manager = await _import_with_doubling_solution(tmp_path)
+
+    assert manager.language_context("TotallyUnknownLang").solution_link is None
+
+
+async def test_build_solution_is_a_no_op_success_for_python(tmp_path: Path) -> None:
+    manager = await _import_with_doubling_solution(tmp_path)
+
+    result = await manager.build_solution()
+
+    assert result.ok
+    assert result.up_to_date
+
+
+async def test_build_solution_requires_prior_import(tmp_path: Path) -> None:
+    manager = CgPuzzleManager(tmp_path, object())  # type: ignore[arg-type]
+
+    with pytest.raises(FileNotFoundError):
+        await manager.build_solution()

@@ -58,6 +58,15 @@ from ..credentials.cg_credentials import (
     set_credentials,
     validate_profile_name,
 )
+from ..language import (
+    DEFAULT_BUILD_TIMEOUT_SECONDS,
+    DEFAULT_RUN_TIMEOUT_SECONDS,
+    TOOLCHAIN_SUBDIR_NAME,
+    CgBuildProfile,
+    CgLanguageOperationNotSupportedError,
+    CgVsCodeMergeError,
+    clean_managed,
+)
 from ..puzzle_manager import (
     CgPuzzleManager,
     CgPuzzleManagerError,
@@ -333,6 +342,15 @@ class CgCli(CliBase):
            different failure semantics, both worse than just recomputing.
         """
         return resolve_settings(resolve_config(self.args.config, allow_default=True))
+
+    def resolve_toolchain_dir(self) -> Path:
+        """The per-user global directory holding user-tweakable per-language toolchain (container
+           image) definitions--`<data dir>/docker`, honoring a configured `dataDir`.
+
+           Best-effort in the same spirit as `resolve_default_settings()`: never raises if no
+           config.yaml exists. Passed into the managers so a language plugin that needs a toolchain
+           finds the same one regardless of which working directory it's invoked from."""
+        return resolve_config(self.args.config, allow_default=True).data_dir / TOOLCHAIN_SUBDIR_NAME
 
     @override
     async def ctx_exit(
@@ -1930,6 +1948,135 @@ class CgCli(CliBase):
                             "on anything but a first push.")
         return handler
 
+    @cli_command("Debug-session plumbing for languages whose debugger attaches to a running target "
+                 "(C++, via gdbserver in its container). Normally invoked for you by the VS Code "
+                 "tasks `cg contribution vscode` generates, not typed by hand. Languages whose "
+                 "debugger launches the program itself--Python3--don't use these at all.")
+    async def cmd_contribution__debug(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None
+
+    @cli_command("Build the debug profile and start a stopped debug target fed by the given test "
+                 "case's input, ready for a debugger to attach. Prints the connection details.")
+    async def cmd_contribution__debug__start(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            ordinal: str = self.args.ordinal
+            side: str = self.args.side
+            build_timeout: float = self.args.build_timeout
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            manager = CgContributionManager(
+                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+            solution_language = manager.load().data.solution_language
+            if solution_language is None:
+                raise CliError(f"{manager.contribution_data_file} has no solutionLanguage set.")
+            try:
+                session = await manager.start_debug_session(
+                        solution_language, ordinal, side, timeout=build_timeout)
+            except CgLanguageOperationNotSupportedError as e:
+                raise CliError(str(e)) from e
+            if session.output:
+                self.eprint(session.output.rstrip())
+            if not session.ok:
+                raise CliExit(1)
+            for key, value in session.details.items():
+                print(f"{key}: {value}")
+        p = cmd.get_parser()
+        p.add_argument("ordinal", type=str, metavar="ORDINAL",
+                       help="Test case ordinal (tests/'s directory name, e.g. \"03\" or \"3\").")
+        p.add_argument("side", choices=["local", "validator"], metavar="SIDE",
+                       help="Which side of the test case to feed in: local or validator.")
+        p.add_argument("--build-timeout", type=float, default=DEFAULT_BUILD_TIMEOUT_SECONDS,
+                       metavar="SECONDS", help="Wall-clock timeout for the debug build.")
+        return handler
+
+    @cli_command("Stop a debug target started by `cg contribution debug start`. Always succeeds, "
+                 "including when nothing is running--it's wired to a postDebugTask, which fires "
+                 "even for a session that never really began.")
+    async def cmd_contribution__debug__stop(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            manager = CgContributionManager(
+                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+            solution_language = manager.load().data.solution_language
+            if solution_language is not None:
+                await manager.stop_debug_session(solution_language)
+        return handler
+
+    @cli_command("Compile data/solution.src, if its language needs compiling (a no-op for "
+                 "interpreted languages like Python3). Normally you don't need this--`cg "
+                 "contribution play` builds first automatically--but it's useful to compile without "
+                 "running, or to warm a cold container image up front. Near-instant when the source "
+                 "hasn't changed since the last successful build. Compiler diagnostics go to stderr.")
+    async def cmd_contribution__build(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            profile: str = self.args.profile
+            build_timeout: float = self.args.build_timeout
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            manager = CgContributionManager(
+                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+            view = manager.load()
+            solution_language = view.data.solution_language
+            if solution_language is None:
+                raise CliError(f"{manager.contribution_data_file} has no solutionLanguage set.")
+            result = await manager.build_solution(
+                    solution_language, profile=cast(CgBuildProfile, profile), timeout=build_timeout)
+            if result.output:
+                self.eprint(result.output.rstrip())
+            if not result.ok:
+                raise CliExit(1)
+            self.eprint("up to date" if result.up_to_date else "built")
+        p = cmd.get_parser()
+        p.add_argument("--profile", choices=["run", "debug"], default="run",
+                       help="Which build to produce. \"debug\" is built for debuggability rather "
+                            "than speed (no optimization, full symbols) and is what a debug session "
+                            "uses. Ignored by languages that need no build. Default: run.")
+        p.add_argument("--build-timeout", type=float, default=DEFAULT_BUILD_TIMEOUT_SECONDS,
+                       metavar="SECONDS",
+                       help="Wall-clock timeout. Generous by default, because a cold build can pull "
+                            f"and build a container image. Default {DEFAULT_BUILD_TIMEOUT_SECONDS}.")
+        return handler
+
+    @cli_command("Generate VS Code run/debug configuration for this contribution working directory. "
+                 "The test-case dropdown is built from the test cases actually on disk, so re-run "
+                 "this after tests/ changes to refresh it. Writes into the workspace root's "
+                 ".vscode/ (VS Code only reads launch.json from the workspace root, never from a "
+                 "subdirectory), merging with what's already there and replacing only this working "
+                 "directory's own entries.")
+    async def cmd_contribution__vscode(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            workspace_dir: Path | None = self.args.workspace_dir
+            force: bool = self.args.force
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            manager = CgContributionManager(
+                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+            view = manager.load()
+            solution_language = view.data.solution_language
+            if solution_language is None:
+                raise CliError(f"{manager.contribution_data_file} has no solutionLanguage set.")
+            try:
+                written = await manager.provision_vscode(
+                        solution_language, workspace_root=workspace_dir, force=force)
+            except CgVsCodeMergeError as e:
+                raise CliError(str(e)) from e
+            if not written:
+                self.eprint(f"No VS Code integration available for {solution_language} yet--nothing written.")
+                return
+            for path in written:
+                print(path)
+        p = cmd.get_parser()
+        p.add_argument("--workspace-dir", type=Path, default=None, metavar="DIR",
+                       help="Workspace root to write .vscode/ into. Defaults to the nearest "
+                            "enclosing directory that already has a .vscode/, then the nearest "
+                            "one under version control, then the working directory itself.")
+        p.add_argument("--force", action="store_true",
+                       help="Overwrite an existing .vscode/ config file that isn't strict JSON "
+                            "(VS Code allows comments there, which can't be merged into safely). "
+                            "Without this, such a file is left untouched and an error is reported.")
+        return handler
+
     @cli_command("Show which contribution working directory would be used.")
     async def cmd_contribution__where(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
@@ -2219,8 +2366,11 @@ class CgCli(CliBase):
             only_validator: bool = self.args.validator
             update_expected: bool = self.args.update_expected
             show_stdout: bool = self.args.show_stdout
+            timeout: float = self.args.timeout
+            build_timeout: float = self.args.build_timeout
             resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
-            manager = CgContributionManager(resolved_dir, cast(CgClient, None))
+            manager = CgContributionManager(
+                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
 
             view = manager.load()
             solution_language = view.data.solution_language
@@ -2233,12 +2383,23 @@ class CgCli(CliBase):
             if not test_cases:
                 raise CliError(f"No matching local test cases found under {manager.tests_dir}.")
 
+            # Build once, up front, rather than per test case: a compile error is reported once
+            # instead of once per test, gets its own (generous) timeout rather than eating the
+            # per-test budget, and its diagnostics can never be mistaken for program output. A no-op
+            # for languages that don't compile (Python3), so this costs nothing there.
+            build_result = await manager.build_solution(solution_language, timeout=build_timeout)
+            if build_result.output:
+                self.eprint(build_result.output.rstrip())
+            if not build_result.ok:
+                raise CliError(f"{manager.solution_file} failed to build--no test cases were run.")
+
             multi = len(test_cases) > 1
             stderr_console = Console(stderr=True, highlight=False)
             results: list[CgContributionLocalTestResult] = []
             for test_case in test_cases:
                 try:
-                    result = await manager.run_local_test(test_case, solution_language, update_expected=update_expected)
+                    result = await manager.run_local_test(
+                            test_case, solution_language, update_expected=update_expected, timeout=timeout)
                 except Exception as e:
                     result = CgContributionLocalTestResult(
                             ordinal=test_case.ordinal, side=test_case.side, title=test_case.title,
@@ -2290,6 +2451,14 @@ class CgCli(CliBase):
         p.add_argument("--show-stdout", default=False, action="store_true",
                        help="Print captured stdout even for a passing test. Always printed for a "
                             "failing test, or with --update-expected, regardless.")
+        p.add_argument("--timeout", type=float, default=DEFAULT_RUN_TIMEOUT_SECONDS, metavar="SECONDS",
+                       help=f"Per-test-case wall-clock timeout. Default {DEFAULT_RUN_TIMEOUT_SECONDS}.")
+        p.add_argument("--build-timeout", type=float, default=DEFAULT_BUILD_TIMEOUT_SECONDS, metavar="SECONDS",
+                       help="Wall-clock timeout for the one-time build step that runs before any "
+                            "test case. Separate from --timeout, and far more generous, because a "
+                            "cold build can pull/build a container image and compile from scratch. "
+                            f"Default {DEFAULT_BUILD_TIMEOUT_SECONDS}. Ignored for languages that "
+                            "need no build (e.g. Python3).")
         return handler
 
     @cli_command("Detect drift between the server and this working directory, resolving it "
@@ -2760,18 +2929,32 @@ class CgCli(CliBase):
             puzzle_dir: Path | None = self.args.puzzle_dir
             test_indices: list[int] = self.args.test_indices
             show_stdout: bool = self.args.show_stdout
+            timeout: float = self.args.timeout
+            build_timeout: float = self.args.build_timeout
             resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
-            manager = CgPuzzleManager(resolved_dir, cast(CgClient, None))
+            manager = CgPuzzleManager(
+                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
             stderr_console = Console(stderr=True, highlight=False)
             # Resolved and looped here, rather than delegating the whole batch to
             # manager.play_local(), so each result is displayed as soon as it's available--see
             # `cg puzzle play-server`'s handler for the same reasoning (network latency there;
             # a slow/near-timeout local subprocess run here).
             test_cases = manager.resolve_play_local_test_cases(test_indices or None)
+
+            # Build once, up front, rather than per test case: a compile error is reported once
+            # instead of once per test, gets its own (generous) timeout rather than eating the
+            # per-test budget, and its diagnostics can never be mistaken for program output. A no-op
+            # for languages that don't compile (Python3), so this costs nothing there.
+            build_result = await manager.build_solution(timeout=build_timeout)
+            if build_result.output:
+                self.eprint(build_result.output.rstrip())
+            if not build_result.ok:
+                raise CliError(f"{manager.solution_file} failed to build--no test cases were run.")
+
             any_failed = False
             passed_count = 0
             for test_case in test_cases:
-                result = await manager.play_local_one(test_case)
+                result = await manager.play_local_one(test_case, timeout=timeout)
                 status = "PASS" if result.passed else "FAIL"
                 stderr_console.print(f"[{status}] test {result.index} ({result.label})", style="bold blue", markup=False)
                 if not result.passed:
@@ -2798,6 +2981,14 @@ class CgCli(CliBase):
         p.add_argument("--show-stdout", default=False, action="store_true",
                        help="Print captured stdout even for a passing test. Always shown for a "
                             "failing test (as part of its diff) regardless.")
+        p.add_argument("--timeout", type=float, default=DEFAULT_RUN_TIMEOUT_SECONDS, metavar="SECONDS",
+                       help=f"Per-test-case wall-clock timeout. Default {DEFAULT_RUN_TIMEOUT_SECONDS}.")
+        p.add_argument("--build-timeout", type=float, default=DEFAULT_BUILD_TIMEOUT_SECONDS, metavar="SECONDS",
+                       help="Wall-clock timeout for the one-time build step that runs before any "
+                            "test case. Separate from --timeout, and far more generous, because a "
+                            "cold build can pull/build a container image and compile from scratch. "
+                            f"Default {DEFAULT_BUILD_TIMEOUT_SECONDS}. Ignored for languages that "
+                            "need no build (e.g. Python3).")
         return handler
 
     @cli_command("Display the puzzle's problem statement, rendered from the cached "
@@ -2942,6 +3133,145 @@ class CgCli(CliBase):
                 )
         return handler
 
+    @cli_command("Debug-session plumbing for languages whose debugger attaches to a running target "
+                 "(C++, via gdbserver in its container). Normally invoked for you by the VS Code "
+                 "tasks `cg puzzle vscode` generates, not typed by hand. Languages whose debugger "
+                 "launches the program itself--Python3--don't use these at all.")
+    async def cmd_puzzle__debug(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None
+
+    @cli_command("Build the debug profile and start a stopped debug target fed by TEST-INDEX's "
+                 "input, ready for a debugger to attach. Prints the connection details.")
+    async def cmd_puzzle__debug__start(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            puzzle_dir: Path | None = self.args.puzzle_dir
+            test_index: int = self.args.test_index
+            build_timeout: float = self.args.build_timeout
+            resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
+            manager = CgPuzzleManager(
+                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+            try:
+                session = await manager.start_debug_session(test_index, timeout=build_timeout)
+            except CgLanguageOperationNotSupportedError as e:
+                raise CliError(str(e)) from e
+            if session.output:
+                self.eprint(session.output.rstrip())
+            if not session.ok:
+                raise CliExit(1)
+            for key, value in session.details.items():
+                print(f"{key}: {value}")
+        p = cmd.get_parser()
+        p.add_argument("test_index", type=int, metavar="TEST-INDEX",
+                       help="Downloaded test case index whose input.txt feeds the debugged run.")
+        p.add_argument("--build-timeout", type=float, default=DEFAULT_BUILD_TIMEOUT_SECONDS,
+                       metavar="SECONDS", help="Wall-clock timeout for the debug build.")
+        return handler
+
+    @cli_command("Stop a debug target started by `cg puzzle debug start`. Always succeeds, "
+                 "including when nothing is running--it's wired to a postDebugTask, which fires "
+                 "even for a session that never really began.")
+    async def cmd_puzzle__debug__stop(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            puzzle_dir: Path | None = self.args.puzzle_dir
+            resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
+            manager = CgPuzzleManager(
+                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+            await manager.stop_debug_session()
+        return handler
+
+    @cli_command("Compile data/solution.src, if its language needs compiling (a no-op for "
+                 "interpreted languages like Python3). Normally you don't need this--`cg puzzle "
+                 "play` builds first automatically--but it's useful to compile without running, or "
+                 "to warm a cold container image up front. Near-instant when the source hasn't "
+                 "changed since the last successful build. Compiler diagnostics go to stderr.")
+    async def cmd_puzzle__build(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            puzzle_dir: Path | None = self.args.puzzle_dir
+            profile: str = self.args.profile
+            build_timeout: float = self.args.build_timeout
+            resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
+            manager = CgPuzzleManager(
+                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+            result = await manager.build_solution(
+                    profile=cast(CgBuildProfile, profile), timeout=build_timeout)
+            if result.output:
+                self.eprint(result.output.rstrip())
+            if not result.ok:
+                raise CliExit(1)
+            self.eprint("up to date" if result.up_to_date else "built")
+        p = cmd.get_parser()
+        p.add_argument("--profile", choices=["run", "debug"], default="run",
+                       help="Which build to produce. \"debug\" is built for debuggability rather "
+                            "than speed (no optimization, full symbols) and is what a debug session "
+                            "uses. Ignored by languages that need no build. Default: run.")
+        p.add_argument("--build-timeout", type=float, default=DEFAULT_BUILD_TIMEOUT_SECONDS,
+                       metavar="SECONDS",
+                       help="Wall-clock timeout. Generous by default, because a cold build can pull "
+                            f"and build a container image. Default {DEFAULT_BUILD_TIMEOUT_SECONDS}.")
+        return handler
+
+    @cli_command("Generate VS Code run/debug configuration for this puzzle working directory. The "
+                 "test-case dropdown is built from the test cases actually on disk, so re-run this "
+                 "after `cg puzzle import`/`repair` to refresh it. Writes into the workspace root's "
+                 ".vscode/ (VS Code only reads launch.json from the workspace root, never from a "
+                 "subdirectory), merging with what's already there and replacing only this working "
+                 "directory's own entries.")
+    async def cmd_puzzle__vscode(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            puzzle_dir: Path | None = self.args.puzzle_dir
+            workspace_dir: Path | None = self.args.workspace_dir
+            force: bool = self.args.force
+            resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
+            manager = CgPuzzleManager(
+                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+            try:
+                written = await manager.provision_vscode(workspace_root=workspace_dir, force=force)
+            except CgVsCodeMergeError as e:
+                raise CliError(str(e)) from e
+            if not written:
+                language = manager.load_puzzle_data()
+                name = language.solution_language if language is not None else "this language"
+                self.eprint(f"No VS Code integration available for {name} yet--nothing written.")
+                return
+            for path in written:
+                print(path)
+        p = cmd.get_parser()
+        p.add_argument("--workspace-dir", type=Path, default=None, metavar="DIR",
+                       help="Workspace root to write .vscode/ into. Defaults to the nearest "
+                            "enclosing directory that already has a .vscode/, then the nearest "
+                            "one under version control, then the working directory itself.")
+        p.add_argument("--force", action="store_true",
+                       help="Overwrite an existing .vscode/ config file that isn't strict JSON "
+                            "(VS Code allows comments there, which can't be merged into safely). "
+                            "Without this, such a file is left untouched and an error is reported.")
+        return handler
+
+    @cli_command("Manage the Docker containers and images cg builds for compiled languages "
+                 "(currently C++). Nothing here holds anything you authored--see `cg docker clean`.")
+    async def cmd_docker(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None
+
+    @cli_command("Remove every container and image cg created, across all working directories. "
+                 "Always safe and never prompts: a container holds only build artifacts and an "
+                 "image is rebuilt from Dockerfiles on disk, so nothing you authored lives in "
+                 "either--the next build recreates whatever is needed. Useful to reclaim disk "
+                 "space, or to force a clean rebuild after editing a toolchain Dockerfile.")
+    async def cmd_docker__clean(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            result = await clean_managed()
+            if not result.docker_available:
+                self.eprint("docker isn't installed--nothing to clean.")
+                return
+            for name in result.containers:
+                print(f"removed container {name}")
+            for image_id in result.images:
+                print(f"removed image {image_id}")
+            self.eprint(
+                    f"removed {len(result.containers)} container(s) and "
+                    f"{len(result.images)} image(s)."
+                )
+        return handler
+
     @cli_command("Show which puzzle working directory would be used.")
     async def cmd_puzzle__where(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
@@ -2982,7 +3312,7 @@ class CgCli(CliBase):
                 reply = input("Type DELETE (all caps) to confirm, or anything else to cancel: ")
                 if reply != "DELETE":
                     raise CliError("Confirmation did not match--aborted, nothing was deleted.")
-            manager.delete()
+            await manager.delete()
             self.eprint(f"{resolved_dir}: local puzzle working directory removed.")
         p = cmd.get_parser()
         p.add_argument("--force", "-f", default=False, action="store_true",

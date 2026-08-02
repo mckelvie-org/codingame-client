@@ -29,9 +29,21 @@
 
 from __future__ import annotations
 
+from ._docker import (
+    CgDockerCleanResult,
+    clean_managed,
+    list_managed_containers,
+    remove_containers_for_root,
+)
 from .base import (
+    DEFAULT_BUILD_TIMEOUT_SECONDS,
     DEFAULT_RUN_TIMEOUT_SECONDS,
+    TOOLCHAIN_SUBDIR_NAME,
+    CgBuildProfile,
+    CgBuildResult,
+    CgDebugSession,
     CgLanguage,
+    CgLanguageContext,
     CgLanguageOperationNotSupportedError,
     CgRunEvent,
     CgRunFinished,
@@ -41,10 +53,25 @@ from .base import (
 )
 from .default import CgDefaultLanguage
 from .registry import get_language, get_language_by_extension, list_language_cg_ids
+from .vscode import (
+    CgLaunchTestCase,
+    CgVsCodeKind,
+    CgVsCodeMergeError,
+    CgVsCodeProvisioning,
+    CgVsCodeRequest,
+    find_workspace_root,
+    write_provisioning,
+)
 
 __all__ = [
+    "TOOLCHAIN_SUBDIR_NAME",
     "DEFAULT_RUN_TIMEOUT_SECONDS",
+    "DEFAULT_BUILD_TIMEOUT_SECONDS",
+    "CgBuildProfile",
+    "CgBuildResult",
+    "CgDebugSession",
     "CgLanguage",
+    "CgLanguageContext",
     "CgLanguageOperationNotSupportedError",
     "CgRunEvent",
     "CgRunFinished",
@@ -52,6 +79,17 @@ __all__ = [
     "CgRunResult",
     "CgRunStream",
     "CgDefaultLanguage",
+    "remove_containers_for_root",
+    "CgDockerCleanResult",
+    "clean_managed",
+    "list_managed_containers",
+    "CgLaunchTestCase",
+    "CgVsCodeKind",
+    "CgVsCodeMergeError",
+    "CgVsCodeProvisioning",
+    "CgVsCodeRequest",
+    "find_workspace_root",
+    "write_provisioning",
     "get_language",
     "get_language_by_extension",
     "list_language_cg_ids",

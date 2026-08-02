@@ -1,0 +1,641 @@
+"""Docker plumbing shared by every containerized `CgLanguage`: resolving and building the toolchain
+   image, and keeping one long-lived container per (working directory x language) alive to run
+   things in.
+
+   Sibling of `_process.py`/`vscode.py`--deliberately outside `languages/`, so the registry's
+   discovery walk never sees it. Drives the `docker` CLI as a subprocess rather than a Docker SDK,
+   matching how `git` is already used (`contribution_manager.git_repo`) and adding no dependency.
+
+   **The container holds the build artifacts.** The working directory is bind-mounted read-only at
+   `/src`, and compiled output lives at `/build/<profile>/` inside the container's own writable
+   layer--so the solution source is the only durable state outside the container. Two consequences:
+   losing the container means losing the build (harmless--it just rebuilds), and the container must
+   be validated on attach rather than trusted, since a stale one bind-mounted to a since-deleted
+   directory would otherwise be silently reused.
+
+   **State lives on the Docker objects themselves, never beside them.** Everything cg needs to
+   decide whether a container is reusable is a label on that container (`cg.root`, `cg.spec`) or a
+   label on the image (`cg.managed`), read back with a `docker` query each time. Nothing is
+   remembered between calls, and nothing is remembered *within* a call beyond what one query
+   returned. That is deliberate: the user can remove a container or image at any moment--`docker
+   rm`, Docker Desktop, `cg docker clean`--and any lookaside table would immediately be wrong, in a
+   way that surfaces much later as a confusing "No such container". Build stamps follow the same
+   rule by living inside the container at `/build/`, so they die exactly when the thing they
+   describe does.
+
+   Asking Docker every time is affordable because the common path is a *single* `docker ps`: it
+   answers "does our container exist, was it built from the spec we want, is it running, and are
+   there strays from a previous language" at once, and a container that passes vouches for its own
+   image still existing.
+
+   **Two Dockerfiles, not one.** `base.dockerfile` is cg-owned and carries a template version;
+   `custom.dockerfile` is user-owned and appended verbatim. That split is what makes toolchain
+   upgrades safe: the common customization ("install these libraries") is purely additive, so cg can
+   replace the base whenever it ships a new template without ever touching--or needing to merge
+   with--the user's edits.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+import shutil
+from dataclasses import dataclass
+from pathlib import Path
+
+from ._process import CgCapturedRun, run_argv_capture
+
+__all__ = [
+    "CgDockerError",
+    "CgDockerUnavailableError",
+    "CgDockerfileState",
+    "CgToolchain",
+    "CgDockerCleanResult",
+    "SRC_MOUNT_DIR",
+    "BUILD_DIR",
+    "compose_dockerfile",
+    "docker_exec_argv",
+    "ensure_base_dockerfile",
+    "ensure_container",
+    "containers_for_root",
+    "ensure_image",
+    "ensure_toolchain",
+    "image_tag_for",
+    "latest_alias_for",
+    "container_name_for",
+    "remove_container",
+    "remove_containers_for_root",
+    "clean_managed",
+    "list_managed_containers",
+    "list_managed_images",
+    "resolve_toolchain_dir",
+]
+
+SRC_MOUNT_DIR = "/src"
+"""Where the working directory root is bind-mounted (read-only) inside the container. The whole
+   root, not just the solution file: a single-file bind mount breaks the moment an editor saves
+   atomically (write-temp + rename leaves the container holding the old inode). Mounting the root
+   also makes the `solution.<ext>` symlink resolve correctly inside the container, since it's a
+   *relative* link to `data/solution.src`, and makes test-case input files visible for debugging."""
+
+BUILD_DIR = "/build"
+"""Where build artifacts live--inside the container, never on the host."""
+
+_DOCKER = "docker"
+_LABEL_SPEC = "cg.spec"
+_LABEL_ROOT = "cg.root"
+_LABEL_MANAGED = "cg.managed"
+"""Applied to every image cg builds, so `clean_managed()` can identify them by label instead of by
+   tag name. Containers are found by `cg.root` instead, which they all carry."""
+_IDLE_COMMAND = ["sleep", "infinity"]
+_DEBUG_CREATE_FLAGS = ["--cap-add=SYS_PTRACE", "--security-opt", "seccomp=unconfined"]
+"""Needed for `gdbserver`/`gdb` to ptrace the solution. Docker drops `SYS_PTRACE` and its default
+   seccomp profile blocks `ptrace` outright, so without these debugging fails on Linux (it happens
+   to work on Docker Desktop for macOS, which makes this an easy thing to miss). Applied to the one
+   shared container rather than a separate debug-only one, so a debug session doesn't have to
+   rebuild artifacts the run container already has."""
+
+BASE_DOCKERFILE_NAME = "base.dockerfile"
+CUSTOM_DOCKERFILE_NAME = "custom.dockerfile"
+
+_TEMPLATE_HEADER_RE = re.compile(
+        r"^# cg-template:[ \t]*lang=(?P<lang>\S+)[ \t]+version=(?P<version>\d+)[ \t]+"
+        r"body-sha256=(?P<hash>[0-9a-f]+)[ \t]*$",
+        re.MULTILINE,
+    )
+"""`[ \\t]` rather than `\\s` deliberately: `\\s*$` in MULTILINE mode can consume the header's own
+   trailing newline and still match `$` at the *next* line's end, which pushes `match.end()` one
+   character too far. Any body starting with a blank line then hashes differently than it was
+   written and a freshly-generated file reads back as "edited"."""
+
+_CUSTOM_DOCKERFILE_TEMPLATE = """\
+# Your own additions to the cg-managed {lang} toolchain image, appended verbatim to
+# {base_name} (which cg owns and may replace wholesale when it ships a new template--
+# so put your changes *here*, never there).
+#
+# The usual reason to edit this is making a library available to your solution at build time:
+#
+#   RUN apt-get update && apt-get install -y --no-install-recommends libfoo-dev \\
+#       && rm -rf /var/lib/apt/lists/*
+#
+# Changing anything here changes the image tag, so the image rebuilds automatically.
+"""
+
+
+class CgDockerError(Exception):
+    """A `docker` command failed. Carries the command's own output, which is almost always the
+       actually-useful part."""
+
+
+class CgDockerUnavailableError(CgDockerError):
+    """Docker isn't usable--not installed, or the daemon isn't running/reachable. Kept distinct
+       from `CgDockerError` so a caller can tell "your setup isn't ready" from "the thing you asked
+       for went wrong"."""
+
+
+@dataclass(frozen=True)
+class CgDockerfileState:
+    """What's currently on disk for a cg-managed `base.dockerfile`."""
+
+    path: Path
+    exists: bool
+    version: int | None
+    """The template version recorded in its header, or `None` if absent/unparseable (which means a
+       hand-written file, treated the same as edited)."""
+
+    edited: bool
+    """Whether the body differs from the hash its own header records--i.e. the user changed it. cg
+       must never overwrite an edited base; that's the escape hatch for swapping `FROM` outright."""
+
+
+@dataclass(frozen=True)
+class CgToolchain:
+    """A ready-to-use containerized toolchain for one working directory."""
+
+    lang_slug: str
+    image_tag: str
+    container_name: str
+    warnings: list[str]
+    """Non-fatal things worth telling the user once, e.g. "your edited base.dockerfile is based on
+       an older cg template"."""
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^0-9a-z]+", "_", text.lower()).strip("_") or "lang"
+
+
+def _short_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def image_tag_for(lang_slug: str, dockerfile_content: str) -> str:
+    """Content-addressed image tag. Keying on the Dockerfile's *content* rather than on the working
+       directory means every root sharing the global toolchain shares one image, and any change--a
+       cg template bump or a user tweak--produces a new tag automatically, so nothing ever runs
+       against a stale image."""
+    return f"cg-{lang_slug}:{_short_hash(dockerfile_content)}"
+
+
+def container_name_for(lang_slug: str, root: Path) -> str:
+    """One container per (working directory x language). Hashed because Docker names can't contain
+       `/`; the root is already `.resolve()`d by both managers, so the name is stable and two paths
+       pointing at the same real directory correctly share a container."""
+    return f"cg-{lang_slug}-{_short_hash(str(root))}"
+
+
+def render_base_dockerfile(lang_slug: str, version: int, body: str) -> str:
+    """A cg-owned `base.dockerfile`: a machine-readable header plus `body`. The header's
+       `body-sha256` is what later lets cg tell "the user edited this" from "this is still exactly
+       what cg wrote", which decides whether an upgrade may overwrite it."""
+    header = (
+            f"# cg-managed base for {lang_slug}--do not edit.\n"
+            f"# Put your own additions in {CUSTOM_DOCKERFILE_NAME} instead; they're appended to\n"
+            "# this file and survive every cg template upgrade.\n"
+            f"# cg-template: lang={lang_slug} version={version} "
+            f"body-sha256={hashlib.sha256(body.encode('utf-8')).hexdigest()}\n"
+        )
+    return header + body
+
+
+def read_base_dockerfile_state(path: Path, lang_slug: str) -> CgDockerfileState:
+    """Inspect an on-disk `base.dockerfile` without modifying it."""
+    if not path.is_file():
+        return CgDockerfileState(path=path, exists=False, version=None, edited=False)
+    text = path.read_text(encoding="utf-8")
+    match = _TEMPLATE_HEADER_RE.search(text)
+    if match is None or match.group("lang") != lang_slug:
+        # No recognizable header: a hand-written file. Treated as edited so it's never clobbered.
+        return CgDockerfileState(path=path, exists=True, version=None, edited=True)
+    # Exactly one newline separates the header line from the body--strip that one only.
+    # `lstrip("\n")` would also eat a leading blank line belonging to the body itself, making
+    # a freshly-written file hash as "edited".
+    body = text[match.end():]
+    body = body[1:] if body.startswith("\n") else body
+    recorded = match.group("hash")
+    actual = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    return CgDockerfileState(
+            path=path, exists=True, version=int(match.group("version")), edited=actual != recorded)
+
+
+def ensure_base_dockerfile(
+            directory: Path, lang_slug: str, version: int, body: str,
+        ) -> tuple[Path, list[str]]:
+    """Make sure `directory` holds a current `base.dockerfile` (and a commented starter
+       `custom.dockerfile`), upgrading the base when that's safe.
+
+       - Missing -> write the current template.
+       - Present and unmodified but older -> silently regenerate. This is the normal upgrade path
+         and asks nothing of the user.
+       - Present and edited -> **never** overwritten; a stale one produces a warning instead.
+
+    Returns:
+        The base file's path, and any warnings to surface once.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    base_path = directory / BASE_DOCKERFILE_NAME
+    custom_path = directory / CUSTOM_DOCKERFILE_NAME
+    warnings: list[str] = []
+
+    state = read_base_dockerfile_state(base_path, lang_slug)
+    if not state.exists or (not state.edited and (state.version or 0) < version):
+        base_path.write_text(render_base_dockerfile(lang_slug, version, body), encoding="utf-8")
+    elif state.edited and (state.version is None or state.version < version):
+        warnings.append(
+                f"{base_path} has local edits and is based on an older cg template"
+                f"{'' if state.version is None else f' (v{state.version}, current v{version})'}"
+                f"--leaving it alone. Move your changes to {CUSTOM_DOCKERFILE_NAME} and delete the "
+                "base to pick up the new one."
+            )
+
+    if not custom_path.exists():
+        custom_path.write_text(
+                _CUSTOM_DOCKERFILE_TEMPLATE.format(lang=lang_slug, base_name=BASE_DOCKERFILE_NAME),
+                encoding="utf-8",
+            )
+    return base_path, warnings
+
+
+def resolve_toolchain_dir(meta_dir: Path, toolchain_dir: Path, lang_slug: str) -> Path:
+    """Where this language's Dockerfiles live: a per-working-directory override
+       (`<meta>/docker/<lang>/`) if one exists, else the shared per-user location
+       (`<toolchain_dir>/<lang>/`).
+
+       Global by default on purpose--a language's toolchain isn't puzzle-specific, so tweaking it
+       once should apply everywhere rather than needing to be redone per puzzle."""
+    override = meta_dir / "docker" / lang_slug
+    if (override / BASE_DOCKERFILE_NAME).is_file() or (override / CUSTOM_DOCKERFILE_NAME).is_file():
+        return override
+    return toolchain_dir / lang_slug
+
+
+def compose_dockerfile(directory: Path) -> str:
+    """The effective Dockerfile: cg's base with the user's additions appended. Never written to
+       disk--it's piped straight to `docker build`."""
+    base = (directory / BASE_DOCKERFILE_NAME).read_text(encoding="utf-8")
+    custom_path = directory / CUSTOM_DOCKERFILE_NAME
+    if not custom_path.is_file():
+        return base
+    custom = custom_path.read_text(encoding="utf-8")
+    if not custom.strip():
+        return base
+    return f"{base}\n# --- {CUSTOM_DOCKERFILE_NAME} ---\n{custom}"
+
+
+async def _docker(argv: list[str], *, timeout: float, **kwargs: object) -> CgCapturedRun:
+    if shutil.which(_DOCKER) is None:
+        raise CgDockerUnavailableError(
+                "docker isn't on PATH. Running or debugging a compiled language needs Docker--"
+                "install Docker Desktop (or the docker CLI plus a running daemon) and try again."
+            )
+    return await run_argv_capture([_DOCKER, *argv], timeout=timeout, **kwargs)  # type: ignore[arg-type]
+
+
+async def ensure_image(
+            directory: Path, lang_slug: str, *, timeout: float, quiet: bool = False,
+        ) -> str:
+    """Build (or reuse) the toolchain image for the Dockerfiles in `directory`, returning its tag.
+
+       Uses an **empty build context** (`docker build -f - -`): nothing is ever `COPY`'d in, since
+       the solution is bind-mounted at run time instead. That keeps builds fast and means editing a
+       solution never invalidates the image.
+
+       Docker's own layer cache makes a rebuild of an unchanged Dockerfile nearly free, so this is
+       cheap to call before every build; the image is only genuinely rebuilt when its content-
+       addressed tag changes.
+
+    Args:
+        quiet: Capture `docker build` output instead of letting it through to stderr. Off by
+                default because a cold build is slow and its progress is the only feedback.
+    """
+    content = compose_dockerfile(directory)
+    tag = image_tag_for(lang_slug, content)
+
+    exists = await _docker(["image", "inspect", tag], timeout=30.0)
+    if exists.ok:
+        # Re-point the alias even when the image is already built: switching between two existing
+        # images (e.g. undoing a custom.dockerfile edit) hits this path, and :latest must follow.
+        await _tag_latest(tag, lang_slug)
+        return tag
+
+    # `docker build -` (a bare `-`, never `-f - -`) reads the Dockerfile from stdin and uses an
+    # *empty* context--docker rejects using stdin for both. An empty context is exactly right here:
+    # nothing is ever COPY'd in, so editing a solution can't invalidate the image.
+    result = await _docker(
+            # --label is applied to the built image regardless of what the Dockerfile says, which is
+            # what makes `cg docker clean` able to find cg's own images without guessing from tag
+            # names (and without ever touching an unrelated image that happens to be named "cg-*").
+            ["build", "--label", f"{_LABEL_MANAGED}=1", "-t", tag, "-"],
+            timeout=timeout, input_text=content, inherit_stderr=not quiet,
+        )
+    if result.timed_out:
+        raise CgDockerError(
+                f"building the {lang_slug} toolchain image timed out after {timeout}s. A cold build "
+                "pulls a base image and can take a while--retry, or raise --build-timeout."
+            )
+    if not result.ok:
+        detail = result.combined.strip()
+        # With inherit_stderr, docker's own diagnostics already went straight to the terminal--say
+        # so rather than reporting a failure with a suspiciously empty explanation.
+        detail = f"\n{detail}" if detail else " (see the docker build output above)"
+        raise CgDockerError(
+                f"failed to build the {lang_slug} toolchain image from {directory}:{detail}")
+    await _tag_latest(tag, lang_slug)
+    return tag
+
+
+def latest_alias_for(lang_slug: str) -> str:
+    """The stable, *non*-content-addressed tag kept pointing at this language's current image.
+
+       Generated `devcontainer.json` files reference this rather than the real content-addressed
+       tag: a devcontainer.json is written once and read by VS Code much later, so embedding a hash
+       that changes on the next toolchain tweak would leave it pointing at an image that no longer
+       exists. cg's own build/run/debug paths always use the exact tag--this alias exists purely for
+       tools that need a name stable across rebuilds."""
+    return f"cg-{lang_slug}:latest"
+
+
+async def _tag_latest(tag: str, lang_slug: str) -> None:
+    await _docker(["tag", tag, latest_alias_for(lang_slug)], timeout=60.0)
+
+
+@dataclass(frozen=True)
+class _ContainerState:
+    """What one `docker ps` row tells us about a cg container."""
+
+    name: str
+    spec: str
+    running: bool
+
+
+async def containers_for_root(root: Path) -> dict[str, _ContainerState]:
+    """Every cg container bound to `root`, keyed by name, from a **single** `docker ps`.
+
+       One query deliberately answers every question `ensure_toolchain` has--does our container
+       exist, was it created from the spec we now want, is it running, and are there containers for
+       a previous language still around. Asking Docker each time (rather than remembering the answer
+       in a lookaside table) is what keeps this correct when the user removes a container or image
+       out-of-band, which they're always free to do."""
+    if shutil.which(_DOCKER) is None:
+        return {}
+    listed = await run_argv_capture(
+            [
+                _DOCKER, "ps", "-a", "--filter", f"label={_LABEL_ROOT}={root}",
+                "--format",
+                '{{.Names}}\t{{.Label "' + _LABEL_SPEC + '"}}\t{{.State}}',
+            ],
+            timeout=60.0,
+        )
+    if not listed.ok:
+        return {}
+    states: dict[str, _ContainerState] = {}
+    for line in listed.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3 or not parts[0].strip():
+            continue
+        name = parts[0].strip()
+        states[name] = _ContainerState(
+                name=name, spec=parts[1].strip(), running=parts[2].strip().lower() == "running")
+    return states
+
+
+async def remove_container(name: str) -> None:
+    """Force-remove a container, ignoring "no such container". Called when a working directory is
+       deleted, and when a stale container has to be replaced.
+"""
+    await _docker(["rm", "-f", name], timeout=60.0)
+
+
+@dataclass(frozen=True)
+class CgDockerCleanResult:
+    """What `clean_managed()` tore down."""
+
+    containers: list[str]
+    images: list[str]
+    docker_available: bool
+    """False when Docker isn't installed or the daemon isn't reachable--in which case there was, by
+       definition, nothing to clean, and that isn't an error."""
+
+
+async def list_managed_containers() -> list[tuple[str, str]]:
+    """Every cg-created container on this machine, as `(name, root)` pairs.
+
+       Found by the `cg.root` label every cg container carries, so this catches containers for
+       languages this build doesn't know about and for working directories that no longer exist."""
+    if shutil.which(_DOCKER) is None:
+        return []
+    listed = await run_argv_capture(
+            [
+                _DOCKER, "ps", "-a", "--filter", f"label={_LABEL_ROOT}",
+                "--format", '{{.Names}}\t{{.Label "' + _LABEL_ROOT + '"}}',
+            ],
+            timeout=60.0,
+        )
+    if not listed.ok:
+        return []
+    pairs: list[tuple[str, str]] = []
+    for line in listed.stdout.splitlines():
+        name, _, root = line.partition("\t")
+        if name.strip():
+            pairs.append((name.strip(), root.strip()))
+    return pairs
+
+
+async def list_managed_images() -> list[str]:
+    """Image IDs cg built, found by the `cg.managed` label applied at build time."""
+    if shutil.which(_DOCKER) is None:
+        return []
+    listed = await run_argv_capture(
+            [_DOCKER, "images", "--filter", f"label={_LABEL_MANAGED}", "--format", "{{.ID}}", "-q"],
+            timeout=60.0,
+        )
+    if not listed.ok:
+        return []
+    # One image can carry several tags (the content-addressed one plus the :latest alias), and
+    # `docker images` lists a row per tag--dedupe so it isn't removed twice.
+    seen: list[str] = []
+    for image_id in listed.stdout.split():
+        if image_id and image_id not in seen:
+            seen.append(image_id)
+    return seen
+
+
+async def clean_managed() -> CgDockerCleanResult:
+    """Remove every container and image cg created.
+
+       Always safe: a container holds nothing but build artifacts, and an image is rebuilt from
+       Dockerfiles that live on disk--so there is no user work here to lose, and everything is
+       recreated on the next build. That's why this neither prompts nor needs a --force.
+
+       Containers go first: an image still in use by a container can't be removed."""
+    if shutil.which(_DOCKER) is None:
+        return CgDockerCleanResult(containers=[], images=[], docker_available=False)
+
+    containers = [name for name, _root in await list_managed_containers()]
+    for name in containers:
+        await remove_container(name)
+
+    images = await list_managed_images()
+    removed_images: list[str] = []
+    for image_id in images:
+        # --force because an image usually carries both its content-addressed tag and the :latest
+        # alias, and docker refuses an untagged removal of a multi-tag image otherwise.
+        result = await _docker(["rmi", "--force", image_id], timeout=120.0)
+        if result.ok:
+            removed_images.append(image_id)
+    return CgDockerCleanResult(
+            containers=containers, images=removed_images, docker_available=True)
+
+
+async def remove_containers_for_root(root: Path, *, except_name: str | None = None) -> list[str]:
+    """Remove every cg container bound to `root`, whatever language--for use when a working
+       directory is being deleted, and to enforce one-container-per-working-directory.
+
+       Matches on the `cg.root` label rather than recomputing per-language names, so it catches
+       containers for languages this build doesn't know about. Silently does nothing when Docker
+       isn't installed or the daemon is down: failing to tidy up a container must never block
+       deleting a directory.
+
+    Args:
+        except_name: Leave this one alone. Used by `ensure_container` to sweep away containers for
+                      a working directory's *previous* language while keeping the current one.
+
+    Returns:
+        The names removed (empty if none, or if Docker is unavailable).
+    """
+    if shutil.which(_DOCKER) is None:
+        return []
+    listed = await run_argv_capture(
+            [_DOCKER, "ps", "-a", "--filter", f"label={_LABEL_ROOT}={root}", "--format", "{{.Names}}"],
+            timeout=60.0,
+        )
+    if not listed.ok:
+        return []
+    names = [n for n in listed.stdout.split() if n and n != except_name]
+    for name in names:
+        await remove_container(name)
+    return names
+
+
+def container_create_argv(root: Path, name: str) -> list[str]:
+    """The `docker run` argv (minus image/command/spec label) used to create a cg container.
+
+       Split out so the spec hash can cover it: the hash includes every creation flag, not just the
+       image, so a change to *how* cg creates containers invalidates existing ones instead of
+       silently reusing one built the old way."""
+    return [
+            "run", "--detach", "--name", name,
+            # --init runs a real init as PID 1, which reaps orphans. Without it the idle `sleep`
+            # is PID 1 and never reaps, so every debug session's detached gdbserver lingers as a
+            # zombie in a container that's meant to live for the whole working directory's life.
+            "--init",
+            *_DEBUG_CREATE_FLAGS,
+            "--label", f"{_LABEL_ROOT}={root}",
+            "--volume", f"{root}:{SRC_MOUNT_DIR}:ro",
+            "--workdir", BUILD_DIR,
+        ]
+
+
+def container_spec_hash(image_tag: str, create_argv: list[str]) -> str:
+    """Identity of everything that would have to be true for an existing container to be reusable.
+       Recorded on the container as the `cg.spec` label, so the check is a label comparison rather
+       than remembered state."""
+    return _short_hash(image_tag + "\0" + "\0".join(create_argv))
+
+
+async def ensure_container(root: Path, lang_slug: str, image_tag: str) -> str:
+    """Make sure a container for `root` exists, is running, matches `image_tag`, and is the *only*
+       cg container bound to `root`; return its name.
+
+       Everything is decided from labels read back off Docker--see `containers_for_root`. Two things
+       would otherwise leave a stale container in play:
+
+       - *Drift.* A container whose recorded `cg.spec` no longer matches (different image, or a
+         change to how cg creates containers) is removed and recreated, so a working directory
+         deleted and recreated at the same path, or an edited Dockerfile, never silently keeps
+         running against the old one--and, since artifacts live *inside* the container, against a
+         stale build.
+       - *A language change.* Container names are per-language (`cg-<lang>-<hash>`), so switching a
+         working directory's `solution_language` would otherwise orphan the previous language's
+         container: still running, still bind-mounted, never referenced again.
+    """
+    name = container_name_for(lang_slug, root)
+    create_argv = container_create_argv(root, name)
+    spec = container_spec_hash(image_tag, create_argv)
+
+    existing = (await containers_for_root(root)).get(name)
+    await remove_containers_for_root(root, except_name=name)
+    if existing is not None and existing.spec != spec:
+        await remove_container(name)
+        existing = None
+    elif existing is not None and not existing.running:
+        started = await _docker(["start", name], timeout=60.0)
+        if not started.ok:
+            # A container that won't start is worth replacing rather than reporting--it's a
+            # disposable cache, not user data.
+            await remove_container(name)
+            existing = None
+    if existing is None:
+        created = await _docker(
+                [*create_argv, "--label", f"{_LABEL_SPEC}={spec}", image_tag, *_IDLE_COMMAND],
+                timeout=120.0,
+            )
+        if not created.ok:
+            raise CgDockerError(f"failed to create container {name}:\n{created.combined}")
+    return name
+
+
+async def ensure_toolchain(
+            *,
+            root: Path,
+            meta_dir: Path,
+            toolchain_dir: Path,
+            lang_slug: str,
+            template_version: int,
+            template_body: str,
+            timeout: float,
+        ) -> CgToolchain:
+    """Everything needed before running anything: Dockerfiles present and current, image built,
+       container up, validated, and the only one for this working directory.
+
+       Holds **no cached state between calls**--every answer is read back off Docker's own labels.
+       That matters because this is called once per test case: a lookaside table would be fast but
+       would drift the moment the user removed a container or image out-of-band, which they're free
+       to do at any time (and which `cg docker clean` does).
+
+       Speed comes from asking *once* instead of remembering: the common path is a single
+       `docker ps`. When a container for this root already exists with a matching spec, the image it
+       was created from necessarily still exists too, so the image check and the `:latest` re-tag
+       are skipped entirely."""
+    directory = resolve_toolchain_dir(meta_dir, toolchain_dir, lang_slug)
+    _, warnings = ensure_base_dockerfile(directory, lang_slug, template_version, template_body)
+    image_tag = image_tag_for(lang_slug, compose_dockerfile(directory))
+
+    name = container_name_for(lang_slug, root)
+    spec = container_spec_hash(image_tag, container_create_argv(root, name))
+    states = await containers_for_root(root)
+    ours = states.get(name)
+    if ours is not None and ours.running and ours.spec == spec and len(states) == 1:
+        return CgToolchain(
+                lang_slug=lang_slug, image_tag=image_tag,
+                container_name=name, warnings=warnings,
+            )
+
+    await ensure_image(directory, lang_slug, timeout=timeout)
+    container_name = await ensure_container(root, lang_slug, image_tag)
+    return CgToolchain(
+            lang_slug=lang_slug, image_tag=image_tag,
+            container_name=container_name, warnings=warnings,
+        )
+
+
+def docker_exec_argv(container_name: str, script: str, *, interactive: bool = False) -> list[str]:
+    """argv running `script` inside `container_name` via `sh -c`.
+
+       The script is passed in **argv**, never on stdin, so stdin stays free for the solution's own
+       input. `interactive` adds `-i` to forward this process's stdin into the container--needed
+       when running a solution, pointless (and a stray open pipe) when building."""
+    argv = [_DOCKER, "exec"]
+    if interactive:
+        argv.append("-i")
+    argv.extend([container_name, "sh", "-c", script])
+    return argv
