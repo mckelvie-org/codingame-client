@@ -2,6 +2,36 @@
 
 ## {{UNRELEASED}}
 
+- New `codingame_tools.language` package: centralizes all per-language behavior (local execution,
+  file extension, comment syntax, contribution-create starter stub) behind a single `CgLanguage`
+  abstract interface, discovered by walking `language/languages/`'s flat modules at load time
+  (`get_language()`/`get_language_by_extension()`/`list_language_cg_ids()`). Every
+  CodinGame-supported language has its own real module (27 total, one file each--e.g.
+  `languages/python3.py`, `languages/java.py`)--`Python3` is the only one with local
+  execution/stub generation implemented so far; the other 26 currently implement only
+  `extension`. `CgDefaultLanguage` is now a pure catch-all, used only for a `cg_id` CodinGame
+  might add in the future that this client has never seen.
+
+  Local execution is now actually async local execution, not just command-building:
+  `CgLanguage.run_streaming()` runs a solution as a subprocess and yields its stdout/stderr
+  progressively, chunk by chunk, as they're produced (tagged by stream--stdout and stderr are
+  two independent, separately-buffered OS pipes, and this deliberately doesn't attempt to
+  guarantee "correct" interleaving between them, only real-time delivery of each); `run()` is a
+  convenience wrapper for a caller that just wants the final aggregated result. Contribution
+  starter-stub generation (`build_contribution_create_stub_source()`) is likewise now an async
+  method a plugin builds, not a static property.
+
+  Replaces `test_runner.runner`'s `run_solution_locally`/`CgLocalRunResult`/
+  `CgLocalRunUnsupportedLanguageError` (both managers' single-test methods are now `async def`
+  and call `codingame_tools.language` directly; `CgLanguageOperationNotSupportedError` propagates
+  with no manager-specific translation wrapper) and `client.common.protocol.schema`'s
+  `cg_extension_to_solution_language`/`cg_solution_language_to_extension` (removed outright).
+  Fixes a bug along the way: `cg puzzle import`'s placeholder stub for a puzzle with no existing
+  answer used to emit an unconditional `# TODO: ...` line regardless of language, which is
+  invalid syntax for any language whose single-line comments aren't `#`-prefixed--it now uses the
+  language's own comment syntax where known, or an empty file otherwise, rather than guessing
+  wrong.
+
 - Fix `cg puzzle play` (the local one) missing the final `N/M passed` summary line that `cg
   puzzle play-server` already had--lost when it was restructured to stream results one at a time.
   Also added the same summary line to `cg contribution play`, which never had one.

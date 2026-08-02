@@ -314,12 +314,29 @@ async def test_import_without_existing_answer_uses_placeholder_and_language_flag
     client, _, _, _ = _make_fake_client(session)
     manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
 
+    puzzle_data = await manager.import_("literary-alfabet-soupe", language="Python3")
+
+    assert puzzle_data.solution_language == "Python3"
+    content = (tmp_path / "data" / "solution.src").read_text()
+    assert "TODO" in content
+    assert "Literary Alfabet Soupe" in content
+
+
+async def test_import_without_existing_answer_and_unknown_comment_syntax_uses_empty_placeholder(
+        tmp_path: Path) -> None:
+    """Regression test: the placeholder previously emitted an unconditional `# TODO: ...` line
+       regardless of language, which is invalid syntax for any language whose comment prefix
+       isn't `#`. A language with no known comment syntax (e.g. "Rust", which only has legacy
+       extension data, not a real subpackage) must get an empty file instead of a wrong guess."""
+    session = _make_test_session(answer=None)
+    client, _, _, _ = _make_fake_client(session)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+
     puzzle_data = await manager.import_("literary-alfabet-soupe", language="Rust")
 
     assert puzzle_data.solution_language == "Rust"
     content = (tmp_path / "data" / "solution.src").read_text()
-    assert "TODO" in content
-    assert "Literary Alfabet Soupe" in content
+    assert content == ""
 
 
 async def test_import_treats_empty_placeholder_answer_object_as_no_real_answer(tmp_path: Path) -> None:
@@ -332,9 +349,9 @@ async def test_import_treats_empty_placeholder_answer_object_as_no_real_answer(t
     client, _, _, _ = _make_fake_client(session)
     manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
 
-    puzzle_data = await manager.import_("literary-alfabet-soupe", language="Rust")
+    puzzle_data = await manager.import_("literary-alfabet-soupe", language="Python3")
 
-    assert puzzle_data.solution_language == "Rust"
+    assert puzzle_data.solution_language == "Python3"
     content = (tmp_path / "data" / "solution.src").read_text()
     assert "TODO" in content
 
@@ -855,7 +872,7 @@ async def _import_with_doubling_solution(tmp_path: Path) -> CgPuzzleManager:
 async def test_play_local_all_pass(tmp_path: Path) -> None:
     manager = await _import_with_doubling_solution(tmp_path)
 
-    results = manager.play_local()
+    results = await manager.play_local()
 
     assert [r.index for r in results] == [1, 2]
     assert all(r.passed for r in results)
@@ -865,7 +882,7 @@ async def test_play_local_all_pass(tmp_path: Path) -> None:
 async def test_play_local_with_explicit_test_index_runs_only_that_one(tmp_path: Path) -> None:
     manager = await _import_with_doubling_solution(tmp_path)
 
-    results = manager.play_local([2])
+    results = await manager.play_local([2])
 
     assert [r.index for r in results] == [2]
     assert results[0].passed
@@ -874,7 +891,7 @@ async def test_play_local_with_explicit_test_index_runs_only_that_one(tmp_path: 
 async def test_play_local_with_multiple_explicit_indices_runs_each_in_given_order(tmp_path: Path) -> None:
     manager = await _import_with_doubling_solution(tmp_path)
 
-    results = manager.play_local([2, 1])
+    results = await manager.play_local([2, 1])
 
     assert [r.index for r in results] == [2, 1]
     assert all(r.passed for r in results)
@@ -884,7 +901,7 @@ async def test_play_local_unknown_test_index_raises(tmp_path: Path) -> None:
     manager = await _import_with_doubling_solution(tmp_path)
 
     with pytest.raises(CgPuzzleManagerError):
-        manager.play_local([99])
+        await manager.play_local([99])
 
 
 async def test_play_local_raises_and_reports_mismatch(tmp_path: Path) -> None:
@@ -892,7 +909,7 @@ async def test_play_local_raises_and_reports_mismatch(tmp_path: Path) -> None:
     (tmp_path / "data" / "solution.src").write_text("n = int(input())\nprint(n * 3)\n")  # wrong
 
     with pytest.raises(CgPuzzleLocalTestFailedError) as exc_info:
-        manager.play_local()
+        await manager.play_local()
 
     results = exc_info.value.results
     assert [r.index for r in results] == [1, 2]
@@ -904,7 +921,7 @@ async def test_play_local_raises_and_reports_mismatch(tmp_path: Path) -> None:
 async def test_play_local_requires_prior_import(tmp_path: Path) -> None:
     manager = CgPuzzleManager(tmp_path, object())  # type: ignore[arg-type]
     with pytest.raises(FileNotFoundError):
-        manager.play_local()
+        await manager.play_local()
 
 
 async def test_play_local_requires_downloaded_tests(tmp_path: Path) -> None:
@@ -915,7 +932,7 @@ async def test_play_local_requires_downloaded_tests(tmp_path: Path) -> None:
     shutil.rmtree(manager.tests_dir)
 
     with pytest.raises(FileNotFoundError):
-        manager.play_local()
+        await manager.play_local()
 
 
 # --- resolve_play_local_test_cases / play_local_one (the pieces play_local() is built from, ----
@@ -955,7 +972,7 @@ async def test_play_local_one_runs_a_single_test_case(tmp_path: Path) -> None:
     manager = await _import_with_doubling_solution(tmp_path)
     test_case = manager.resolve_play_local_test_cases([2])[0]
 
-    result = manager.play_local_one(test_case)
+    result = await manager.play_local_one(test_case)
 
     assert result.index == 2
     assert result.passed
@@ -967,7 +984,7 @@ async def test_play_local_one_never_raises_for_a_failing_test(tmp_path: Path) ->
     (tmp_path / "data" / "solution.src").write_text("n = int(input())\nprint(n * 3)\n")  # wrong
     test_case = manager.resolve_play_local_test_cases([1])[0]
 
-    result = manager.play_local_one(test_case)
+    result = await manager.play_local_one(test_case)
 
     assert not result.passed
     assert result.actual_output == "63\n"
@@ -977,9 +994,9 @@ async def test_play_local_is_equivalent_to_looping_resolve_and_play_local_one(tm
     """play_local() is documented as a thin convenience wrapper--confirm it behaves like one."""
     manager = await _import_with_doubling_solution(tmp_path)
 
-    via_play_local = manager.play_local([2, 1])
+    via_play_local = await manager.play_local([2, 1])
     via_manual_loop = [
-            manager.play_local_one(tc) for tc in manager.resolve_play_local_test_cases([2, 1])
+            await manager.play_local_one(tc) for tc in manager.resolve_play_local_test_cases([2, 1])
         ]
 
     assert [r.index for r in via_play_local] == [r.index for r in via_manual_loop]

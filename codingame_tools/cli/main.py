@@ -2238,7 +2238,7 @@ class CgCli(CliBase):
             results: list[CgContributionLocalTestResult] = []
             for test_case in test_cases:
                 try:
-                    result = manager.run_local_test(test_case, solution_language, update_expected=update_expected)
+                    result = await manager.run_local_test(test_case, solution_language, update_expected=update_expected)
                 except Exception as e:
                     result = CgContributionLocalTestResult(
                             ordinal=test_case.ordinal, side=test_case.side, title=test_case.title,
@@ -2771,7 +2771,7 @@ class CgCli(CliBase):
             any_failed = False
             passed_count = 0
             for test_case in test_cases:
-                result = manager.play_local_one(test_case)
+                result = await manager.play_local_one(test_case)
                 status = "PASS" if result.passed else "FAIL"
                 stderr_console.print(f"[{status}] test {result.index} ({result.label})", style="bold blue", markup=False)
                 if not result.passed:

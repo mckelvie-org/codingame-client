@@ -61,7 +61,7 @@ from pathlib import Path
 from ..client.client import CgClient
 from ..client.common.protocol.last_activities import CgLastActivityPuzzle
 from ..client.common.protocol.report import CgSubmissionReport
-from ..client.common.protocol.schema import CgSolutionLanguage, cg_solution_language_to_extension
+from ..client.common.protocol.schema import CgSolutionLanguage
 from ..client.common.protocol.test_session import (
     CgMultipleLanguagesTestParams,
     CgPlayRequest,
@@ -69,7 +69,8 @@ from ..client.common.protocol.test_session import (
     CgSubmitRequest,
 )
 from ..client.common.raw_client import CgClientHttpError
-from ..test_runner import DEFAULT_RUN_TIMEOUT_SECONDS, outputs_match, run_solution_locally
+from ..language import DEFAULT_RUN_TIMEOUT_SECONDS, get_language
+from ..test_runner import outputs_match
 from .layout import (
     DATA_SUBDIR_NAME,
     GITIGNORE_FILE_NAME,
@@ -255,7 +256,7 @@ def _refresh_solution_symlink(puzzle_dir: Path, solution_language: str | None) -
     for path in puzzle_dir.glob("solution.*"):
         if path.is_symlink() and path.name != SOLUTION_FILE_NAME:
             path.unlink()
-    extension = cg_solution_language_to_extension(solution_language) if solution_language else None
+    extension = get_language(solution_language).extension if solution_language else None
     if extension is None:
         return
     link_name = f"solution.{extension}"
@@ -513,7 +514,14 @@ class CgPuzzleManager:
             solution_code = answer.code
         else:
             solution_language = language
-            solution_code = f"# TODO: solve {question.title!r} ({puzzle_pretty_id})\n"
+            # Confirmed live (2026-08-02): the previous unconditional `# TODO: ...` placeholder
+            # was invalid syntax for any language whose single-line comments aren't "#"-prefixed.
+            # format_comment() returns None for a language whose comment syntax isn't known
+            # (including every language but Python3 today)--an empty file in that case, rather
+            # than guessing wrong.
+            placeholder = get_language(solution_language).format_comment(
+                    f"TODO: solve {question.title!r} ({puzzle_pretty_id})")
+            solution_code = f"{placeholder}\n" if placeholder is not None else ""
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.meta_dir.mkdir(parents=True, exist_ok=True)
@@ -851,7 +859,7 @@ class CgPuzzleManager:
             test_cases.append(test_case)
         return test_cases
 
-    def play_local_one(
+    async def play_local_one(
                 self,
                 test_case: CgPuzzleDownloadedTestCase,
                 *,
@@ -860,8 +868,8 @@ class CgPuzzleManager:
         """Run the current local `data/solution.src` against a single downloaded test case
            entirely locally--no network access at all, unlike `play_one()`--by shelling out to
            the appropriate interpreter/compiler as a subprocess (see
-           `codingame_tools.test_runner.run_solution_locally`) and comparing captured stdout to
-           the test case's expected `output.txt`.
+           `codingame_tools.language.CgLanguage.run`) and comparing captured stdout to the test
+           case's expected `output.txt`.
 
            Never raises just because the test failed (crashed, timed out, or mismatched)--that's
            reflected in the returned result's `passed`, same spirit as `codingame_tools.
@@ -874,7 +882,7 @@ class CgPuzzleManager:
 
         Args:
             test_case: Which downloaded test case to run (see `resolve_play_local_test_cases()`).
-            timeout:   Wall-clock timeout in seconds--see `codingame_tools.test_runner.
+            timeout:   Wall-clock timeout in seconds--see `codingame_tools.language.
                        DEFAULT_RUN_TIMEOUT_SECONDS`.
 
         Returns:
@@ -882,15 +890,15 @@ class CgPuzzleManager:
 
         Raises:
             FileNotFoundError: if this working directory has never been imported.
-            CgLocalRunUnsupportedLanguageError: if `data/puzzle-data.json`'s `solution_language`
-                                                 isn't yet supported by `codingame_tools.
-                                                 test_runner.run_solution_locally`.
+            CgLanguageOperationNotSupportedError: if `data/puzzle-data.json`'s `solution_language`
+                                                   isn't yet supported by `codingame_tools.
+                                                   language`.
         """
         puzzle_data = self.load_puzzle_data()
         if puzzle_data is None:
             raise FileNotFoundError(f"{self.puzzle_data_file} does not exist--this working directory is in an inconsistent state.")
-        run_result = run_solution_locally(
-                self.solution_file, puzzle_data.solution_language, test_case.input_text, timeout=timeout)
+        run_result = await get_language(puzzle_data.solution_language).run(
+                self.solution_file, test_case.input_text, timeout=timeout)
         passed = not run_result.timed_out and run_result.returncode == 0 \
             and outputs_match(run_result.output, test_case.output_text)
         return CgPuzzleLocalTestResult(
@@ -900,7 +908,7 @@ class CgPuzzleManager:
                 timed_out=run_result.timed_out,
             )
 
-    def play_local(
+    async def play_local(
                 self,
                 test_indices: list[int] | None = None,
                 *,
@@ -921,7 +929,7 @@ class CgPuzzleManager:
                           `test_indices` use), run in the order given. Defaults to running every
                           downloaded test case--see `resolve_play_local_test_cases()`.
             timeout:    Per-test-case wall-clock timeout in seconds--see
-                        `codingame_tools.test_runner.DEFAULT_RUN_TIMEOUT_SECONDS`.
+                        `codingame_tools.language.DEFAULT_RUN_TIMEOUT_SECONDS`.
 
         Returns:
             One `CgPuzzleLocalTestResult` per test case run, in the order run.
@@ -931,14 +939,14 @@ class CgPuzzleManager:
                                 downloaded test cases at all (run `cg puzzle repair` first).
             CgPuzzleManagerError: if `test_indices` contains an index with no downloaded test
                                    case.
-            CgLocalRunUnsupportedLanguageError: if `data/puzzle-data.json`'s `solution_language`
-                                                 isn't yet supported by `codingame_tools.
-                                                 test_runner.run_solution_locally`.
+            CgLanguageOperationNotSupportedError: if `data/puzzle-data.json`'s `solution_language`
+                                                   isn't yet supported by `codingame_tools.
+                                                   language`.
             CgPuzzleLocalTestFailedError: if any test case's output didn't match (or the solution
                                            crashed/timed out)--carries every result via `.results`.
         """
         test_cases = self.resolve_play_local_test_cases(test_indices)
-        results = [self.play_local_one(test_case, timeout=timeout) for test_case in test_cases]
+        results = [await self.play_local_one(test_case, timeout=timeout) for test_case in test_cases]
         if any(not r.passed for r in results):
             raise CgPuzzleLocalTestFailedError(results)
         return results

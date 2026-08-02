@@ -59,10 +59,11 @@ from ..client.common.protocol.contribution import (
     CgPuzzleType,
     CgTestCase,
 )
-from ..client.common.protocol.schema import CgSolutionLanguage, cg_solution_language_to_extension
+from ..client.common.protocol.schema import CgSolutionLanguage
 from ..client.common.raw_client import compute_content_hash
 from ..common.dataclass_wizard_x import CgEpochMillis
-from ..test_runner import DEFAULT_RUN_TIMEOUT_SECONDS, outputs_match, run_solution_locally
+from ..language import DEFAULT_RUN_TIMEOUT_SECONDS, get_language
+from ..test_runner import outputs_match
 from .contribution_commit_data import (
     CONTRIBUTION_COMMIT_DATA_FILE_NAME,
     CgContributionCommitMetadata,
@@ -426,7 +427,7 @@ def _refresh_solution_symlink(contribution_dir: Path, solution_language: str | N
     for path in contribution_dir.glob("solution.*"):
         if path.is_symlink() and path.name != SOLUTION_FILE_NAME:
             path.unlink()
-    extension = cg_solution_language_to_extension(solution_language) if solution_language else None
+    extension = get_language(solution_language).extension if solution_language else None
     if extension is None:
         return
     link_name = f"solution.{extension}"
@@ -991,10 +992,10 @@ class CgContributionManager:
                          to "Python3". Always gets the `solution.<ext>` convenience symlink (see
                          `_refresh_solution_symlink`) if `language` maps to a known extension--but
                          `data/solution.src` itself (the symlink's target) is only pre-populated
-                         with a real stub for "Python3"; for any other language, the symlink is
-                         left dangling until you write `data/solution.src` yourself (there's no
-                         reasonable one-stub-fits-all placeholder across languages, unlike
-                         Python's trivial read-and-echo solution for the seeded test cases).
+                         with a real stub if `codingame_tools.language.get_language(language).
+                         build_contribution_create_stub_source()` returns one (currently only
+                         "Python3"); for any other language, the symlink is left dangling until
+                         you write `data/solution.src` yourself.
 
         Raises:
             CgContributionManagerError: if this directory already tracks a contribution, or a
@@ -1017,12 +1018,12 @@ class CgContributionManager:
 
         # Both the seeded test and validator case are test_in="1"/test_out="1" (see
         # _minimal_valid_contribution_data)--a solution that just echoes its input back trivially
-        # passes both. Only written for Python: there's no equivalent one-size-fits-all trivial
-        # stub worth hardcoding per language, and an empty `data/solution.src` isn't meaningfully
-        # better than no file at all (the symlink itself--see _refresh_solution_symlink--already
-        # tells the user exactly where to put their code, for every language, regardless of this).
-        is_python = cg_solution_language_to_extension(language) == "py"
-        solution = "n = input()\nprint(n)\n" if is_python else None
+        # passes both. codingame_tools.language.CgLanguage.build_contribution_create_stub_source
+        # only returns one for languages with such a trivial stub (currently just Python3); an
+        # empty `data/solution.src` isn't meaningfully better than no file at all otherwise (the
+        # symlink itself--see _refresh_solution_symlink--already tells the user exactly where to
+        # put their code, for every language, regardless of this).
+        solution = await get_language(language).build_contribution_create_stub_source()
         data = dataclasses.replace(
                 _minimal_valid_contribution_data(title), solution_language=language, solution=solution)
         _materialize_data(
@@ -1757,7 +1758,7 @@ class CgContributionManager:
             test_cases = [tc for tc in test_cases if tc.side != "validator"]
         return test_cases
 
-    def run_local_test(
+    async def run_local_test(
                 self,
                 test_case: CgContributionLocalTestCase,
                 solution_language: CgSolutionLanguage,
@@ -1767,7 +1768,7 @@ class CgContributionManager:
             ) -> CgContributionLocalTestResult:
         """Run `data/solution.src` against one local test case's input, entirely locally--no
            network access at all--by shelling out to the appropriate interpreter/compiler as a
-           subprocess (see `codingame_tools.test_runner.run_solution_locally`).
+           subprocess (see `codingame_tools.language.CgLanguage.run`).
 
            Never raises just because the test failed (crashed, timed out, or mismatched)--that's
            reflected in the returned result's `passed`, for a caller running a batch of these to
@@ -1783,19 +1784,18 @@ class CgContributionManager:
                                 actual output instead of comparing against it--for accepting the
                                 solution's current behavior as the new known-good baseline. Only
                                 written if the run completed without crashing/timing out.
-            timeout:            Wall-clock timeout in seconds--see `codingame_tools.test_runner.
+            timeout:            Wall-clock timeout in seconds--see `codingame_tools.language.
                                 DEFAULT_RUN_TIMEOUT_SECONDS`.
 
         Returns:
             The outcome--see `CgContributionLocalTestResult`.
 
         Raises:
-            CgLocalRunUnsupportedLanguageError: if `solution_language` isn't yet supported by
-                                                 `codingame_tools.test_runner.
-                                                 run_solution_locally`.
+            CgLanguageOperationNotSupportedError: if `solution_language` isn't yet supported by
+                                                   `codingame_tools.language`.
         """
-        run_result = run_solution_locally(
-                self.solution_file, solution_language, test_case.input_text, timeout=timeout)
+        run_result = await get_language(solution_language).run(
+                self.solution_file, test_case.input_text, timeout=timeout)
         ok = not run_result.timed_out and run_result.returncode == 0
         if update_expected:
             if ok:
@@ -1817,7 +1817,7 @@ class CgContributionManager:
                 returncode=run_result.returncode,
             )
 
-    def run_local_tests(
+    async def run_local_tests(
                 self,
                 test_cases: list[CgContributionLocalTestCase],
                 solution_language: CgSolutionLanguage,
@@ -1836,15 +1836,15 @@ class CgContributionManager:
             One `CgContributionLocalTestResult` per test case, in `test_cases`' order.
 
         Raises:
-            CgLocalRunUnsupportedLanguageError: if `solution_language` isn't yet supported--
-                                                 raised immediately, from whichever test case hits
-                                                 it first (every other test case would fail
-                                                 identically, so this doesn't run the rest first).
+            CgLanguageOperationNotSupportedError: if `solution_language` isn't yet supported--
+                                                   raised immediately, from whichever test case
+                                                   hits it first (every other test case would fail
+                                                   identically, so this doesn't run the rest first).
             CgContributionLocalTestFailedError: if any test case failed--carries every result via
                                                  `.results`.
         """
         results = [
-                self.run_local_test(tc, solution_language, update_expected=update_expected, timeout=timeout)
+                await self.run_local_test(tc, solution_language, update_expected=update_expected, timeout=timeout)
                 for tc in test_cases
             ]
         if any(not r.passed for r in results):

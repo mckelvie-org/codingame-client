@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .....common.dataclass_wizard_x import Alias, CatchAll, CgEpochMillis, JSONWizardX
-from ..schema import CgSolutionLanguage, cg_extension_to_solution_language, cg_solution_language_to_extension
+from ..schema import CgSolutionLanguage
 
 CgMarkdown = str
 """A simplified markdown format used by Codingame for problem statements,
@@ -163,7 +163,7 @@ class CgContributionData(JSONWizardX):
     solution_language: CgSolutionLanguage | None = None
     """The programming language used for the reference solution, e.g. "Python3", "Java", "C++", etc.
        May be missing if the reference solution is not yet provided.
-       See `cg_extension_to_solution_language` for mapping from file extension
+       See `codingame_tools.language.get_language_by_extension` for mapping from file extension
        to solution language string.
     """
     
@@ -649,5 +649,4 @@ __all__ = [
     "CgMarkdown", "CgHtml", "CgStubGenerator", "CgTopic", "CgContributionId", "CgPuzzleType",
     "CgPendingContribution", "CgPersonalContribution", "CgSolutionLanguage", "CgValidateAction",
     "CgDeleteContributionResult",
-    "cg_extension_to_solution_language", "cg_solution_language_to_extension",
 ]

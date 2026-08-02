@@ -24,8 +24,6 @@ from .schema import (
     CgTestCase,
     CgTopic,
     CgValidateAction,
-    cg_extension_to_solution_language,
-    cg_solution_language_to_extension,
 )
 
 __all__ = [
@@ -34,5 +32,4 @@ __all__ = [
     "CgMarkdown", "CgHtml", "CgStubGenerator", "CgTopic", "CgContributionId",
     "CgPendingContribution", "CgPersonalContribution", "CgPuzzleType", "CgSolutionLanguage", "CgValidateAction",
     "CgDeleteContributionResult",
-    "cg_extension_to_solution_language", "cg_solution_language_to_extension",
 ]
