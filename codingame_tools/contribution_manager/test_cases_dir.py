@@ -130,7 +130,7 @@ def _ensure_trailing_newline(text: str) -> str:
        server-provided content into files, so a clean import-then-commit round trip (with no
        edits) doesn't spuriously diff against the file's on-disk convention. The reverse
        (stripping a trailing newline before submission) already happens automatically in
-       `CgAsyncContributionServiceHelper.update_contribution`."""
+       `CgContributionServiceHelper.update_contribution`."""
     return text if text.endswith("\n") else text + "\n"
 
 

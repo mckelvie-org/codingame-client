@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import pytest
 
-from codingame_tools.client.async_.raw_client import CgAsyncRawClient
+from codingame_tools.client.common.raw_client import CgRawClient
 
 
 @pytest.mark.live_unauthenticated
 async def test_find_codingamer_public_informations_live() -> None:
-    async with CgAsyncRawClient() as client:
+    async with CgRawClient() as client:
         result = await client.service_request_to_dict(
             "CodinGamer", "findCodinGamerPublicInformations", [1486857],
             require_login=False,

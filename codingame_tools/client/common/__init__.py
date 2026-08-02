@@ -1,5 +1,5 @@
 """
-Code that is common to both sync and async clients of the CodinGame API.
+Low-level client, exceptions, and wire-protocol schemas shared across the CodinGame API client.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from .raw_client import (
     CgFileUploadError,
     CgRawClient,
     CgServletError,
+    CgServletGetBytesResult,
     CgUploadFileResult,
     compute_content_hash,
 )
@@ -65,5 +66,6 @@ __all__ = [
     "CgAuthenticationError",
     "CgClientErrorResponse",
     "CgClientHttpError",
+    "CgServletGetBytesResult",
     "CgRawClient",
 ]

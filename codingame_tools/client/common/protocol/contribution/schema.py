@@ -326,7 +326,7 @@ class CgDeleteContributionResult(JSONWizardX):
 @dataclass
 class CgContribution(JSONWizardX):
     """The complete response to findContribution. Also the response shape for updateContribution
-       (see `CgAsyncContributionService.update_contribution`)--but see `active_version` and
+       (see `CgContributionService.update_contribution`)--but see `active_version` and
        `CgContributionVersion.statement_html` for two fields confirmed to differ between the two
        in practice."""
     id: int

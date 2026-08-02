@@ -50,7 +50,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
-from ..client.async_.client import CgAsyncClient
+from ..client.client import CgClient
 from ..client.common.protocol.contribution import (
     CgContribution,
     CgContributionData,
@@ -134,7 +134,7 @@ _ACTIVE_VERSION_POLL_INTERVAL_SECONDS = 2.0
 _ACTIVE_VERSION_POLL_MAX_ATTEMPTS = 10
 """See `CgContributionManager._refresh_active_version`--calibrated for the brief eventual-
    consistency lag confirmed live (caught up within a few seconds), not the much longer 524-
-   timeout scenario `CgAsyncContributionServiceHelper` polls for (30s interval, unbounded by
+   timeout scenario `CgContributionServiceHelper` polls for (30s interval, unbounded by
    default)."""
 
 
@@ -574,13 +574,13 @@ def _looks_like_text(content: bytes) -> bool:
 
 class CgContributionManager:
     """Builds/updates a contribution working directory (`contribution_dir`) against the server,
-       via an already-authenticated `CgAsyncClient`. See the module docstring for the git repo
+       via an already-authenticated `CgClient`. See the module docstring for the git repo
        this is backed by."""
 
     contribution_dir: Path
-    client: CgAsyncClient
+    client: CgClient
 
-    def __init__(self, contribution_dir: Path | str, client: CgAsyncClient) -> None:
+    def __init__(self, contribution_dir: Path | str, client: CgClient) -> None:
         # Always resolved to an absolute path: git_repo.py's subprocess calls set `cwd` to
         # `git_dir`/`work_tree` themselves (see CgGitRepo._run), so a relative `contribution_dir`
         # here would make `--git-dir=`/`--work-tree=` (built from it) resolve against the *wrong*
@@ -1065,7 +1065,7 @@ class CgContributionManager:
            single-call version.** `createContribution`, unlike `updateContribution`, has no
            `prevVersion`-style idempotency check--if a request succeeds server-side but the
            response is lost (timeout, network error, and especially the same Cloudflare/524 origin
-           timeout `CgAsyncContributionServiceHelper.update_contribution` already has to recover
+           timeout `CgContributionServiceHelper.update_contribution` already has to recover
            from for *heavy* content), there is no reliable way to learn the resulting handle, and
            blindly retrying risks a genuine duplicate contribution. This risk scales with the size/
            complexity of what's being validated--exactly what a first push often has a lot of
@@ -1083,7 +1083,7 @@ class CgContributionManager:
            3. A commit representing that stub (not the real content) becomes `server`'s first
               commit, via the same plumbing `fetch()` uses to build a tree without touching `main`.
            4. The *real* content is then submitted the normal way--a plain `updateContribution`
-              call, version 1 -> 2, with `CgAsyncContributionServiceHelper`'s existing 524-retry/
+              call, version 1 -> 2, with `CgContributionServiceHelper`'s existing 524-retry/
               polling already protecting it via `prevVersion`. If this step itself fails/times out,
               the fix is exactly the same as any other failed push: just run `push()` again.
 

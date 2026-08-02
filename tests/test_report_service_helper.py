@@ -1,4 +1,4 @@
-"""Unit tests for CgAsyncReportServiceHelper.find_report_by_submission_when_ready--the polling
+"""Unit tests for CgReportServiceHelper.find_report_by_submission_when_ready--the polling
    wrapper around Report/findReportBySubmission added after live confirmation that calling it
    immediately after TestSession/submit can race server-side grading (every field but
    validator_shareable can be entirely absent--including best_score, confirmed absent for a
@@ -13,12 +13,12 @@ from datetime import timezone
 
 import pytest
 
-from codingame_tools.client.async_.service.services.report import CgAsyncReportServiceHelper
 from codingame_tools.client.common.protocol.report import (
     CgReportPuzzleProgress,
     CgSubmissionReport,
     CgValidatorResult,
 )
+from codingame_tools.client.service.services.report import CgReportServiceHelper
 from codingame_tools.common.dataclass_wizard_x import CgEpochMillis
 
 _NOT_READY_REPORT = CgSubmissionReport(best_score=100.0, validator_shareable=False)
@@ -68,7 +68,7 @@ def test_ready_report_is_ready() -> None:
 
 async def test_returns_immediately_when_already_ready() -> None:
     service = _FakeService([_READY_REPORT])
-    helper = CgAsyncReportServiceHelper(service)  # type: ignore[arg-type]
+    helper = CgReportServiceHelper(service)  # type: ignore[arg-type]
 
     result = await helper.find_report_by_submission_when_ready(424242)
 
@@ -83,9 +83,9 @@ async def test_polls_until_ready(monkeypatch: pytest.MonkeyPatch) -> None:
         sleep_calls.append(seconds)
 
     monkeypatch.setattr(
-            "codingame_tools.client.async_.service.services.report.asyncio.sleep", fake_sleep)
+            "codingame_tools.client.service.services.report.asyncio.sleep", fake_sleep)
     service = _FakeService([_NOT_READY_REPORT, _NOT_READY_REPORT, _READY_REPORT])
-    helper = CgAsyncReportServiceHelper(service)  # type: ignore[arg-type]
+    helper = CgReportServiceHelper(service)  # type: ignore[arg-type]
 
     result = await helper.find_report_by_submission_when_ready(424242)
 
@@ -98,9 +98,9 @@ async def test_raises_timeout_error_if_never_ready(monkeypatch: pytest.MonkeyPat
     async def fake_sleep(seconds: float) -> None:
         return None
     monkeypatch.setattr(
-            "codingame_tools.client.async_.service.services.report.asyncio.sleep", fake_sleep)
+            "codingame_tools.client.service.services.report.asyncio.sleep", fake_sleep)
     service = _FakeService([_NOT_READY_REPORT])
-    helper = CgAsyncReportServiceHelper(service)  # type: ignore[arg-type]
+    helper = CgReportServiceHelper(service)  # type: ignore[arg-type]
 
     with pytest.raises(TimeoutError):
         await helper.find_report_by_submission_when_ready(424242, max_wait_seconds=0.01)
@@ -112,9 +112,9 @@ async def test_on_poll_called_for_each_not_ready_report_but_not_the_final_one(
     async def fake_sleep(seconds: float) -> None:
         return None
     monkeypatch.setattr(
-            "codingame_tools.client.async_.service.services.report.asyncio.sleep", fake_sleep)
+            "codingame_tools.client.service.services.report.asyncio.sleep", fake_sleep)
     service = _FakeService([_NOT_READY_REPORT, _NOT_READY_REPORT, _READY_REPORT])
-    helper = CgAsyncReportServiceHelper(service)  # type: ignore[arg-type]
+    helper = CgReportServiceHelper(service)  # type: ignore[arg-type]
     seen: list[CgSubmissionReport] = []
 
     async def record(report: CgSubmissionReport) -> None:
@@ -130,9 +130,9 @@ async def test_on_poll_exception_aborts_the_wait(monkeypatch: pytest.MonkeyPatch
     async def fake_sleep(seconds: float) -> None:
         return None
     monkeypatch.setattr(
-            "codingame_tools.client.async_.service.services.report.asyncio.sleep", fake_sleep)
+            "codingame_tools.client.service.services.report.asyncio.sleep", fake_sleep)
     service = _FakeService([_NOT_READY_REPORT, _READY_REPORT])
-    helper = CgAsyncReportServiceHelper(service)  # type: ignore[arg-type]
+    helper = CgReportServiceHelper(service)  # type: ignore[arg-type]
 
     async def cancel(report: CgSubmissionReport) -> None:
         raise RuntimeError("cancelled")

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from codingame_tools.client.async_.raw_client import CgAsyncClientHttpError, CgAsyncRawClient
+from codingame_tools.client.common.raw_client import CgClientHttpError, CgRawClient
 from codingame_tools.credentials.cg_credentials import get_credentials
 
 
@@ -31,12 +31,12 @@ def _require_real_credentials() -> None:
 @pytest.mark.live
 async def test_find_unread_notifications_live() -> None:
     _require_real_credentials()
-    async with CgAsyncRawClient() as client:
+    async with CgRawClient() as client:
         await client.authenticate(require_credentials=True)
         try:
             notifications = await client.service_request_to_list(
                 "Notification", "findUnreadNotifications", [client.codingamer_id]
             )
-        except CgAsyncClientHttpError as e:
+        except CgClientHttpError as e:
             pytest.fail(f"Authenticated request failed; credentials may be stale: {e}")
     assert isinstance(notifications, list)

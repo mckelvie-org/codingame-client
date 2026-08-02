@@ -1,4 +1,4 @@
-"""Unit tests for CgAsyncContributionServiceHelper.update_contribution's HTTP-524 retry/polling
+"""Unit tests for CgContributionServiceHelper.update_contribution's HTTP-524 retry/polling
    logic (`_poll_until_committed`), including its `on_poll` callback--parallel to
    test_report_service_helper.py's coverage of the Report service's own polling helper.
 
@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import pytest
 
-from codingame_tools.client.async_.raw_client import CgAsyncClientHttpError
-from codingame_tools.client.async_.service.services.contribution import CgAsyncContributionServiceHelper
 from codingame_tools.client.common.protocol.contribution import (
     CgContribution,
     CgContributionData,
     CgContributionVersion,
     CgTestCase,
 )
+from codingame_tools.client.common.raw_client import CgClientHttpError
+from codingame_tools.client.service.services.contribution import CgContributionServiceHelper
 
 
 def _make_data() -> CgContributionData:
@@ -52,7 +52,7 @@ class _FakeService:
 
     async def update_contribution(self, *args: object, **kwargs: object) -> CgContribution:
         self.update_calls += 1
-        raise CgAsyncClientHttpError("Timeout", status_code=524)
+        raise CgClientHttpError("Timeout", status_code=524)
 
     async def find_contribution(self, contribution_id: str) -> CgContribution:
         self.find_calls.append(contribution_id)
@@ -65,12 +65,12 @@ async def test_returns_once_version_increments(monkeypatch: pytest.MonkeyPatch) 
     async def fake_sleep(seconds: float) -> None:
         return None
     monkeypatch.setattr(
-            "codingame_tools.client.async_.service.services.contribution.asyncio.sleep", fake_sleep)
+            "codingame_tools.client.service.services.contribution.asyncio.sleep", fake_sleep)
     data = _make_data()
     stale = _make_contribution(data, version=3)
     committed = _make_contribution(data, version=4)
     service = _FakeService([stale, stale, committed])
-    helper = CgAsyncContributionServiceHelper(service)  # type: ignore[arg-type]
+    helper = CgContributionServiceHelper(service)  # type: ignore[arg-type]
 
     result = await helper.update_contribution(
             "handle-1", "PUZZLE_INOUT", data, True, False, prev_version=3)
@@ -83,11 +83,11 @@ async def test_raises_timeout_error_if_never_committed(monkeypatch: pytest.Monke
     async def fake_sleep(seconds: float) -> None:
         return None
     monkeypatch.setattr(
-            "codingame_tools.client.async_.service.services.contribution.asyncio.sleep", fake_sleep)
+            "codingame_tools.client.service.services.contribution.asyncio.sleep", fake_sleep)
     data = _make_data()
     stale = _make_contribution(data, version=3)
     service = _FakeService([stale])
-    helper = CgAsyncContributionServiceHelper(service)  # type: ignore[arg-type]
+    helper = CgContributionServiceHelper(service)  # type: ignore[arg-type]
 
     with pytest.raises(TimeoutError):
         await helper.update_contribution(
@@ -101,12 +101,12 @@ async def test_on_poll_called_with_each_stale_contribution_but_not_the_final_one
     async def fake_sleep(seconds: float) -> None:
         return None
     monkeypatch.setattr(
-            "codingame_tools.client.async_.service.services.contribution.asyncio.sleep", fake_sleep)
+            "codingame_tools.client.service.services.contribution.asyncio.sleep", fake_sleep)
     data = _make_data()
     stale = _make_contribution(data, version=3)
     committed = _make_contribution(data, version=4)
     service = _FakeService([stale, stale, committed])
-    helper = CgAsyncContributionServiceHelper(service)  # type: ignore[arg-type]
+    helper = CgContributionServiceHelper(service)  # type: ignore[arg-type]
     seen: list[CgContribution] = []
 
     async def record(contribution: CgContribution) -> None:
@@ -128,7 +128,7 @@ async def test_on_poll_not_called_when_no_524_occurs() -> None:
     data = _make_data()
     committed = _make_contribution(data, version=4)
     service = _NoErrorService([])
-    helper = CgAsyncContributionServiceHelper(service)  # type: ignore[arg-type]
+    helper = CgContributionServiceHelper(service)  # type: ignore[arg-type]
     seen: list[CgContribution] = []
 
     async def record(contribution: CgContribution) -> None:
@@ -145,12 +145,12 @@ async def test_on_poll_exception_aborts_the_wait(monkeypatch: pytest.MonkeyPatch
     async def fake_sleep(seconds: float) -> None:
         return None
     monkeypatch.setattr(
-            "codingame_tools.client.async_.service.services.contribution.asyncio.sleep", fake_sleep)
+            "codingame_tools.client.service.services.contribution.asyncio.sleep", fake_sleep)
     data = _make_data()
     stale = _make_contribution(data, version=3)
     committed = _make_contribution(data, version=4)
     service = _FakeService([stale, committed])
-    helper = CgAsyncContributionServiceHelper(service)  # type: ignore[arg-type]
+    helper = CgContributionServiceHelper(service)  # type: ignore[arg-type]
 
     async def cancel(contribution: CgContribution) -> None:
         raise RuntimeError("cancelled")

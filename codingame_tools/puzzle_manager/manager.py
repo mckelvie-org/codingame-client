@@ -58,8 +58,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..client.async_.client import CgAsyncClient
-from ..client.async_.raw_client import CgAsyncClientHttpError
+from ..client.client import CgClient
 from ..client.common.protocol.last_activities import CgLastActivityPuzzle
 from ..client.common.protocol.report import CgSubmissionReport
 from ..client.common.protocol.schema import CgSolutionLanguage, cg_solution_language_to_extension
@@ -69,6 +68,7 @@ from ..client.common.protocol.test_session import (
     CgPlayResult,
     CgSubmitRequest,
 )
+from ..client.common.raw_client import CgClientHttpError
 from ..test_runner import DEFAULT_RUN_TIMEOUT_SECONDS, outputs_match, run_solution_locally
 from .layout import (
     DATA_SUBDIR_NAME,
@@ -268,13 +268,13 @@ def _write_meta_gitignore(puzzle_dir: Path) -> None:
 
 class CgPuzzleManager:
     """Builds/updates a puzzle working directory (`puzzle_dir`) against the server, via an
-       already-authenticated `CgAsyncClient`. See the module docstring for the (deliberately much
+       already-authenticated `CgClient`. See the module docstring for the (deliberately much
        simpler than `codingame_tools.contribution_manager`) design this is backed by."""
 
     puzzle_dir: Path
-    client: CgAsyncClient
+    client: CgClient
 
-    def __init__(self, puzzle_dir: Path | str, client: CgAsyncClient) -> None:
+    def __init__(self, puzzle_dir: Path | str, client: CgClient) -> None:
         self.puzzle_dir = Path(puzzle_dir).resolve()
         self.client = client
 
@@ -396,7 +396,7 @@ class CgPuzzleManager:
               incidentally, resolved to the server's own canonical copy) via
               `Puzzle/findProgressByPrettyId`. Confirmed live: an unrecognized pretty ID responds
               200 with a JSON `null` body, which `service_request_to_dict` rejects with a
-              `CgAsyncClientHttpError` ("expected a JSON dictionary, got NoneType")--that specific
+              `CgClientHttpError` ("expected a JSON dictionary, got NoneType")--that specific
               case (and only that case, identified by `status_code == 200`) is treated as "not a
               valid pretty ID," not a real error, and falls through to the next strategy.
            3. An exact-matching puzzle title (e.g. "Literary Alfabet Soupe")--via `Search/search`
@@ -421,7 +421,7 @@ class CgPuzzleManager:
         try:
             progress = await self.client.services.puzzle.find_progress_by_pretty_id(puzzle_ref)
             return progress.pretty_id
-        except CgAsyncClientHttpError as e:
+        except CgClientHttpError as e:
             if e.status_code != 200:
                 raise
 
@@ -685,11 +685,11 @@ class CgPuzzleManager:
 
            CAUTION: unlike `codingame_tools.contribution_manager`'s `push()`, this always
            creates a new graded submission--there's no draft/private-staging concept for puzzle
-           solutions. See `CgAsyncTestSessionService.submit`'s docstring for the (currently
+           solutions. See `CgTestSessionService.submit`'s docstring for the (currently
            unhandled) heavy-validation Cloudflare/524 timeout risk shared with contribution
            submission.
 
-           The report is fetched via `CgAsyncReportServiceHelper.find_report_by_submission_when_ready`
+           The report is fetched via `CgReportServiceHelper.find_report_by_submission_when_ready`
            rather than the plain `find_report_by_submission`, since calling the latter immediately
            after submitting can race server-side grading--see `CgSubmissionReport`'s class
            docstring.

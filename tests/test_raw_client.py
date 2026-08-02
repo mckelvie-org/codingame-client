@@ -1,4 +1,4 @@
-"""Tests for codingame_tools.async_.raw_client, backed by VCR cassettes (see conftest.py).
+"""Tests for codingame_tools.client.common.raw_client, backed by VCR cassettes (see conftest.py).
 
 These exercise genuinely public, unauthenticated endpoints, so the cassettes here were
 recorded from real live requests but require no login and carry no cookie data.
@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import pytest
 
-from codingame_tools.client.async_.raw_client import CgAsyncClientHttpError, CgAsyncRawClient
+from codingame_tools.client.common.raw_client import CgClientHttpError, CgRawClient
 
 
 @pytest.mark.usefixtures("vcr_cassette")
 async def test_find_codingamer_public_informations() -> None:
-    async with CgAsyncRawClient() as client:
+    async with CgRawClient() as client:
         result = await client.service_request_to_dict(
             "CodinGamer", "findCodinGamerPublicInformations", [1486857],
             require_login=False,
@@ -26,8 +26,8 @@ async def test_find_codingamer_public_informations() -> None:
 @pytest.mark.usefixtures("vcr_cassette")
 async def test_service_request_body_must_be_json_array_error() -> None:
     """Regression test: the request body must be a bare JSON array, not {"args": [...]}."""
-    async with CgAsyncRawClient() as client:
-        with pytest.raises(CgAsyncClientHttpError) as exc_info:
+    async with CgRawClient() as client:
+        with pytest.raises(CgClientHttpError) as exc_info:
             async with client.session.post(
                 f"{client.CODINGAME_SERVICES_URL}CodinGamer/findCodinGamerPublicInformations",
                 json={"args": [1486857]},

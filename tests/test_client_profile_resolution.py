@@ -1,4 +1,4 @@
-"""Unit tests for how CgAsyncRawClient/CgAsyncClient resolve `profile_name` when it's not given
+"""Unit tests for how CgRawClient/CgClient resolve `profile_name` when it's not given
    explicitly: best-effort from settings/config, never requiring `cg config init` to have been
    run first (matching this project's existing best-effort credential-resolution philosophy).
 
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from codingame_tools.client.async_.raw_client import CgAsyncRawClient
+from codingame_tools.client.common.raw_client import CgRawClient
 from codingame_tools.config.cg_config import CgConfigData
 from codingame_tools.config.resolver import CgConfig
 from codingame_tools.settings.cg_settings import CgSettings, CgSettingsData
@@ -31,7 +31,7 @@ async def test_profile_name_defaults_when_nothing_configured(
     start = fake_home / "empty_dir"
     start.mkdir()
     monkeypatch.chdir(start)
-    client = CgAsyncRawClient()
+    client = CgRawClient()
     try:
         assert client.profile_name == "default"
     finally:
@@ -47,7 +47,7 @@ async def test_profile_name_resolved_from_project_config(
     CgConfigData(settings=CgSettingsData(default_profile="work")).save_yaml(config_dir / "config.yaml")
     monkeypatch.chdir(project)
 
-    client = CgAsyncRawClient()
+    client = CgRawClient()
     try:
         assert client.profile_name == "work"
     finally:
@@ -65,7 +65,7 @@ async def test_explicit_profile_name_skips_settings_resolution(
     CgConfigData(settings=CgSettingsData(default_profile="from-config")).save_yaml(config_dir / "config.yaml")
     monkeypatch.chdir(project)
 
-    client = CgAsyncRawClient(profile_name="explicit")
+    client = CgRawClient(profile_name="explicit")
     try:
         assert client.profile_name == "explicit"
     finally:
@@ -83,7 +83,7 @@ async def test_explicit_settings_object_used_directly(
         raw_data=CgSettingsData(default_profile="from-settings-object"),
         config=synthetic_config,
     )
-    client = CgAsyncRawClient(settings=settings)
+    client = CgRawClient(settings=settings)
     try:
         assert client.profile_name == "from-settings-object"
     finally:
@@ -95,4 +95,4 @@ async def test_broken_cg_config_env_var_still_raises(tmp_path: Path, monkeypatch
        "nothing configured yet" is."""
     monkeypatch.setenv("CG_CONFIG", str(tmp_path / "does-not-exist.yaml"))
     with pytest.raises(FileNotFoundError):
-        CgAsyncRawClient()
+        CgRawClient()

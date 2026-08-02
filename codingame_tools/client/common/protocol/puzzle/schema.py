@@ -289,7 +289,7 @@ class CgFollowingPuzzleProgress(JSONWizardX):
 class CgGeneratedPuzzleSession(JSONWizardX):
     """The response to Puzzle/generateSessionFromPuzzlePrettyId. Confirmed live (2026-07-30):
        *not* a bare handle string, despite that being all that's actually needed downstream (see
-       `CgAsyncPuzzleService.generate_session_from_puzzle_pretty_id`, which unwraps this to just
+       `CgPuzzleService.generate_session_from_puzzle_pretty_id`, which unwraps this to just
        `handle` for callers)."""
 
     handle: str

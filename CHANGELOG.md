@@ -2,6 +2,20 @@
 
 ## {{UNRELEASED}}
 
+- **Breaking**: collapsed the never-built sync/async client split. `codingame_tools.client.sync`
+  (an empty placeholder) is deleted; `codingame_tools.client.async_` is flattened up to
+  `codingame_tools.client` (e.g. `codingame_tools.client.async_.client` -> `codingame_tools.
+  client.client`, `...async_.service...` -> `...client.service...`); every `CgAsync*` class drops
+  the `Async` infix (`CgAsyncClient` -> `CgClient`, `CgAsyncRawClient` -> `CgRawClient`,
+  `CgAsyncContributionService` -> `CgContributionService`, etc.--51 classes total across the raw
+  client, the top-level facade, all 19 service/service-helper pairs, and both servlet/
+  servlet-helper pairs). `CgRawClient`/`CgClientHttpError` (previously abstract-ish bases in
+  `client/common/raw_client.py`, split from their concrete `CgAsync*` counterparts purely to leave
+  room for a future sync HTTP backend) are merged into single concrete classes--`set_cookie` is no
+  longer `abstractmethod`. Also fixes a pre-existing gap where `client/service/services/__init__.py`
+  never imported/exported the `vote` service pair. No behavior change otherwise; every consumer
+  (CLI, contribution/puzzle managers, tests) updated to the new names/paths.
+
 - Fix `cg puzzle submit` crashing on a puzzle with no prior submission: `CgSubmissionReport.
   best_score` was assumed always-present (based on one earlier partial-report example) but
   confirmed live absent too when there's no historical "best" yet--now Optional like every other

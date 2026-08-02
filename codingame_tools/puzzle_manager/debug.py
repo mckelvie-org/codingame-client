@@ -21,7 +21,7 @@ import argparse
 from pathlib import Path
 from typing import cast
 
-from ..client.async_.client import CgAsyncClient
+from ..client.client import CgClient
 from ..test_runner import run_debug_stdin
 from .manager import CgPuzzleManager
 from .resolver import infer_puzzle_dir
@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     puzzle_dir = args.puzzle_dir if args.puzzle_dir is not None else infer_puzzle_dir(args.target_file)
-    manager = CgPuzzleManager(puzzle_dir, cast(CgAsyncClient, None))
+    manager = CgPuzzleManager(puzzle_dir, cast(CgClient, None))
     matching = [tc for tc in list_downloaded_test_cases(manager.tests_dir) if tc.index == args.test_index]
     if not matching:
         raise SystemExit(f"No downloaded test case with index {args.test_index} under {manager.tests_dir}.")

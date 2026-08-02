@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING
 from ..common.dataclass_wizard_x import CatchAll, JSONWizardX
 
 if TYPE_CHECKING:
-    from ..client.async_.client import CgAsyncClient
+    from ..client.client import CgClient
     from ..client.common.protocol.test_session import CgTestSessionTestCase
 
 __all__ = [
@@ -90,7 +90,7 @@ def normalize_test_label(label: str) -> str:
 
 
 async def download_test_cases(
-            client: CgAsyncClient,
+            client: CgClient,
             test_cases: list[CgTestSessionTestCase],
             tests_dir: Path,
         ) -> None:

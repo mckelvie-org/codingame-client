@@ -68,7 +68,7 @@ class CgSubmissionReport(JSONWizardX):
        partial-report snapshot. All of them are therefore Optional here except
        `validator_shareable`, the only field confirmed present in every observed case so far; a
        report is only "done" once they're all populated. See
-       `CgAsyncReportServiceHelper.find_report_by_submission_when_ready`, which polls until that's
+       `CgReportServiceHelper.find_report_by_submission_when_ready`, which polls until that's
        true (or a timeout elapses) instead of returning a partial report."""
 
     validator_shareable: bool
@@ -140,7 +140,7 @@ class CgSubmissionReport(JSONWizardX):
     def is_ready(self) -> bool:
         """Whether grading has finished--i.e. every field described as "absent while grading is
            still in progress" above is now populated. See the class docstring and
-           `CgAsyncReportServiceHelper.find_report_by_submission_when_ready`."""
+           `CgReportServiceHelper.find_report_by_submission_when_ready`."""
         return (
                 self.best_score is not None
                 and self.codingamer_id is not None and self.submission_id is not None

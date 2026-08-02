@@ -2,7 +2,7 @@
    (`import_`/`push`/`fetch`/`rebase`/`merge_discard_local`/`merge_discard_server`/`discard_local`/
    `merge_start`/`merge_continue`/`merge_abort`), against a fake, duck-typed client
    (services.contribution, servlets.file_servlet, servlets.file_upload)--no real
-   CgAsyncClient/network involved. Real git subprocess calls run against `tmp_path`.
+   CgClient/network involved. Real git subprocess calls run against `tmp_path`.
 
 These are pure/local tests--no network--so they run under the default `pdm run test` invocation.
 `git` itself is required on PATH (see `requires_git`)--near-universal in dev/CI environments, but

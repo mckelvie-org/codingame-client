@@ -75,7 +75,7 @@ class CgPuzzleServerData(JSONWizardX):
 
     test_session_handle: str
     """This codingamer's test session handle for the puzzle (see
-       `CgAsyncPuzzleService.generate_session_from_puzzle_pretty_id`). Freely cached and reused
+       `CgPuzzleService.generate_session_from_puzzle_pretty_id`). Freely cached and reused
        indefinitely, unlike `puzzle_pretty_id`/`title` below--confirmed (2026-07-30, per repeated
        identical results from `generateSessionFromPuzzlePrettyId`) to be a per-user singleton with
        affinity to the *puzzle*, not to whichever `pretty_id` happened to be used to generate it;

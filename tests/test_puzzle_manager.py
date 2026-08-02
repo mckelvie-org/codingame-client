@@ -1,6 +1,6 @@
 """Unit tests for codingame_tools.puzzle_manager.manager.CgPuzzleManager (`import_`/`repair`/
    `diff`/`discard_local`/`submit`/`play`), against a fake, duck-typed client (services.puzzle,
-   services.test_session)--no real CgAsyncClient/network involved.
+   services.test_session)--no real CgClient/network involved.
 
 These are pure/local tests--no network--so they run under the default `pdm run test` invocation.
 """
@@ -14,7 +14,6 @@ from typing import Any
 
 import pytest
 
-from codingame_tools.client.async_.raw_client import CgAsyncClientHttpError
 from codingame_tools.client.common.protocol.last_activities import CgLastActivityPuzzle, CgPuzzleFeedback
 from codingame_tools.client.common.protocol.report import CgReportPuzzleProgress, CgSubmissionReport, CgValidatorResult
 from codingame_tools.client.common.protocol.search import CgSearchResult
@@ -32,7 +31,7 @@ from codingame_tools.client.common.protocol.test_session import (
     CgTestSessionQuestionDetails,
     CgTestSessionTestCase,
 )
-from codingame_tools.client.common.raw_client import CgDownloadFileResult
+from codingame_tools.client.common.raw_client import CgClientHttpError, CgDownloadFileResult
 from codingame_tools.common.dataclass_wizard_x import CgEpochMillis
 from codingame_tools.puzzle_manager.manager import (
     CgPuzzleLocalTestFailedError,
@@ -154,7 +153,7 @@ class _FakePuzzleService:
             ) -> CgLastActivityPuzzle:
         self.find_pretty_id_calls.append(pretty_id)
         if self.pretty_id_not_found:
-            raise CgAsyncClientHttpError(status_code=200)
+            raise CgClientHttpError(status_code=200)
         if self.pretty_id_result is not None:
             return self.pretty_id_result
         return _make_progress(pretty_id=pretty_id)

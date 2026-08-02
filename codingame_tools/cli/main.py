@@ -18,7 +18,7 @@ from argparse_wizard import CliBase, CliCommand, CliError, CliExit, OptCmdFunc, 
 from json_data_types import JsonData, JsonList
 from rich.console import Console
 
-from ..client.async_.client import CgAsyncClient
+from ..client.client import CgClient
 from ..client.common.protocol.codingamer import CgCodingamePointsStats, CgXpThreshold
 from ..client.common.protocol.contribution import CgContributionData, CgPendingContribution, CgPersonalContribution
 from ..client.common.protocol.test_session import CgMultipleLanguagesTestParams, CgPlayRequest, CgSubmitRequest
@@ -153,7 +153,7 @@ def default_config_template(default_data_dir: str) -> str:
 class CgCli(CliBase):
     """Command-line interface for the contribution manager."""
 
-    _client: CgAsyncClient | None = None
+    _client: CgClient | None = None
     _client_authenticated: bool = False
     _client_validated: bool = False
     _console: Console | None = None
@@ -228,8 +228,8 @@ class CgCli(CliBase):
         trace_http: bool = self.args.trace_http
         return [self._make_trace_config()] if trace_http else []
     
-    async def get_client(self, *, require_credentials: bool = False, validate: bool = False) -> CgAsyncClient:
-        """Return the CgAsyncClient instance, initializing it if necessary.
+    async def get_client(self, *, require_credentials: bool = False, validate: bool = False) -> CgClient:
+        """Return the CgClient instance, initializing it if necessary.
 
            Credentials are always resolved and applied to the session on first use, best-effort
            (never raises if none are available)--this is "level 2" of four auth-strictness levels:
@@ -248,7 +248,7 @@ class CgCli(CliBase):
         """
         if self._client is None:
             profile: str | None = self.args.profile
-            # resolve_default_settings() (rather than CgAsyncClient's own no-args best-effort
+            # resolve_default_settings() (rather than CgClient's own no-args best-effort
             # fallback) so that -c/--config actually controls the client's default-profile
             # resolution too--not just cg config/cg settings commands--and so this agrees with
             # login_helper()'s own resolution (see resolve_default_settings()'s docstring for why
@@ -256,7 +256,7 @@ class CgCli(CliBase):
             # otherwise avoids a spurious FileNotFoundError from a broken --config that the
             # client wouldn't even consult in that case.
             settings = None if profile is not None else self.resolve_default_settings()
-            self._client = CgAsyncClient(
+            self._client = CgClient(
                 profile_name=profile,
                 trace_configs=self.get_trace_configs(),
                 settings=settings,
@@ -333,12 +333,12 @@ class CgCli(CliBase):
                exc_value: BaseException | None,
                traceback: TracebackType | None
             ) -> None:
-        """Async context manager exit. If we opened a CgAsyncClient, close it."""
+        """Async context manager exit. If we opened a CgClient, close it."""
         if self._client is not None:
             try:
                 await self._client.__aexit__(exc_type, exc_value, traceback)
             except Exception as e:
-                self.logger.error("Error closing CgAsyncClient: %s", e)
+                self.logger.error("Error closing CgClient: %s", e)
             self._client = None
 
     def wrap_and_indent(self, text: str, w: int = 80, indent: int = 4) -> str:
@@ -425,7 +425,7 @@ class CgCli(CliBase):
             if credentials is not None and not no_validate:
                 # verify that the credentials are valid by attempting to authenticate with them in a temporary
                 # client session.  If they are invalid, fall through to the login flow.
-                async with CgAsyncClient(
+                async with CgClient(
                             profile_name=profile_name,
                             trace_configs=self.get_trace_configs()
                         ) as client:
@@ -1686,7 +1686,7 @@ class CgCli(CliBase):
         return handler
 
     @cli_command("Create a brand new contribution, with test-case data normalization (but "
-                 "deliberately no 524 retry--see CgAsyncContributionServiceHelper.create_contribution). "
+                 "deliberately no 524 retry--see CgContributionServiceHelper.create_contribution). "
                  "A JSON-serialized CgContributionData object is read from stdin.")
     async def cmd_api_helper__contribution__create_contribution(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
@@ -1784,7 +1784,7 @@ class CgCli(CliBase):
                 # do this--no need to know/pass CONTRIBUTION-ID--but this shortcut is kept too,
                 # for anyone who reaches for `import` out of habit). Anything else existing there
                 # is left alone, same as before.
-                existing_identity = CgContributionManager(directory, cast(CgAsyncClient, None)).load_identity()
+                existing_identity = CgContributionManager(directory, cast(CgClient, None)).load_identity()
                 if existing_identity is None or existing_identity.contribution_handle != contribution_id:
                     raise CliError(
                             f"Directory already exists: {directory}. `cg contribution import` "
@@ -2188,7 +2188,7 @@ class CgCli(CliBase):
         async def handler() -> None:
             contribution_dir: Path | None = self.args.contribution_dir
             resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
-            manager = CgContributionManager(resolved_dir, cast(CgAsyncClient, None))
+            manager = CgContributionManager(resolved_dir, cast(CgClient, None))
             renormalize_test_case_dirs(manager.tests_dir)
             self.eprint(f"Renormalized {manager.tests_dir}")
         return handler
@@ -2208,7 +2208,7 @@ class CgCli(CliBase):
             only_validator: bool = self.args.validator
             update_expected: bool = self.args.update_expected
             resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
-            manager = CgContributionManager(resolved_dir, cast(CgAsyncClient, None))
+            manager = CgContributionManager(resolved_dir, cast(CgClient, None))
 
             view = manager.load()
             solution_language = view.data.solution_language
@@ -2415,7 +2415,7 @@ class CgCli(CliBase):
         async def handler() -> None:
             contribution_dir: Path | None = self.args.contribution_dir
             resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
-            manager = CgContributionManager(resolved_dir, cast(CgAsyncClient, None))
+            manager = CgContributionManager(resolved_dir, cast(CgClient, None))
             if not manager.merge_in_progress:
                 raise CliError("No merge in progress (run `cg contribution merge` to start one).")
             self._print_diff(manager.git_repo.diff_text(), "No differences in the merge state.")
@@ -2546,7 +2546,7 @@ class CgCli(CliBase):
         async def handler() -> None:
             contribution_dir: Path | None = self.args.contribution_dir
             resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
-            manager = CgContributionManager(resolved_dir, cast(CgAsyncClient, None))
+            manager = CgContributionManager(resolved_dir, cast(CgClient, None))
             try:
                 git_dir = manager.git_dir
             except FileNotFoundError as e:
@@ -2730,7 +2730,7 @@ class CgCli(CliBase):
             puzzle_dir: Path | None = self.args.puzzle_dir
             test_index: int | None = self.args.test_index
             resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
-            manager = CgPuzzleManager(resolved_dir, cast(CgAsyncClient, None))
+            manager = CgPuzzleManager(resolved_dir, cast(CgClient, None))
             try:
                 results = manager.play_local(test_index)
             except CgPuzzleLocalTestFailedError as e:
@@ -2764,7 +2764,7 @@ class CgCli(CliBase):
             puzzle_dir: Path | None = self.args.puzzle_dir
             use_json: bool = self.args.json
             resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
-            manager = CgPuzzleManager(resolved_dir, cast(CgAsyncClient, None))
+            manager = CgPuzzleManager(resolved_dir, cast(CgClient, None))
             html = manager.load_statement_html()
             if html is None:
                 raise CliError(
@@ -2917,7 +2917,7 @@ class CgCli(CliBase):
             puzzle_dir: Path | None = self.args.puzzle_dir
             force: bool = self.args.force
             resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
-            manager = CgPuzzleManager(resolved_dir, cast(CgAsyncClient, None))
+            manager = CgPuzzleManager(resolved_dir, cast(CgClient, None))
             identity = manager.load_identity()
             if identity is None:
                 raise CliError(f"{resolved_dir} has never been imported--nothing to delete.")

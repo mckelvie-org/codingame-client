@@ -22,7 +22,7 @@ import argparse
 from pathlib import Path
 from typing import cast
 
-from ..client.async_.client import CgAsyncClient
+from ..client.client import CgClient
 from ..test_runner import run_debug_stdin
 from .manager import CgContributionManager
 from .resolver import infer_contribution_dir
@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> None:
 
     contribution_dir = args.contribution_dir if args.contribution_dir is not None \
         else infer_contribution_dir(args.target_file)
-    manager = CgContributionManager(contribution_dir, cast(CgAsyncClient, None))
+    manager = CgContributionManager(contribution_dir, cast(CgClient, None))
     matching = manager.list_local_tests(
             [args.ordinal], local=args.side == "local", validator=args.side == "validator")
     if not matching:
