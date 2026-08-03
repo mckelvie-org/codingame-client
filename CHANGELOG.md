@@ -2,6 +2,32 @@
 
 ## {{UNRELEASED}}
 
+- **Documentation.** Everything beyond `README.md`/`CONTRIBUTING.md` now lives under `doc/`: an
+  overview, concepts (authentication, profiles, working directories, languages), workflow guides for
+  puzzles/contributions/debugging, the programmatic client and managers, and design notes recording
+  the decisions that aren't obvious from the code.
+
+  The 148-command CLI reference is **generated from the parser** by `pdm run gen-docs` (one page per
+  command group, one per API service endpoint) and committed, so it stays readable on GitHub and
+  shows interface changes as reviewable diffs. Three tests keep it honest, all offline: the
+  generated pages must match a fresh run, every hand-written `cg ...` must resolve against the real
+  parser, and every relative link between pages must point at a file that exists. Command renames
+  are the drift that actually happens here — `cg puzzle push` became `cg puzzle submit`, `revert`
+  became `discard-local` — and each would otherwise have silently invalidated every guide mentioning
+  it.
+
+  `CHANGELOG.md` deliberately stays at the repo root: `bin/cut-rc` and `bin/cut-prod` rewrite and
+  `git add` it by path.
+
+  **README links now survive PyPI.** PyPI renders `README.md` as the project front page but resolves
+  relative links against `pypi.org`, so every `[docs](doc/...)` would 404 there. `bin/cut-rc` and
+  `bin/cut-prod` now rewrite them to absolute URLs pinned to the release tag, in the same throwaway
+  worktree they already patch `pyproject.toml`/`README.md`/`CHANGELOG.md` in. `main` keeps ordinary
+  relative links (checked by the test suite); the tagged commit the package is built from — the one
+  PyPI displays — gets fully-qualified ones, pointing at the docs as they were for *that* version.
+  A second, deliberately unpinned link to the moving `prod-latest` tag gives readers of an old
+  version's page a route to current docs.
+
 - **`outputs_match` no longer accepts output CodinGame rejects.** It previously normalized away
   per-line trailing whitespace, and (via `splitlines`) CRLF line endings — both of which the server
   treats as failures. That's the dangerous direction: a solution passed locally and then failed on
@@ -49,6 +75,18 @@
   input is the single unterminated byte `"7"` reported `bytes=1 repr=b'7'`. An unterminated final
   line of stdin is real, and solutions have to handle it. (It's a community-contribution
   phenomenon, incidentally: official CodinGame puzzles' test files are properly terminated.)
+
+- **Fixed: `cg contribution` required a configured git identity, and said so obscurely.** Every
+  command touching `.meta/`'s git repository failed with `Author identity unknown` for anyone who
+  had never run `git config --global user.email` — and on CI, where a runner's hostname has no
+  domain (`runner@fv-az123.(none)`), git's usual `user@host` auto-detection can't rescue it either.
+
+  `git commit` now falls back to a synthetic `codingame-tools <codingame-tools@localhost>` identity
+  **only when git can't resolve one of its own**, probed once per repository via `git var`. The
+  conditional part matters: `-c` outranks every config file, so applying it unconditionally would
+  stamp that name over the user's real one in the `git log` they read while resolving a merge
+  conflict. `.meta/`'s commits are local scaffolding that is never pushed anywhere, so the identity
+  on them carries no meaning — it just has to exist.
 
 - Schema fixes for fields that are **omitted entirely** (not null) in real responses, all found by
   decoding the whole pending community-review queue rather than one report at a time:

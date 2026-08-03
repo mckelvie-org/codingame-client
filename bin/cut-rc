@@ -150,6 +150,15 @@ if m and m.group(1).strip() == "- _Add release notes here._":
           "write real release notes before cutting a production release.", file=sys.stderr)
 PY
 
+# Make README.md's relative links absolute, pinned to this release's tag. PyPI renders README.md as
+# the project front page but resolves relative links against pypi.org, so `[docs](doc/index.md)`
+# would 404 for anyone clicking it there. Rewriting here -- in the throwaway worktree, after the
+# badge patching above and before the commit -- means main keeps ordinary relative links (which
+# render on GitHub and are checked by the test suite) while the tagged commit the package is built
+# from, and therefore the README PyPI displays, is fully qualified.
+pdm run python "$TMP/scripts/rewrite_readme_links.py" \
+    "$TMP/README.md" "$GITHUB_REPO" "v$RC_VERSION" "$TMP"
+
 git -C "$TMP" add pyproject.toml CHANGELOG.md README.md
 git -C "$TMP" commit -m "chore: release $RC_VERSION"
 RC_SHA=$(git -C "$TMP" rev-parse HEAD)

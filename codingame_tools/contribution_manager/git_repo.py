@@ -74,6 +74,18 @@ def init_repo(git_dir: Path, work_tree: Path) -> None:
         raise CgGitError(argv, result.returncode, result.stderr)
 
 
+FALLBACK_IDENTITY_NAME = "codingame-tools"
+FALLBACK_IDENTITY_EMAIL = "codingame-tools@localhost"
+"""Author/committer identity used only when git can't resolve one of its own.
+
+   `.meta/`'s repository is local, gitignored scaffolding whose commits are never pushed anywhere,
+   so the identity on them carries no meaning--but `git commit` still refuses to run without one.
+   Git normally auto-detects `user@host` when nothing is configured, which is why this rarely bites
+   interactively; it fails on a machine whose hostname has no domain (`fv-az123.(none)` on a GitHub
+   Actions runner) or wherever `user.useConfigOnly` is set. Without this fallback, `cg contribution`
+   simply doesn't work for anyone who has never run `git config --global user.email`."""
+
+
 class CgGitRepo:
     """One git repository, addressed by its (possibly work-tree-external) `git_dir`/`work_tree`
        pair. `work_tree` is always the contribution's `data/` directory in practice--the checkout
@@ -88,6 +100,25 @@ class CgGitRepo:
     def __init__(self, git_dir: Path, work_tree: Path) -> None:
         self.git_dir = git_dir
         self.work_tree = work_tree
+        self._identity_args: list[str] | None = None
+
+    def _identity_config_args(self) -> list[str]:
+        """`-c user.name=... -c user.email=...`, but only when git has no identity of its own.
+
+           Deliberately conditional. `-c` outranks every config file, so applying it unconditionally
+           would stamp `FALLBACK_IDENTITY_NAME` over a user's real, configured identity--which is
+           what shows up in `git log` while they're resolving a merge conflict. Probed once per
+           repository object via `git var`, which reports failure exactly when `git commit` would."""
+        if self._identity_args is None:
+            probe = subprocess.run(
+                    ["git", f"--git-dir={self.git_dir}", "var", "GIT_COMMITTER_IDENT"],
+                    capture_output=True, check=False,
+                )
+            self._identity_args = [] if probe.returncode == 0 else [
+                    "-c", f"user.name={FALLBACK_IDENTITY_NAME}",
+                    "-c", f"user.email={FALLBACK_IDENTITY_EMAIL}",
+                ]
+        return self._identity_args
 
     # --- low-level -----------------------------------------------------------------------------
 
@@ -107,7 +138,10 @@ class CgGitRepo:
            real working tree--same underlying object database (`--git-dir` is never overridden),
            just a different set of files to read for this one operation."""
         effective_work_tree = work_tree if work_tree is not None else self.work_tree
-        argv = ["git", f"--git-dir={self.git_dir}", f"--work-tree={effective_work_tree}", *args]
+        argv = [
+            "git", *self._identity_config_args(),
+            f"--git-dir={self.git_dir}", f"--work-tree={effective_work_tree}", *args,
+        ]
         env = dict(os.environ, GIT_INDEX_FILE=str(index_file)) if index_file is not None else None
         result = subprocess.run(
                 argv, cwd=effective_work_tree, capture_output=True, check=False,
@@ -122,7 +156,10 @@ class CgGitRepo:
            and interact with directly, e.g. `mergetool` launching an external GUI or terminal
            tool. Returns the exit code; never raises on a non-zero exit (the caller decides what
            that means)."""
-        argv = ["git", f"--git-dir={self.git_dir}", f"--work-tree={self.work_tree}", *args]
+        argv = [
+            "git", *self._identity_config_args(),
+            f"--git-dir={self.git_dir}", f"--work-tree={self.work_tree}", *args,
+        ]
         return subprocess.run(argv, cwd=self.work_tree, check=False).returncode
 
     def set_head(self, branch: str) -> None:

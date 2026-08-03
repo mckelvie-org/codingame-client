@@ -94,6 +94,9 @@ python_version = "3.10"
 strict = true
 packages = ["codingame_tools"]
 exclude = ["^\\.codingame/", "^\\.cg_api/"]
+# `scripts/` holds dev tooling (the docs generator) that tests import directly; it isn't a package,
+# so mypy needs to be told where to find it.
+mypy_path = "scripts"
 
 [[tool.mypy.overrides]]
 module = ["vcr.*"]
@@ -107,6 +110,7 @@ includes = ["codingame_tools"]
 
 [tool.pdm.scripts]
 test = "pytest"
+gen-docs = "python scripts/gen_cli_docs.py"
 test-live-unauthenticated = "pytest -m live_unauthenticated"
 test-live = "pytest -m live"
 lint = "ruff check ."
