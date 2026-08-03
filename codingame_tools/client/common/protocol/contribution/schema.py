@@ -49,29 +49,40 @@ CgContributionId = str
 @dataclass
 class CgTopic(JSONWizardX):
     """A topic associated with a contribution, e.g. "Parsing", "Sorting", etc. Most of
-       the fields are fetched from the server in a search for topics."""
-    id: int
-    """The topic's unique identifier."""
+       the fields are fetched from the server in a search for topics.
 
-    handle: str
-    """Opaque short identifier for the topic, e.g. "parsing"."""
-
-    category: str
-    """e.g. "FUNDAMENTALS", "ADVANCED", "INTERMEDIATE"."""
+       **Only `label_map` is guaranteed.** A topic can arrive carrying nothing but its localized
+       label, with every identifying/statistical field omitted outright (not null)--seen on
+       author-typed free-form topics that don't correspond to an entry in CodinGame's own topic
+       catalogue, e.g. `{"labelMap": {"2": "Logic Gates"}}`. Surveying the 80 topic objects across
+       the pending community-review queue (2026-08-03): `labelMap` appeared 80/80, every other field
+       70/80, and `pageTitle`/`contentDetailsId` 38/80. So the catalogue fields are optional, and
+       code that reads them must handle `None` rather than assuming a topic is always a real
+       catalogue entry."""
 
     label_map: dict[str, str]
-    """Localized display label for the topic (language code -> label), e.g. {"1": "Parsing", "2": "Parsing"}."""
-
-    puzzle_count: int
-    """The number of puzzles tagged with this topic."""
-
-    parent_topic_id: int
-    """The ID of this topic's parent topic in the topic hierarchy."""
+    """Localized display label for the topic (language code -> label), e.g. {"1": "Parsing", "2": "Parsing"}.
+       The only field always present--see the class docstring."""
 
     # `extra_data` is deliberately the first field with a default: dataclass_wizard 1.0.0 mis-binds
     # any defaulted field positioned immediately before it (silently, no error) to the CatchAll's
     # own value. Keeping it first among the defaulted fields makes that impossible.
     extra_data: CatchAll = field(default_factory=dict)
+
+    id: int | None = None
+    """The topic's unique identifier, or None for a topic that isn't a catalogue entry."""
+
+    handle: str | None = None
+    """Opaque short identifier for the topic, e.g. "parsing". None for a non-catalogue topic."""
+
+    category: str | None = None
+    """e.g. "FUNDAMENTALS", "ADVANCED", "INTERMEDIATE". None for a non-catalogue topic."""
+
+    puzzle_count: int | None = None
+    """The number of puzzles tagged with this topic. None for a non-catalogue topic."""
+
+    parent_topic_id: int | None = None
+    """The ID of this topic's parent topic in the topic hierarchy. None for a non-catalogue topic."""
 
     page_title: str | None = None
     """Title of the topic's help-center page, if it has one."""
@@ -376,9 +387,6 @@ class CgContribution(JSONWizardX):
     last_version: CgContributionVersion
     """The most recent version of the contribution, including all content."""
     
-    avatar: int
-    """The binary image ID of the contributor's avatar image."""
-    
     comment_count: int
     """The number of comments on the contribution."""
     
@@ -402,6 +410,12 @@ class CgContribution(JSONWizardX):
 
     # See the note in CgTopic: `extra_data` is deliberately the first field with a default.
     extra_data: CatchAll = field(default_factory=dict)
+
+    avatar: int | None = None
+    """The binary image ID of the contributor's avatar image, or None for a codingamer who has
+       never set one. Omitted entirely (not null); seen on 3 of the 54 contributions in the pending
+       community-review queue (2026-08-03). `CgPendingContribution` already treated it this way--
+       these two classes describe the same underlying codingamer and had simply drifted."""
 
     status_history: list[CgContributionStatusHistoryEntry] = field(default_factory=list)
     """The history of status changes for the contribution."""
@@ -548,9 +562,6 @@ class CgPersonalContribution(JSONWizardX):
     public_handle: str
     """The public handle of the contribution."""
 
-    avatar: int
-    """The binary image ID of the contributor's avatar image."""
-
     title: str
     """The title of the contribution."""
 
@@ -591,6 +602,10 @@ class CgPersonalContribution(JSONWizardX):
     """The type of the contribution, e.g. "PUZZLE_INOUT", "CLASHOFCODE"."""
 
     extra_data: CatchAll = field(default_factory=dict)
+
+    avatar: int | None = None
+    """The binary image ID of the contributor's avatar image, or None for a codingamer who has
+       never set one. Optional for the same reason as `CgContribution.avatar`--see there."""
 
     validate_action: CgValidateAction | None = None
     """The status of an in-progress server-side validation action for the contribution, if any."""

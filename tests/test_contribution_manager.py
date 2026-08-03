@@ -538,7 +538,8 @@ async def test_create_default_language_is_python_with_a_working_stub(tmp_path: P
     view = await manager.create(title="My Puzzle")
 
     assert view.data.solution_language == "Python3"
-    assert (tmp_path / "data" / "solution.src").read_text() == "n = input()\nprint(n)\n"
+    # The stub's own value ends in a newline; the file additionally carries its terminator.
+    assert (tmp_path / "data" / "solution.src").read_text() == "n = input()\nprint(n)\n\n"
     assert (tmp_path / "solution.py").is_symlink()
     assert (tmp_path / "solution.py").resolve() == (tmp_path / "data" / "solution.src").resolve()
 
@@ -806,9 +807,60 @@ async def test_push_reflects_edited_sidecar_files(tmp_path: Path) -> None:
     await manager.push()
 
     submitted = service.update_calls[0]["contribution_data"]
-    assert submitted.statement == "Edited statement\n"
+    # The file's terminator is this client's, not part of the value--see common.text_files.
+    assert submitted.statement == "Edited statement"
     assert [tc.title for tc in submitted.test_cases] == ["Case A", "Case A"]
-    assert submitted.solution == "print('hi')\n"
+    # Untouched, so it goes back exactly as it arrived--it used to gain a newline here.
+    assert submitted.solution == "print('hi')"
+
+
+async def test_untouched_import_then_push_is_the_identity(tmp_path: Path) -> None:
+    """The regression the `common.text_files` conversion exists for: an import followed by a push with
+       no edits must submit byte-identical text, including for values that genuinely end in a
+       newline.
+
+       Those used to lose one newline per cycle, silently. Measured against the pending
+       community-review queue, the trailing-newline habit is per-*author*, so this hit every test
+       case of roughly 1 in 12 contributions rather than the occasional stray one. Cycling twice is
+       deliberate: a single round trip looked correct under the old scheme too, and only the second
+       exposed the erosion."""
+    data = CgContributionData(
+            title="My Puzzle",
+            statement="Statement ending in a newline\n",
+            input_description="No newline here",
+            output_description="Output desc\n",
+            constraints="1 <= N <= 100",
+            difficulty="easy",
+            stub_generator="read int N;\n",
+            topics=[],
+            test_cases=[
+                    _make_test_case("Case A", "1\n", "2\n", is_test=True, is_validator=False),
+                    _make_test_case("Case A", "3", "4", is_test=False, is_validator=True),
+                ],
+            solution_language="Python3",
+            solution="print('hi')\n",
+            cover_binary_id=None,
+        )
+
+    for cycle in range(2):
+        root = tmp_path / f"cycle{cycle}"
+        contribution = _make_contribution(data)
+        client, service, _, _ = _make_fake_client(
+                contribution, update_result=_make_contribution(data, version=4))
+        manager = CgContributionManager(root, client)  # type: ignore[arg-type]
+        await manager.import_("handle-1")
+
+        await manager.push()  # no edits at all
+
+        submitted = service.update_calls[0]["contribution_data"]
+        assert submitted.statement == data.statement
+        assert submitted.input_description == data.input_description
+        assert submitted.output_description == data.output_description
+        assert submitted.constraints == data.constraints
+        assert submitted.stub_generator == data.stub_generator
+        assert submitted.solution == data.solution
+        assert [(tc.test_in, tc.test_out) for tc in submitted.test_cases] \
+            == [(tc.test_in, tc.test_out) for tc in data.test_cases]
 
 
 async def test_push_passes_view_puzzle_type_and_flags(tmp_path: Path) -> None:

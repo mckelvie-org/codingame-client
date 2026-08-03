@@ -293,8 +293,8 @@ async def test_import_with_existing_answer_uses_it(tmp_path: Path) -> None:
     assert puzzle_service.generate_calls == [{"puzzle_pretty_id": "literary-alfabet-soupe", "codingamer_id": None}]
     assert test_session_service.start_calls == ["session-handle-1"]
 
-    assert (tmp_path / "data" / "solution.src").read_text() == "print('existing answer')\n"
-    assert (tmp_path / ".meta" / "statement.html").read_text() == "<p>statement</p>"
+    assert manager.load_solution() == "print('existing answer')\n"
+    assert manager.load_statement_html() == "<p>statement</p>"
     assert (tmp_path / ".meta" / "stub_generator.cgstub").read_text() == "read a:int\n"
     assert (tmp_path / ".gitignore").read_text() == ".meta/\n"
 
@@ -333,7 +333,7 @@ async def test_import_without_existing_answer_uses_placeholder_and_language_flag
     puzzle_data = await manager.import_("literary-alfabet-soupe", language="Python3")
 
     assert puzzle_data.solution_language == "Python3"
-    content = (tmp_path / "data" / "solution.src").read_text()
+    content = manager.load_solution()
     assert "TODO" in content
     assert "Literary Alfabet Soupe" in content
 
@@ -351,7 +351,7 @@ async def test_import_without_existing_answer_and_unknown_comment_syntax_uses_em
     puzzle_data = await manager.import_("literary-alfabet-soupe", language="Rust")
 
     assert puzzle_data.solution_language == "Rust"
-    content = (tmp_path / "data" / "solution.src").read_text()
+    content = manager.load_solution()
     assert content == ""
 
 
@@ -368,7 +368,7 @@ async def test_import_treats_empty_placeholder_answer_object_as_no_real_answer(t
     puzzle_data = await manager.import_("literary-alfabet-soupe", language="Python3")
 
     assert puzzle_data.solution_language == "Python3"
-    content = (tmp_path / "data" / "solution.src").read_text()
+    content = manager.load_solution()
     assert "TODO" in content
 
 
@@ -608,7 +608,8 @@ async def test_submit_submits_current_local_content(tmp_path: Path) -> None:
     assert len(test_session_service.submit_calls) == 1
     call = test_session_service.submit_calls[0]
     assert call["test_session_handle"] == "session-handle-1"
-    assert call["request"].code == "print('new solution')\n"
+    # The file's terminator is this client's, not part of the value--see common.text_files.
+    assert call["request"].code == "print('new solution')"
     assert call["request"].programming_language_id == "Python3"
 
 
@@ -806,7 +807,7 @@ async def test_discard_local_overwrites_with_server_answer(tmp_path: Path) -> No
     result = await manager.discard_local()
 
     assert result.code == "print('server version')\n"
-    assert (tmp_path / "data" / "solution.src").read_text() == "print('server version')\n"
+    assert manager.load_solution() == "print('server version')\n"
 
 
 async def test_discard_local_updates_recorded_language_if_it_changed(tmp_path: Path) -> None:
@@ -856,7 +857,8 @@ async def test_load_solution_returns_current_content(tmp_path: Path) -> None:
     await manager.import_("literary-alfabet-soupe")
     (tmp_path / "data" / "solution.src").write_text("print('hi')\n")
 
-    assert manager.load_solution() == "print('hi')\n"
+    # The file's terminator is this client's, not part of the value--see common.text_files.
+    assert manager.load_solution() == "print('hi')"
 
 
 # --- play_local ------------------------------------------------------------------------------
@@ -1234,7 +1236,7 @@ async def test_import_with_a_language_restores_saved_code_for_that_language(tmp_
     puzzle_data = await manager.import_("literary-alfabet-soupe", language="C++")
 
     assert puzzle_data.solution_language == "C++"
-    assert manager.solution_file.read_text() == "int main(){}\n"
+    assert manager.load_solution() == "int main(){}\n"
     assert ("session-handle-1", "C++") in ts.previous_code_calls
 
 
@@ -1247,7 +1249,7 @@ async def test_import_with_an_unused_language_falls_back_to_a_placeholder(tmp_pa
     puzzle_data = await manager.import_("literary-alfabet-soupe", language="C++")
 
     assert puzzle_data.solution_language == "C++"
-    assert "TODO" in manager.solution_file.read_text()
+    assert "TODO" in manager.load_solution()
 
 
 async def test_import_without_a_language_still_uses_the_saved_answer(tmp_path: Path) -> None:
@@ -1260,7 +1262,7 @@ async def test_import_without_a_language_still_uses_the_saved_answer(tmp_path: P
     puzzle_data = await manager.import_("literary-alfabet-soupe")
 
     assert puzzle_data.solution_language == "Python3"
-    assert manager.solution_file.read_text() == "print('py')\n"
+    assert manager.load_solution() == "print('py')\n"
     assert ts.previous_code_calls == []  # no need to ask; the session already answered
 
 
@@ -1282,7 +1284,7 @@ async def test_set_language_restores_saved_code_for_the_new_language(tmp_path: P
     assert result.previous_language == "Python3"
     assert result.language == "C++"
     assert result.from_server
-    assert manager.solution_file.read_text() == "int main(){ /* mine */ }\n"
+    assert manager.load_solution() == "int main(){ /* mine */ }\n"
     puzzle_data = manager.load_puzzle_data()
     assert puzzle_data is not None
     assert puzzle_data.solution_language == "C++"
@@ -1295,7 +1297,7 @@ async def test_set_language_writes_a_placeholder_for_a_never_used_language(tmp_p
     result = await manager.set_language("C++")
 
     assert not result.from_server
-    assert "TODO" in manager.solution_file.read_text()
+    assert "TODO" in manager.load_solution()
 
 
 async def test_set_language_refuses_when_local_edits_are_unsaved(tmp_path: Path) -> None:
@@ -1306,7 +1308,7 @@ async def test_set_language_refuses_when_local_edits_are_unsaved(tmp_path: Path)
     with pytest.raises(CgPuzzleManagerError, match="discard"):
         await manager.set_language("C++")
 
-    assert manager.solution_file.read_text() == "print('my unsaved edit')\n"  # untouched
+    assert manager.load_solution() == "print('my unsaved edit')"  # untouched
 
 
 async def test_set_language_force_discards_unsaved_edits(tmp_path: Path) -> None:
@@ -1316,7 +1318,7 @@ async def test_set_language_force_discards_unsaved_edits(tmp_path: Path) -> None
 
     await manager.set_language("C++", force=True)
 
-    assert manager.solution_file.read_text() == "int main(){}\n"
+    assert manager.load_solution() == "int main(){}\n"
 
 
 async def test_set_language_tolerates_a_trailing_newline_difference(tmp_path: Path) -> None:
@@ -1327,7 +1329,7 @@ async def test_set_language_tolerates_a_trailing_newline_difference(tmp_path: Pa
 
     await manager.set_language("C++")  # must not raise
 
-    assert manager.solution_file.read_text() == "int main(){}\n"
+    assert manager.load_solution() == "int main(){}\n"
 
 
 async def test_set_language_treats_our_own_placeholder_as_safe_to_discard(tmp_path: Path) -> None:
@@ -1341,7 +1343,7 @@ async def test_set_language_treats_our_own_placeholder_as_safe_to_discard(tmp_pa
 
     await manager.set_language("C++")  # must not raise
 
-    assert manager.solution_file.read_text() == "int main(){}\n"
+    assert manager.load_solution() == "int main(){}\n"
 
 
 async def test_untouched_solution_is_recognized_even_if_placeholder_generation_changes(
@@ -1357,7 +1359,7 @@ async def test_untouched_solution_is_recognized_even_if_placeholder_generation_c
     client, _, _, _ = _make_fake_client(session, previous_code={"C++": "int main(){}\n"})
     manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
     await manager.import_("literary-alfabet-soupe", language="Rust")
-    untouched = manager.solution_file.read_text()
+    untouched = manager.load_solution()
 
     # Simulate a future release generating a different placeholder.
     monkeypatch.setattr(
@@ -1366,7 +1368,7 @@ async def test_untouched_solution_is_recognized_even_if_placeholder_generation_c
 
     await manager.set_language("C++")  # must still not raise
 
-    assert manager.solution_file.read_text() == "int main(){}\n"
+    assert manager.load_solution() == "int main(){}\n"
     assert untouched != "# COMPLETELY DIFFERENT TEMPLATE\n"  # the templates really do differ
 
 
@@ -1389,14 +1391,14 @@ async def test_writing_the_solution_always_records_a_snapshot(tmp_path: Path) ->
     snapshot = manager.load_solution_snapshot()
     assert snapshot is not None
     assert snapshot.solution_language == "Python3"
-    assert snapshot.code == manager.solution_file.read_text()
+    assert snapshot.code == manager.load_solution()
 
     await manager.set_language("C++")
 
     snapshot = manager.load_solution_snapshot()
     assert snapshot is not None
     assert snapshot.solution_language == "C++"
-    assert snapshot.code == manager.solution_file.read_text()
+    assert snapshot.code == manager.load_solution()
 
 
 async def test_set_language_rejects_an_unknown_language(tmp_path: Path) -> None:

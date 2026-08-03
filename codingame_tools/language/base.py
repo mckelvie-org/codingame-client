@@ -253,11 +253,11 @@ class CgLanguage(ABC):  # noqa: B024 -- deliberately no @abstractmethod; see doc
     async def start_debug_session(
                 self,
                 ctx: CgLanguageContext,
-                input_file: Path,
+                stdin_text: str,
                 *,
                 timeout: float = DEFAULT_BUILD_TIMEOUT_SECONDS,
             ) -> CgDebugSession:
-        """Get the solution ready to be attached to by a debugger, with `input_file` as its stdin,
+        """Get the solution ready to be attached to by a debugger, with `stdin_text` as its stdin,
            and return how to reach it.
 
            For a compiled, containerized language this builds the debug profile and starts a stopped
@@ -265,9 +265,18 @@ class CgLanguage(ABC):  # noqa: B024 -- deliberately no @abstractmethod; see doc
            itself (Python3, via `debugpy` running `codingame_tools.puzzle_manager.debug`) don't need
            this at all and leave it unimplemented.
 
-           Feeding stdin from a *file* is the whole reason this exists as a separate step: it lets
-           the redirection happen in a command we control, rather than relying on a debug adapter's
-           own stdin handling.
+           Redirecting stdin from a *file* is the whole reason this exists as a separate step: it
+           lets the redirection happen in a command we control, rather than relying on a debug
+           adapter's own stdin handling. But the file has to be one the implementation *materializes*
+           from `stdin_text`, not the test case's own file on disk.
+
+           That distinction is the entire reason this parameter is text rather than a `Path`. A
+           contribution's test-case file carries a final newline this client added (see
+           `common.text_files`), so redirecting from it directly would feed the solution one byte
+           more than `cg contribution play` does, and one byte more than CodinGame does--verified
+           2026-08-03 that the server appends nothing. A puzzle's test-case file has no such
+           addition. Taking text makes the caller resolve that, which it is already positioned to
+           do, and leaves implementations with one unambiguous job: put exactly these bytes on stdin.
 
         Raises:
             CgLanguageOperationNotSupportedError: base implementation always raises.

@@ -99,6 +99,25 @@ async def download_test_cases(
        `input_binary_id`/`output_binary_id`, written as raw bytes (test data isn't guaranteed to
        be UTF-8 text, so no decoding is attempted).
 
+       Deliberately *not* passed through `common.text_files`, unlike a contribution's test cases.
+       These are already files server-side, downloaded byte-for-byte, read-only, and never pushed
+       anywhere--so the bytes on disk are the same bytes CodinGame feeds the solution's stdin
+       remotely, and local runs get exact parity for free. A contribution's test cases need the
+       conversion for the opposite reason: there, the server holds a *string* and the file is this
+       client's rendering of it.
+
+       **CodinGame's runner does not append a terminator**, so appending one here "to tidy the file
+       up" would hand a local run one more byte of stdin than the same test gets remotely.
+       Confirmed live (2026-08-03) rather than assumed: a probe solution reading
+       `sys.stdin.buffer.read()` on a community puzzle whose stored input is the single unterminated
+       byte `"7"` reported `bytes=1 repr=b'7'`.
+
+       Which means an unterminated final line of input is real and solutions have to cope with it--
+       but note it is a *community-contribution* phenomenon, not a universal one. Official CodinGame
+       puzzles' test files are properly terminated (all 12 of Temperatures' are); community puzzles'
+       mostly aren't, because their authors typed them into textareas. Whatever the origin, the
+       bytes here are the bytes the server uses.
+
     Raises:
         CgPuzzleTestCasesDownloadError: if two test cases report the same `index` (unexpected;
                                          see the class docstring).

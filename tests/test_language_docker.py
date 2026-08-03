@@ -28,7 +28,6 @@ from pathlib import Path
 import pytest
 
 from codingame_tools.language import (
-    CgDebugSession,
     CgLanguageContext,
     CgLaunchTestCase,
     CgVsCodeRequest,
@@ -58,6 +57,7 @@ from codingame_tools.language._docker import (
 )
 from codingame_tools.language.languages.cpp import (
     CACHED_MARKER,
+    DEBUG_STDIN_FILE_NAME,
     GDBSERVER_PORT,
     LANG_SLUG,
     STOP_DEBUG_SCRIPT,
@@ -576,37 +576,20 @@ async def test_devcontainer_references_the_stable_alias_not_a_content_hash(tmp_p
 async def test_cpp_debug_session_starts_and_stops(tmp_path: Path) -> None:
     language = get_language("C++")
     ctx = _ctx(tmp_path, ECHO_DOUBLE)
-    input_file = ctx.root / ".meta" / "tests" / "1" / "T" / "input.txt"
-    input_file.parent.mkdir(parents=True)
-    input_file.write_text("21\n")
 
-    session = await language.start_debug_session(ctx, input_file, timeout=900)
+    session = await language.start_debug_session(ctx, "21", timeout=900)
 
     assert session.ok, session.output
     assert session.details["address"] == f"localhost:{GDBSERVER_PORT}"
     assert session.details["container"] == container_name_for(LANG_SLUG, ctx.root)
 
+    # Redirected from a copy this wrote, holding exactly the bytes asked for--no terminator
+    # supplied, since the caller's value didn't have one. Redirecting from a contribution's own
+    # test-case file instead would have added one.
+    assert (ctx.meta_dir / DEBUG_STDIN_FILE_NAME).read_text() == "21"
+
     await language.stop_debug_session(ctx)
     await language.stop_debug_session(ctx)  # idempotent: postDebugTask fires even on a dead session
-
-
-@pytest.mark.docker
-@requires_docker
-async def test_cpp_debug_session_rejects_input_outside_the_working_dir(tmp_path: Path) -> None:
-    """Only the working directory is mounted, so an input file elsewhere simply isn't visible in
-       the container--better to say so than to fail obscurely inside it."""
-    ctx = _ctx(tmp_path, ECHO_DOUBLE)
-    outside = tmp_path / "elsewhere.txt"
-    outside.write_text("21\n")
-
-    session = await language_start(ctx, outside)
-
-    assert not session.ok
-    assert "outside" in session.output
-
-
-async def language_start(ctx: CgLanguageContext, input_file: Path) -> CgDebugSession:
-    return await get_language("C++").start_debug_session(ctx, input_file, timeout=900)
 
 
 @pytest.mark.docker

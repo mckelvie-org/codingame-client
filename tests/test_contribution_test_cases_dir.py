@@ -16,7 +16,6 @@ from codingame_tools.contribution_manager.test_cases_dir import (
     VALIDATOR_SUBDIR_NAME,
     CgTestCaseFileMeta,
     commit_test_cases,
-    ensure_trailing_newline,
     import_test_cases,
     list_local_test_cases,
     normalize_test_title,
@@ -76,12 +75,16 @@ def test_import_well_paired_same_title_collapses_into_one_dir(tmp_path: Path) ->
     assert (named_dir / VALIDATOR_SUBDIR_NAME / "output.txt").read_text() == "4\n"
 
 
-def test_import_appends_trailing_newline_only_when_missing(tmp_path: Path) -> None:
+def test_import_appends_the_terminator_unconditionally(tmp_path: Path) -> None:
+    """The terminator is the *file's*, so it goes on regardless of how the value ends--a value that
+       already ends in a newline is one with a trailing blank line, and keeps it. Appending only
+       when missing is the trap `common.text_files` documents at length: it can't be inverted, so
+       paired with the strip on the way out it erodes a newline per round trip."""
     test_cases = [_local("Case A", "already-has-nl\n", "no-nl")]
     tests_dir = tmp_path / "tests"
     import_test_cases(test_cases, tests_dir)
     named_dir = tests_dir / "01" / "Case-A"
-    assert (named_dir / LOCAL_SUBDIR_NAME / "input.txt").read_text() == "already-has-nl\n"
+    assert (named_dir / LOCAL_SUBDIR_NAME / "input.txt").read_text() == "already-has-nl\n\n"
     assert (named_dir / LOCAL_SUBDIR_NAME / "output.txt").read_text() == "no-nl\n"
 
 
@@ -304,7 +307,8 @@ def test_list_local_output_file_can_be_overwritten_and_reread(tmp_path: Path) ->
     entries[0].output_file.write_text("fresh\n", encoding="utf-8")
 
     reread = list_local_test_cases(tests_dir)
-    assert reread[0].output_text == "fresh\n"
+    # `output_text` is the server-side value, so the file's terminator isn't part of it.
+    assert reread[0].output_text == "fresh"
 
 
 def test_list_local_natural_sorts_ordinals(tmp_path: Path) -> None:
@@ -323,23 +327,10 @@ def test_list_local_natural_sorts_ordinals(tmp_path: Path) -> None:
     assert [e.title for e in entries] == ["First", "Inserted", "Tenth"]
 
 
-def test_ensure_trailing_newline_leaves_empty_text_empty() -> None:
-    """A file is a list of lines, correctly expanded as `"\\n".join(lines) + ("\\n" if lines else
-       "")`: no lines is a zero-length file, one empty line is `"\\n"`, and those are different
-       files. Beyond being right in its own terms, this is what makes "no reference solution"
-       representable--`contribution_manager.manager` spells it as a zero-length `solution.src`,
-       which would be impossible if every write produced at least a newline."""
-    assert ensure_trailing_newline("") == ""
-    assert ensure_trailing_newline("\n") == "\n"
-    assert ensure_trailing_newline("abc") == "abc\n"
-    assert ensure_trailing_newline("abc\n") == "abc\n"
-
-
 def test_an_empty_test_input_round_trips_as_a_zero_length_file(tmp_path: Path) -> None:
     """An empty test input is written as an empty file, not a stray newline, and reads back
-       unchanged. (What reaches the server was already correct either way--
-       `CgContributionServiceHelper.update_contribution` strips one trailing newline via
-       `strip_test_final_eols`--so this is about the file on disk being honest.)"""
+       unchanged--the zero-length carve-out in `common.text_files`, which is what keeps a
+       zero-length `solution.src` available as this client's spelling of "no reference solution"."""
     import_test_cases([
             CgTestCase(title="Empty input", test_in="", test_out="ok",
                        is_test=True, is_validator=False, need_validation=True),
@@ -350,4 +341,25 @@ def test_an_empty_test_input_round_trips_as_a_zero_length_file(tmp_path: Path) -
 
     (committed,) = commit_test_cases(tmp_path)
     assert committed.test_in == ""
-    assert committed.test_out == "ok\n"
+    assert committed.test_out == "ok"
+
+
+def test_test_case_text_survives_repeated_import_commit_cycles(tmp_path: Path) -> None:
+    """The regression this conversion exists for: a test case whose text genuinely ends in a newline
+       used to lose one on every fetch/push cycle, silently and with no user edit, until it ran out.
+
+       Measured against the real world, that wasn't an exotic case--the trailing-newline habit is
+       per-author, so it hit *every* test case of roughly 1 in 12 contributions. Cycling repeatedly
+       (not just once) is the point: a single round trip looked fine under the old scheme too, and
+       only the second exposed the erosion."""
+    original = [
+            _tc("Terminated", "3\nabc\n", "yes\n", is_test=True, is_validator=False),
+            _tc("Unterminated", "3\nabc", "yes", is_test=True, is_validator=False),
+            _tc("Trailing blank lines", "x\n\n\n", "y\n\n", is_test=True, is_validator=False),
+        ]
+    current = original
+    for _ in range(3):
+        import_test_cases(current, tmp_path)
+        current = commit_test_cases(tmp_path)
+        assert [(tc.test_in, tc.test_out) for tc in current] \
+            == [(tc.test_in, tc.test_out) for tc in original]

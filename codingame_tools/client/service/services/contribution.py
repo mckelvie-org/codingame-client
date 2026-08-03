@@ -8,7 +8,6 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from copy import deepcopy
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, cast
 
@@ -39,19 +38,6 @@ class CgContributionServiceHelper(CgServiceHelper["CgContributionService"]):
 
     _POLL_INTERVAL_SECONDS = 30.0
     """How often to re-check `find_contribution` while waiting out a 524 in `update_contribution`."""
-
-    @staticmethod
-    def _normalize_contribution_data(contribution_data: CgContributionData) -> CgContributionData:
-        """Return a copy of `contribution_data` with a single trailing '\\n' stripped from each
-           test case's `test_in`/`test_out` text, if present--the preferred submission format
-           per CodinGame site admins. The original object is never mutated."""
-        normalized = deepcopy(contribution_data)
-        for test_case in normalized.test_cases:
-            if test_case.test_in.endswith("\n"):
-                test_case.test_in = test_case.test_in[:-1]
-            if test_case.test_out.endswith("\n"):
-                test_case.test_out = test_case.test_out[:-1]
-        return normalized
 
     async def _poll_until_committed(
                 self,
@@ -99,12 +85,17 @@ class CgContributionServiceHelper(CgServiceHelper["CgContributionService"]):
                 prev_version: int,
                 codingamer_id: int | None = None,
                 *,
-                strip_test_final_eols: bool = True,
                 max_wait_seconds: float = 0.0,
                 on_poll: Callable[[CgContribution], Awaitable[None]] | None = None,
             ) -> CgContribution:
-        """Submit a new version of a contribution's content, adding retry/polling and data
-           normalization on top of the plain `CgContributionService.update_contribution`.
+        """Submit a new version of a contribution's content, adding 524 retry/polling on top of
+           the plain `CgContributionService.update_contribution`.
+
+           Deliberately does no normalization of `contribution_data`. Newline canonicalization lives
+           in `codingame_tools.common.text_files`, applied by the puzzle/contribution managers as
+           they convert between server values and local files--not here, where it would silently
+           rewrite a caller's data at the transport layer and, worse, half of a round trip whose
+           other half lives somewhere else entirely.
 
            The server re-validates a contribution's full test suite on every update, which for
            heavy contributions can take long enough that Cloudflare's edge disconnects the
@@ -118,10 +109,6 @@ class CgContributionServiceHelper(CgServiceHelper["CgContributionService"]):
             contribution_id, puzzle_type, contribution_data, draft, ready_for_moderation,
             prev_version, codingamer_id:
                 See `CgContributionService.update_contribution`.
-            strip_test_final_eols:
-                If True (the default), submit a normalized copy of `contribution_data` with a
-                single trailing '\\n' stripped from each test case's input/output text, if
-                present. `contribution_data` itself is never mutated.
             max_wait_seconds:
                 How long to keep polling after a 524 before giving up, in seconds. 0 (the
                 default) means wait indefinitely. Ignored entirely if no 524 occurs.
@@ -151,8 +138,6 @@ class CgContributionServiceHelper(CgServiceHelper["CgContributionService"]):
                 If a 524 occurred and `max_wait_seconds` elapsed before the contribution's
                 version incremented. The update may still complete server-side.
         """
-        if strip_test_final_eols:
-            contribution_data = self._normalize_contribution_data(contribution_data)
         try:
             return await self.service.update_contribution(
                     contribution_id, puzzle_type, contribution_data, draft, ready_for_moderation,
@@ -177,11 +162,9 @@ class CgContributionServiceHelper(CgServiceHelper["CgContributionService"]):
                 draft: bool,
                 ready_for_moderation: bool,
                 codingamer_id: int | None = None,
-                *,
-                strip_test_final_eols: bool = True,
             ) -> CgContributionId:
-        """Create a brand new contribution, adding data normalization (but, deliberately, no
-           524 retry--see below) on top of the plain `CgContributionService.create_contribution`.
+        """Create a brand new contribution. Deliberately adds no 524 retry (see below) and, like
+           `update_contribution`, no normalization of `contribution_data`.
 
            Unlike `update_contribution`, there is no `prev_version`-style idempotency check the
            server can use to reject a duplicate resubmission, and no existing `contribution_id`
@@ -196,10 +179,6 @@ class CgContributionServiceHelper(CgServiceHelper["CgContributionService"]):
         Args:
             puzzle_type, contribution_data, draft, ready_for_moderation, codingamer_id:
                 See `CgContributionService.create_contribution`.
-            strip_test_final_eols:
-                If True (the default), submit a normalized copy of `contribution_data` with a
-                single trailing '\\n' stripped from each test case's input/output text, if
-                present. `contribution_data` itself is never mutated.
 
         Returns:
             The new contribution's opaque public handle (`CgContributionId`).
@@ -214,8 +193,6 @@ class CgContributionServiceHelper(CgServiceHelper["CgContributionService"]):
                 if the status code is not 2xx, or if the decoded content is not a str. In
                 particular, a 524 is NOT retried--see above--and is raised like any other error.
         """
-        if strip_test_final_eols:
-            contribution_data = self._normalize_contribution_data(contribution_data)
         try:
             return await self.service.create_contribution(
                     puzzle_type, contribution_data, draft, ready_for_moderation, codingamer_id)
@@ -477,8 +454,7 @@ class CgContributionService(CgService):
            `CgClientHttpError` with `status_code == 524`) even though the origin request
            eventually completes successfully server-side. See
            `CgContributionServiceHelper.update_contribution` (`self.helper.update_contribution`)
-           for a version that layers retry/polling and data normalization (e.g. stripping trailing
-           newlines from test case text) on top of this method.
+           for a version that layers retry/polling on top of this method.
 
         Args:
             contribution_id:      The opaque contribution ID (see `CgContributionId`).
@@ -538,11 +514,10 @@ class CgContributionService(CgService):
             ) -> CgContributionId:
         """Create a brand new contribution.
 
-           A thin wrapper over the raw API--no retries and no normalization of
-           `contribution_data` are performed here (see
-           `CgContributionServiceHelper.create_contribution`,
-           `self.helper.create_contribution`, for a version that layers data normalization on top
-           of this method--but deliberately not 524 retry; see that method's docstring for why).
+           A thin wrapper over the raw API--no retries are performed here (see
+           `CgContributionServiceHelper.create_contribution`, `self.helper.create_contribution`,
+           which deliberately doesn't add 524 retry either; see that method's docstring for why).
+           No layer here normalizes `contribution_data`.
            Argument order/shape mirrors `update_contribution`, minus `contribution_id`/
            `prev_version` (there's no existing contribution yet, and thus nothing to reference).
 

@@ -62,6 +62,7 @@ from ..client.common.protocol.contribution import (
 from ..client.common.protocol.schema import CgSolutionLanguage
 from ..client.common.raw_client import compute_content_hash
 from ..common.dataclass_wizard_x import CgEpochMillis
+from ..common.text_files import file_to_server_text, server_text_to_file
 from ..config.resolver import default_global_data_dir
 from ..language import (
     DEFAULT_BUILD_TIMEOUT_SECONDS,
@@ -123,7 +124,6 @@ from .test_cases_dir import (
     TESTS_SUBDIR_NAME,
     CgContributionLocalTestCase,
     commit_test_cases,
-    ensure_trailing_newline,
     import_test_cases,
     list_local_test_cases,
     renormalize_test_case_dirs,
@@ -440,8 +440,11 @@ class CgContributionBuildFailedError(CgContributionManagerError):
 def _normalize_solution(code: str | None) -> str:
     """Solution text for the "is this still the stub we generated?" comparison only.
 
-       Tolerates a trailing-newline difference, since `_write_sidecar` adds one to a stub that
-       didn't already end in a newline, and maps `None` (no file) onto `""`.
+       Ignores trailing newlines entirely, and maps `None` (no file) onto `""`. Note this is *not*
+       needed to undo the on-disk form--`_read_sidecar` exactly inverts `_write_sidecar`, so an
+       untouched stub already compares equal byte-for-byte. The tolerance is for the human case: an
+       editor configured to trim or add trailing blank lines shouldn't turn "still the stub we
+       generated" into "the author wrote a real solution here".
 
        Deliberately *more* forgiving than the null-solution test in `_read_local_data`, which is
        exact: the two answer different questions. "Has the user written anything real here?" can
@@ -451,21 +454,28 @@ def _normalize_solution(code: str | None) -> str:
 
 
 def _write_sidecar(path: Path, content: str | None) -> None:
-    """Write `content` to `path` (creating parent directories, appending a trailing newline if
-       missing), or remove `path` if `content` is None."""
+    """Write a server-side text value to `path` in this client's on-disk form (see
+       `common.text_files.server_text_to_file`), creating parent directories, or remove `path` if
+       `content` is None.
+
+       Exactly inverted by `_read_sidecar`, so a fetch/push cycle on an untouched file is the
+       identity."""
     if content is None:
         if path.is_file():
             path.unlink()
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(ensure_trailing_newline(content), encoding="utf-8")
+    path.write_text(server_text_to_file(content), encoding="utf-8")
 
 
 def _read_sidecar(path: Path) -> str | None:
-    """Read `path`'s content, or None if it doesn't exist."""
+    """Recover the server-side text value from `path` (see
+       `common.text_files.file_to_server_text`), or None if it doesn't exist.
+
+       Exactly inverts `_write_sidecar`."""
     if not path.is_file():
         return None
-    return path.read_text(encoding="utf-8")
+    return file_to_server_text(path.read_text(encoding="utf-8"))
 
 
 def _ordinal_matches(requested: str, actual: str) -> bool:
@@ -598,10 +608,14 @@ def _read_local_data(data_dir: Path, working_data: CgContributionData) -> tuple[
     # "none" as an empty file rather than a missing one is what lets this client always keep the
     # file present, so the `solution.<ext>` symlink resolves and there's something to type into.
     #
-    # Strictly zero-length, not "blank": treating a file as a list of lines, no lines is `""` while
-    # one empty line is `"\n"`, and those are different files. A whitespace-only file is a real
-    # (broken) program and is pushed as one, where the server will reject it--rather than being
-    # silently reinterpreted as "no solution at all".
+    # The test is on the *decoded* value, so both a zero-length file and a file containing exactly
+    # one newline count--the one place `common.text_files`' conversion isn't injective, landing here
+    # as a feature: an editor with "insert final newline" enabled can't turn "no reference solution"
+    # into "a solution consisting of one blank line" behind the author's back.
+    #
+    # Nothing weaker than that, though. A whitespace-only file is a real (broken) program and is
+    # pushed as one, for the server to reject--rather than being silently reinterpreted as "no
+    # solution at all".
     #
     # This does conflate a server-side solution that is genuinely `""` with a null one. Accepted
     # deliberately: an empty program passes no test cases, so no contribution could have been
@@ -2061,8 +2075,10 @@ class CgContributionManager:
             raise CgContributionManagerError(
                     f"No {side} test case with ordinal {ordinal!r} under {self.tests_dir}.")
         ctx = self.language_context(solution_language)
+        # `input_text`, not `input_file`: the file carries a final newline this client added,
+        # which isn't part of the value and must not reach the solution--see common.text_files.
         return await get_language(solution_language).start_debug_session(
-                ctx, matching[0].input_file, timeout=timeout)
+                ctx, matching[0].input_text, timeout=timeout)
 
     async def stop_debug_session(self, solution_language: CgSolutionLanguage) -> None:
         """Tear down whatever `start_debug_session()` started. Safe to call when nothing is

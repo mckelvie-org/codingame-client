@@ -44,6 +44,7 @@ from pathlib import Path
 
 from ..client.common.protocol.contribution import CgTestCase
 from ..common.dataclass_wizard_x import CatchAll, JSONWizardX
+from ..common.text_files import file_to_server_text, server_text_to_file
 
 __all__ = [
     "TESTS_SUBDIR_NAME",
@@ -125,43 +126,6 @@ def _natural_sort_key(name: str) -> tuple[object, ...]:
     return tuple(int(part) if part.isdigit() else part for part in parts)
 
 
-def ensure_trailing_newline(text: str) -> str:
-    """Append a trailing newline if `text` doesn't already end with one--used when writing
-       server-provided content into files, so a clean import-then-commit round trip (with no edits)
-       doesn't spuriously diff against the file's on-disk convention. The reverse (stripping a
-       single trailing newline before submission) already happens automatically in
-       `CgContributionServiceHelper.update_contribution` (`strip_test_final_eols`).
-
-       **Empty text stays empty.** Treating a file as a list of lines, the correct expansion is
-       `"\n".join(lines) + ("\n" if lines else "")`: no lines is a zero-length file, one empty line
-       is `"\n"`, and those are different files. Beyond being right in its own terms, this is what
-       makes "no reference solution" representable at all--`contribution_manager.manager` spells it
-       as a zero-length `solution.src` (see `_read_local_data`), which would be impossible if every
-       write produced at least a newline.
-
-       Shared with `manager.py` rather than duplicated: the two copies had already drifted apart
-       once, and only one of them was right.
-
-       **The residual ambiguity is accepted, not an oversight.** Any scheme that lets a file's final
-       line optionally carry its terminating newline has to collapse *something*; together with the
-       submission-side strip this pipeline is a canonicalization to "no trailing newline", not a
-       bijection:
-
-           ''        -> ''        -> ''         round-trips
-           'abc'     -> 'abc\n'   -> 'abc'      round-trips
-           'abc\n'   -> 'abc\n'   -> 'abc'      canonicalized (trailing blank line lost)
-           '\n'      -> '\n'      -> ''         canonicalized (a lone blank line reads as empty)
-
-       It is idempotent--anything already canonical survives exactly--so the cost is only that a
-       *trailing* blank line can't be expressed, and in the one-line case that means a file
-       containing exactly one blank line is indistinguishable from an empty one. This is the same
-       trade editors make with "insert final newline" enabled: it buys a representable empty file,
-       which is common and load-bearing here (a zero-length `solution.src` means "no reference
-       solution"), at the cost of a degenerate case nobody needs. Don't try to recover it by making
-       empty text produce `"\n"`--that just moves the ambiguity onto the case that matters."""
-    return text if not text or text.endswith("\n") else text + "\n"
-
-
 def _write_test_meta(named_dir: Path, title: str) -> None:
     named_dir.mkdir(parents=True, exist_ok=True)
     CgTestCaseFileMeta(title=title).save(named_dir / TEST_META_FILE_NAME)
@@ -170,8 +134,8 @@ def _write_test_meta(named_dir: Path, title: str) -> None:
 def _write_test_side(named_dir: Path, side_subdir_name: str, test_case: CgTestCase) -> None:
     side_dir = named_dir / side_subdir_name
     side_dir.mkdir(parents=True, exist_ok=True)
-    (side_dir / _INPUT_FILE_NAME).write_text(ensure_trailing_newline(test_case.test_in), encoding="utf-8")
-    (side_dir / _OUTPUT_FILE_NAME).write_text(ensure_trailing_newline(test_case.test_out), encoding="utf-8")
+    (side_dir / _INPUT_FILE_NAME).write_text(server_text_to_file(test_case.test_in), encoding="utf-8")
+    (side_dir / _OUTPUT_FILE_NAME).write_text(server_text_to_file(test_case.test_out), encoding="utf-8")
 
 
 def _place_ordinal(ordinal_dir: Path, local: CgTestCase | None, validator: CgTestCase | None) -> None:
@@ -236,8 +200,8 @@ def _read_test_meta_title(named_dir: Path) -> str:
 
 
 def _read_test_side(side_dir: Path, title: str, *, is_test: bool, is_validator: bool) -> CgTestCase:
-    test_in = (side_dir / _INPUT_FILE_NAME).read_text(encoding="utf-8")
-    test_out = (side_dir / _OUTPUT_FILE_NAME).read_text(encoding="utf-8")
+    test_in = file_to_server_text((side_dir / _INPUT_FILE_NAME).read_text(encoding="utf-8"))
+    test_out = file_to_server_text((side_dir / _OUTPUT_FILE_NAME).read_text(encoding="utf-8"))
     return CgTestCase(
             title=title,
             test_in=test_in,
@@ -347,12 +311,19 @@ class CgContributionLocalTestCase:
        `--update-expected`, and `CgContributionManager.run_local_test`)."""
 
     input_text: str
-    """Content of `input_file`, decoded as UTF-8."""
+    """`input_file`'s content as the *server* would hold it--decoded as UTF-8, then passed through
+       `file_to_server_text` to drop the file's line terminator.
+
+       This is deliberately the server-side value rather than the file's raw bytes: it's what gets
+       fed to a solution's stdin locally, and CodinGame feeds the stored string itself (confirmed
+       by downloading published puzzles' test-case files, which are byte-identical to the
+       contribution strings they came from). Feeding the raw file would silently give a local run
+       one more byte of stdin than the same test gets on the server."""
 
     output_text: str
-    """Content of `output_file`, decoded as UTF-8, as of when this was read--stale the moment
-       `output_file` is overwritten by an update, so re-`list_local_test_cases` after updating
-       rather than reusing an old `CgContributionLocalTestCase`."""
+    """`output_file`'s content as the server would hold it (see `input_text`), as of when this was
+       read--stale the moment `output_file` is overwritten by an update, so re-`list_local_test_cases`
+       after updating rather than reusing an old `CgContributionLocalTestCase`."""
 
 
 def list_local_test_cases(tests_dir: Path) -> list[CgContributionLocalTestCase]:
@@ -386,7 +357,7 @@ def list_local_test_cases(tests_dir: Path) -> list[CgContributionLocalTestCase]:
                 result.append(CgContributionLocalTestCase(
                         ordinal=ordinal_dir.name, side=side, title=title,
                         input_file=input_file, output_file=output_file,
-                        input_text=input_file.read_text(encoding="utf-8"),
-                        output_text=output_file.read_text(encoding="utf-8"),
+                        input_text=file_to_server_text(input_file.read_text(encoding="utf-8")),
+                        output_text=file_to_server_text(output_file.read_text(encoding="utf-8")),
                     ))
     return result

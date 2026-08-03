@@ -60,6 +60,7 @@ import sys
 from pathlib import Path
 from typing import TextIO
 
+from ..common.text_files import file_to_server_text, server_text_to_file
 from .runner import outputs_match
 
 __all__ = ["CgDebugStdinOutputMismatchError", "run_debug_stdin", "main"]
@@ -102,12 +103,27 @@ def run_debug_stdin(
             expected_output_file: Path | None = None,
             *,
             update_expected: bool = False,
+            final_newline_added: bool = False,
         ) -> None:
     """The actual logic behind `python -m codingame_tools.test_runner.debug_stdin`--see the
        module docstring for the full behavior. Callable directly (not just via CLI argv) so
        package-aware wrappers (`codingame_tools.puzzle_manager.debug`/`codingame_tools.
        contribution_manager.debug`) can invoke it in-process after resolving which files to pass,
        without shelling back out to this module as a subprocess.
+
+    Args:
+        final_newline_added:
+            Whether `input_file`/`expected_output_file` carry a final newline that *this client
+            added* and that isn't part of the value (see `common.text_files`). True for a
+            contribution's `data/tests/`, where the server holds a string and the file is this
+            client's rendering of it; False (the default) for a puzzle's `.meta/tests/`, where the
+            server-side artifact is already a file, downloaded byte-for-byte.
+
+            Nothing to do with character encoding--both are UTF-8 either way. This has to be told,
+            not guessed: the two conventions produce identical-looking files that differ by exactly
+            one byte of stdin. Getting it wrong is quiet--a solution reading line-wise won't
+            notice, but the debugger would then feed different input than `cg contribution play`
+            does, and compare against a window shifted by one newline.
 
     Raises:
         ValueError: if `update_expected` is True but `expected_output_file` is None--nothing to
@@ -130,8 +146,13 @@ def run_debug_stdin(
         # convenience convention) silently misinterpreted one of our own arguments as a path and
         # read its *own source code* as "input" instead of `input_file`.
         sys.argv = [str(target_file)]
-        with input_file.open(encoding="utf-8") as input_file_obj:
-            sys.stdin = input_file_obj
+        with contextlib.ExitStack() as stack:
+            if final_newline_added:
+                # Feed the server-side value, which is what CodinGame feeds remotely--not the file,
+                # which carries a terminator this client added.
+                sys.stdin = io.StringIO(file_to_server_text(input_file.read_text(encoding="utf-8")))
+            else:
+                sys.stdin = stack.enter_context(input_file.open(encoding="utf-8"))
             if expected_output_file is None:
                 runpy.run_path(str(target_file), run_name="__main__")
             else:
@@ -144,9 +165,17 @@ def run_debug_stdin(
     if expected_output_file is not None:
         actual = capture.getvalue()
         if update_expected:
-            expected_output_file.write_text(actual, encoding="utf-8")
+            # Captured stdout is already in the on-disk form (a program's final `print` supplies the
+            # terminator `server_text_to_file` would), so where we added one this is a
+            # canonicalization rather than a conversion: it only supplies a terminator when the
+            # solution's last write didn't. Otherwise the file is server truth, written as-is.
+            expected_output_file.write_text(
+                    server_text_to_file(file_to_server_text(actual)) if final_newline_added else actual,
+                    encoding="utf-8")
         else:
             expected = expected_output_file.read_text(encoding="utf-8")
+            if final_newline_added:
+                expected = file_to_server_text(expected)
             if not outputs_match(actual, expected):
                 raise CgDebugStdinOutputMismatchError(expected, actual)
 

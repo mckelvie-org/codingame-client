@@ -61,6 +61,10 @@ def main(argv: list[str] | None = None) -> None:
     run_debug_stdin(
             test_case.input_file, args.target_file, test_case.output_file,
             update_expected=args.update_expected,
+            # A contribution's test files are this client's rendering of a server-side string, so
+            # the final newline on disk isn't part of the value--see common.text_files. Without
+            # this the debugger feeds one more byte of stdin than `cg contribution play` does.
+            final_newline_added=True,
         )
 
 

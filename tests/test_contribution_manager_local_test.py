@@ -49,10 +49,10 @@ def _setup(
 
 def test_list_local_tests_no_filter_returns_both_sides_both_ordinals(tmp_path: Path) -> None:
     manager = _setup(tmp_path, [
-            _tc("A", "1\n", "2\n", is_test=True, is_validator=False),
-            _tc("A", "3\n", "4\n", is_test=False, is_validator=True),
-            _tc("B", "5\n", "6\n", is_test=True, is_validator=False),
-            _tc("B", "7\n", "8\n", is_test=False, is_validator=True),
+            _tc("A", "1", "2", is_test=True, is_validator=False),
+            _tc("A", "3", "4", is_test=False, is_validator=True),
+            _tc("B", "5", "6", is_test=True, is_validator=False),
+            _tc("B", "7", "8", is_test=False, is_validator=True),
         ])
 
     tests = manager.list_local_tests()
@@ -64,8 +64,8 @@ def test_list_local_tests_no_filter_returns_both_sides_both_ordinals(tmp_path: P
 
 def test_list_local_tests_filters_by_ordinal_numeric_equivalence(tmp_path: Path) -> None:
     manager = _setup(tmp_path, [
-            _tc("A", "1\n", "2\n", is_test=True, is_validator=False),
-            _tc("B", "3\n", "4\n", is_test=True, is_validator=False),
+            _tc("A", "1", "2", is_test=True, is_validator=False),
+            _tc("B", "3", "4", is_test=True, is_validator=False),
         ])
 
     tests = manager.list_local_tests(["2"])
@@ -75,8 +75,8 @@ def test_list_local_tests_filters_by_ordinal_numeric_equivalence(tmp_path: Path)
 
 def test_list_local_tests_filters_by_side(tmp_path: Path) -> None:
     manager = _setup(tmp_path, [
-            _tc("A", "1\n", "2\n", is_test=True, is_validator=False),
-            _tc("A", "3\n", "4\n", is_test=False, is_validator=True),
+            _tc("A", "1", "2", is_test=True, is_validator=False),
+            _tc("A", "3", "4", is_test=False, is_validator=True),
         ])
 
     local_only = manager.list_local_tests(local=True, validator=False)
@@ -90,7 +90,7 @@ def test_list_local_tests_filters_by_side(tmp_path: Path) -> None:
 
 
 async def test_run_local_test_compare_mode_pass(tmp_path: Path) -> None:
-    manager = _setup(tmp_path, [_tc("A", "21\n", "42\n", is_test=True, is_validator=False)])
+    manager = _setup(tmp_path, [_tc("A", "21", "42", is_test=True, is_validator=False)])
     test_case = manager.list_local_tests()[0]
 
     result = await manager.run_local_test(test_case, "Python3")
@@ -102,7 +102,7 @@ async def test_run_local_test_compare_mode_pass(tmp_path: Path) -> None:
 
 
 async def test_run_local_test_compare_mode_mismatch(tmp_path: Path) -> None:
-    manager = _setup(tmp_path, [_tc("A", "21\n", "999\n", is_test=True, is_validator=False)])
+    manager = _setup(tmp_path, [_tc("A", "21", "999", is_test=True, is_validator=False)])
     test_case = manager.list_local_tests()[0]
 
     result = await manager.run_local_test(test_case, "Python3")
@@ -110,12 +110,12 @@ async def test_run_local_test_compare_mode_mismatch(tmp_path: Path) -> None:
     assert not result.passed
     assert result.returncode == 0
     assert result.actual_output == "42\n"
-    assert result.expected_output == "999\n"
+    assert result.expected_output == "999"
 
 
 async def test_run_local_test_compare_mode_crash_fails(tmp_path: Path) -> None:
     manager = _setup(
-            tmp_path, [_tc("A", "", "anything\n", is_test=True, is_validator=False)],
+            tmp_path, [_tc("A", "", "anything", is_test=True, is_validator=False)],
             solution_code="raise ValueError('boom')\n",
         )
     test_case = manager.list_local_tests()[0]
@@ -131,7 +131,7 @@ async def test_run_local_test_compare_mode_crash_fails(tmp_path: Path) -> None:
 
 
 async def test_run_local_test_update_mode_overwrites_output_file(tmp_path: Path) -> None:
-    manager = _setup(tmp_path, [_tc("A", "21\n", "stale\n", is_test=True, is_validator=False)])
+    manager = _setup(tmp_path, [_tc("A", "21", "stale", is_test=True, is_validator=False)])
     test_case = manager.list_local_tests()[0]
 
     result = await manager.run_local_test(test_case, "Python3", update_expected=True)
@@ -143,7 +143,7 @@ async def test_run_local_test_update_mode_overwrites_output_file(tmp_path: Path)
 
 async def test_run_local_test_update_mode_does_not_overwrite_on_crash(tmp_path: Path) -> None:
     manager = _setup(
-            tmp_path, [_tc("A", "", "stale\n", is_test=True, is_validator=False)],
+            tmp_path, [_tc("A", "", "stale", is_test=True, is_validator=False)],
             solution_code="raise ValueError('boom')\n",
         )
     test_case = manager.list_local_tests()[0]
@@ -156,7 +156,7 @@ async def test_run_local_test_update_mode_does_not_overwrite_on_crash(tmp_path: 
 
 
 async def test_run_local_test_unsupported_language_raises(tmp_path: Path) -> None:
-    manager = _setup(tmp_path, [_tc("A", "1\n", "2\n", is_test=True, is_validator=False)])
+    manager = _setup(tmp_path, [_tc("A", "1", "2", is_test=True, is_validator=False)])
     test_case = manager.list_local_tests()[0]
 
     with pytest.raises(CgLanguageOperationNotSupportedError):
@@ -168,8 +168,8 @@ async def test_run_local_test_unsupported_language_raises(tmp_path: Path) -> Non
 
 async def test_run_local_tests_raises_with_all_results_if_any_failed(tmp_path: Path) -> None:
     manager = _setup(tmp_path, [
-            _tc("A", "21\n", "42\n", is_test=True, is_validator=False),
-            _tc("B", "10\n", "wrong\n", is_test=True, is_validator=False),
+            _tc("A", "21", "42", is_test=True, is_validator=False),
+            _tc("B", "10", "wrong", is_test=True, is_validator=False),
         ])
     test_cases = manager.list_local_tests()
 
@@ -183,7 +183,7 @@ async def test_run_local_tests_raises_with_all_results_if_any_failed(tmp_path: P
 
 
 async def test_run_local_tests_returns_results_when_all_pass(tmp_path: Path) -> None:
-    manager = _setup(tmp_path, [_tc("A", "21\n", "42\n", is_test=True, is_validator=False)])
+    manager = _setup(tmp_path, [_tc("A", "21", "42", is_test=True, is_validator=False)])
     test_cases = manager.list_local_tests()
 
     results = await manager.run_local_tests(test_cases, "Python3")
@@ -219,7 +219,7 @@ def test_language_context_is_infallible_on_a_bare_directory(tmp_path: Path) -> N
 
 
 def test_language_context_finds_the_solution_symlink_when_present(tmp_path: Path) -> None:
-    manager = _setup(tmp_path, [_tc("A", "1\n", "1\n", is_test=True, is_validator=False)])
+    manager = _setup(tmp_path, [_tc("A", "1", "1", is_test=True, is_validator=False)])
     (tmp_path / "solution.py").symlink_to(Path("data") / "solution.src")
 
     ctx = manager.language_context("Python3")
@@ -228,7 +228,7 @@ def test_language_context_finds_the_solution_symlink_when_present(tmp_path: Path
 
 
 async def test_build_solution_is_a_no_op_success_for_python(tmp_path: Path) -> None:
-    manager = _setup(tmp_path, [_tc("A", "1\n", "1\n", is_test=True, is_validator=False)])
+    manager = _setup(tmp_path, [_tc("A", "1", "1", is_test=True, is_validator=False)])
 
     result = await manager.build_solution("Python3")
 
@@ -343,41 +343,90 @@ async def test_set_language_updates_the_snapshot_so_it_can_switch_again(tmp_path
     assert manager.load().data.solution_language == "Java"
 
 
-async def test_only_a_zero_length_solution_file_is_pushed_as_no_solution(tmp_path: Path) -> None:
+async def test_an_empty_solution_file_is_pushed_as_no_solution(tmp_path: Path) -> None:
     """The point of keeping an empty file instead of deleting it: `updateContribution` skips
        solution validation when solutionSource is null but validates any non-null value against
        every test case, so an empty file must reach the server as null.
 
-       **Exactly zero length**, not "blank". Treating a file as a list of lines, no lines is `""`
-       and one empty line is `"\n"`--different files. A whitespace-only file is a real (broken)
-       program and is pushed as one, rather than being silently reinterpreted as no solution."""
+       A file holding just a terminator counts too, since it *decodes* to the empty string--the one
+       place `common.text_files`' conversion isn't injective, and useful here: an editor with "insert
+       final newline" enabled can't quietly turn "no reference solution" into a one-blank-line
+       program. Nothing weaker qualifies: a whitespace-only file is a real (broken) program and is
+       pushed as one."""
     from codingame_tools.contribution_manager.manager import _read_local_data
 
     manager = await _created(tmp_path)
     base = manager.load().data
 
-    manager.solution_file.write_text("")
-    data, _ = _read_local_data(manager.data_dir, base)
-    assert data.solution is None
+    for empty in ("", "\n"):
+        manager.solution_file.write_text(empty)
+        data, _ = _read_local_data(manager.data_dir, base)
+        assert data.solution is None, f"{empty!r} must read as no solution"
 
-    for not_empty in ("\n", "   \n\t\n", "n = input()\nprint(n)\n"):
+    for not_empty, expected in (("   \n\t\n", "   \n\t"), ("n = input()\nprint(n)\n", "n = input()\nprint(n)")):
         manager.solution_file.write_text(not_empty)
         data, _ = _read_local_data(manager.data_dir, base)
-        assert data.solution == not_empty, f"{not_empty!r} must pass through verbatim"
+        assert data.solution == expected, f"{not_empty!r} must decode to {expected!r}"
 
 
 async def test_writing_an_empty_sidecar_leaves_a_zero_length_file(tmp_path: Path) -> None:
-    """`_ensure_trailing_newline` must leave empty text empty, or "no reference solution" would be
-       unrepresentable--every write would produce a one-newline file that pushes as a real (broken)
-       solution."""
-    from codingame_tools.contribution_manager.manager import _write_sidecar
+    """The zero-length carve-out in `common.text_files.server_text_to_file`, checked where it
+       matters: without it every write would produce a one-newline file, and "no reference
+       solution" would have no representation at all."""
+    from codingame_tools.contribution_manager.manager import _read_sidecar, _write_sidecar
 
     path = tmp_path / "solution.src"
     _write_sidecar(path, "")
     assert path.read_bytes() == b""
 
-    _write_sidecar(path, "code")  # non-empty still gets its trailing newline
+    _write_sidecar(path, "code")  # non-empty gets its terminator
     assert path.read_bytes() == b"code\n"
 
-    _write_sidecar(path, "code\n")  # ...and isn't doubled
-    assert path.read_bytes() == b"code\n"
+    _write_sidecar(path, "code\n")  # a value that ends in a newline keeps it, and gets a terminator
+    assert path.read_bytes() == b"code\n\n"
+
+    for value in ("", "code", "code\n"):  # ...and all of it round trips exactly
+        _write_sidecar(path, value)
+        assert _read_sidecar(path) == value
+
+
+async def test_debug_session_is_fed_the_value_not_the_file(
+            tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        ) -> None:
+    """An attach-style debugger (C++ via gdbserver) must get the same stdin as `play` and as
+       CodinGame--not the test-case file, which carries a final newline this client added.
+
+       Passing the file straight through is the tempting shape (the container already mounts the
+       working directory), and it's wrong by exactly one byte. Confirmed live 2026-08-03 that
+       CodinGame's runner appends nothing to stored test input, so that byte is a real divergence,
+       silent for anything reading line-wise."""
+    stored_input = "3\nabc"  # no trailing newline, the usual shape for a real server value
+    manager = _setup(tmp_path, [_tc("A", stored_input, "out", is_test=True, is_validator=False)])
+
+    captured: dict[str, object] = {}
+
+    real_get_language = get_language
+
+    class _RecordingLanguage:
+        """Delegates everything except the one call under test (`language_context` needs a real
+           `extension`), so this stays a probe rather than a reimplementation."""
+
+        def __init__(self, language: str) -> None:
+            self._real = real_get_language(language)
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._real, name)
+
+        async def start_debug_session(self, ctx: object, stdin_text: str, *, timeout: float) -> object:
+            captured["stdin_text"] = stdin_text
+            return object()
+
+    monkeypatch.setattr(
+            "codingame_tools.contribution_manager.manager.get_language", _RecordingLanguage)
+
+    await manager.start_debug_session("Python3", "01", "local")
+
+    assert captured["stdin_text"] == stored_input
+    # ...and that really is one byte fewer than the file holds.
+    on_disk = manager.list_local_tests()[0].input_file.read_text()
+    assert on_disk == stored_input + "\n"

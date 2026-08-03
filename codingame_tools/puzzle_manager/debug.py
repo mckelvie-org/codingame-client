@@ -50,6 +50,8 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"No downloaded test case with index {args.test_index} under {manager.tests_dir}.")
     test_case = matching[0]
 
+    # No `final_newline_added` here (unlike contribution_manager.debug): `.meta/tests/` holds
+    # byte-exact fileservlet downloads, which are already the bytes CodinGame feeds stdin remotely.
     run_debug_stdin(test_case.input_file, args.target_file, test_case.output_file)
 
 

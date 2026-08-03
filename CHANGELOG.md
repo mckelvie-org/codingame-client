@@ -2,6 +2,66 @@
 
 ## {{UNRELEASED}}
 
+- **`outputs_match` no longer accepts output CodinGame rejects.** It previously normalized away
+  per-line trailing whitespace, and (via `splitlines`) CRLF line endings — both of which the server
+  treats as failures. That's the dangerous direction: a solution passed locally and then failed on
+  submission. Its rule is now equivalence with the server's: everything compared exactly, except a
+  difference of **one** trailing newline in either direction.
+
+  Mapped live against `CgPlayResult.comparison.success` rather than guessed, across two puzzles
+  (one whose stored expected output ends in a newline, one whose doesn't — the rule only falls out
+  of seeing both):
+
+  | actual, relative to the stored expected output | server |
+  |---|---|
+  | verbatim | pass |
+  | ± one trailing newline | pass |
+  | ± two trailing newlines | fail |
+  | trailing whitespace added to every line | fail |
+  | per-line trailing whitespace stripped | fail |
+  | leading space added to every line | fail |
+  | CRLF line endings | fail |
+  | a leading blank line | fail |
+
+  The one-newline allowance isn't optional: a test's expected output usually has no final newline
+  (it was typed into a textarea) while every language's `print` supplies one. The tolerance is a
+  *difference*, not a cap — `expected + "\n\n"` fails even when the expected value itself ends in a
+  newline.
+
+- **Fixed: the debugger fed contribution solutions one extra byte of stdin.** `cg contribution
+  debug` bound the test-case file directly to stdin, while `cg contribution play` goes through
+  `list_local_test_cases`, which decodes — so the terminator this client adds reached the solution
+  only under the debugger, and the expected-output comparison ran against a window shifted by one
+  newline. `run_debug_stdin` now takes `final_newline_added`, which the contribution wrapper passes
+  and the puzzle wrapper deliberately doesn't (`.meta/tests/` holds byte-exact downloads).
+
+  The same one-byte deviation existed on the attach-style (C++/gdbserver) path, which redirected the
+  container's stdin straight from the test-case file. **Breaking, for `CgLanguage` implementors:**
+  `start_debug_session` now takes `stdin_text: str` rather than `input_file: Path`, and the
+  implementation materializes its own copy (`<meta_dir>/debug-stdin`) to redirect from. Redirecting
+  from the caller's file cannot be made correct — the file is the *rendering* of a value for a
+  contribution and the value itself for a puzzle — so the caller, which is the only party that knows
+  which, now supplies the bytes. This also drops the old requirement that the input file live inside
+  the working directory, along with the error path for when it didn't.
+
+  Confirmed against the real thing: CodinGame's runner feeds stored test input **verbatim** and
+  appends nothing — a probe reading `sys.stdin.buffer.read()` on a community puzzle whose stored
+  input is the single unterminated byte `"7"` reported `bytes=1 repr=b'7'`. An unterminated final
+  line of stdin is real, and solutions have to handle it. (It's a community-contribution
+  phenomenon, incidentally: official CodinGame puzzles' test files are properly terminated.)
+
+- Schema fixes for fields that are **omitted entirely** (not null) in real responses, all found by
+  decoding the whole pending community-review queue rather than one report at a time:
+  - `CgTopic` — only `label_map` is guaranteed. A topic can arrive as nothing but its localized
+    label (e.g. `{"labelMap": {"2": "Logic Gates"}}`) with every catalogue field absent; `id`,
+    `handle`, `category`, `puzzle_count` and `parent_topic_id` are now optional. Observed on 10 of
+    80 topic objects.
+  - `CgContribution.avatar` / `CgPersonalContribution.avatar` — now optional, for codingamers who
+    never set an avatar (3 of 54 contributions). `CgPendingContribution` already allowed this;
+    the three classes had simply drifted.
+  - `CgLastActivityPuzzle.cover_binary_id` — now optional (absent for 7 of 30 puzzles from a single
+    `Puzzle/findProgressByIds` call).
+
 - New `cg contribution set-language LANGUAGE [--force]` — deliberately **stricter** than the puzzle
   equivalent, because a contribution stores exactly one solution with no per-language history.
   There is nothing to restore and nothing to switch back to: the existing solution is replaced by a
@@ -20,16 +80,41 @@
   a comment-only placeholder for another language would be non-null, fail validation, and block
   `push()`.
 
+- **Fixed: local text no longer erodes a newline on every fetch/push cycle.** Server-side text and
+  the local files holding it are now converted through one place, `codingame_tools.common.
+  text_files`, unconditionally in both directions — append a terminator on the way in (unless the
+  value is zero-length), strip up to one on the way out. That makes the pair exact inverses, so an
+  untouched import-then-push submits byte-identical text.
+
+  Previously the terminator was appended only when missing, which cannot be inverted: the reader
+  can't tell whether the newline it sees belonged to the content or to the writer. Composed with the
+  strip applied at submission, any value that genuinely ended in a newline lost one per cycle, with
+  no user edit, until it ran out. Surveying the pending community-review queue and published
+  community puzzles (1686 real values) shows why that mattered more than its 0.8% rate suggests:
+  the trailing-newline habit is per-*author*, so this eroded **every** test case of roughly 1 in 12
+  contributions, not the occasional stray one. All 1686 now round trip exactly, and keep doing so
+  across repeated cycles.
+
+  **Breaking, for `cg api` callers:** `strip_test_final_eols` is gone from
+  `CgContributionServiceHelper.update_contribution`/`create_contribution`, along with the
+  `--no-strip-test-final-eols` flags on `cg api helper contribution update-contribution`/
+  `create-contribution`. The service layer no longer rewrites submitted data at all — normalization
+  belongs with the file conversion, not half of it at the transport layer. Callers building a
+  `CgContributionData` by hand now control their own text exactly.
+
+  Puzzle test cases under `.meta/tests/` are deliberately untouched by this: they're byte-exact
+  `fileservlet` downloads, read-only and never pushed, so the bytes on disk are already the bytes
+  CodinGame feeds a solution's stdin remotely. A contribution's test cases need the conversion for
+  the opposite reason — there the server holds a *string* and the file is this client's rendering
+  of it.
+
 - An **empty `data/solution.src` now means "no reference solution"** and is pushed as a null
-  `solutionSource` — strictly zero-length, not merely blank. Treating a file as a list of lines, no
-  lines is `""` and one empty line is `"\n"`; those are different files, so a whitespace-only file
-  stays a real (broken) program that the server will reject rather than being silently reinterpreted
-  as no solution. `ensure_trailing_newline` correspondingly no longer turns empty text into `"\n"`,
-  which would have made "no solution" unrepresentable — and the two drifted copies of that helper
-  (one in `contribution_manager.manager`, one in `.test_cases_dir`) are now a single shared one, so
-  an empty test case input is also written as a genuinely empty file rather than a stray newline.
-  (What reaches the server was already correct there, since `update_contribution` strips one
-  trailing newline via `strip_test_final_eols`; this is about the file on disk being honest.) This
+  `solutionSource` — anything that decodes to the empty string, i.e. a zero-length file or one
+  holding just a terminator. That second case is the single point where the conversion above isn't
+  injective, and it lands usefully here: an editor with "insert final newline" enabled can't quietly
+  turn "no reference solution" into a one-blank-line program. Nothing weaker qualifies — a
+  whitespace-only file stays a real (broken) program that the server will reject rather than being
+  silently reinterpreted as no solution. This
   replaces deleting the file: `create()` and `set-language` now always leave a `solution.src`
   present, so the `solution.<ext>` symlink resolves instead of dangling and there's a file to type
   into straight away. It conflates a server-side solution that is genuinely the empty string with a

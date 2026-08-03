@@ -117,9 +117,6 @@ class CgLastActivityPuzzle(JSONWizardX):
     community_creation: bool
     """Whether this is a community-created puzzle (as opposed to an official CodinGame puzzle)."""
 
-    cover_binary_id: int
-    """Binary image ID for the puzzle's cover image."""
-
     achievement_count: int
     """Total number of achievements associated with this puzzle."""
 
@@ -155,6 +152,13 @@ class CgLastActivityPuzzle(JSONWizardX):
 
        Confirmed live (2026-08-02) absent entirely--not `null`--for official puzzles, which is what
        `community_creation: False` marks. Only community-created puzzles have an author to name."""
+
+    cover_binary_id: int | None = None
+    """Binary image ID for the puzzle's cover image, or None for a puzzle that has no cover.
+
+       Omitted entirely (not null) rather than defaulted--observed on 7 of 30 puzzles returned by a
+       single Puzzle/findProgressByIds call (2026-08-03), so this is ordinary, not an edge case.
+       Defaulted (rather than left required) for the same reason `contributor` is."""
 
     test_session_handle: str | None = None
     """Opaque handle for a test session against this puzzle. Not always present--absent (along

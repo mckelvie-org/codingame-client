@@ -151,6 +151,11 @@ GDBSERVER_PORT = 2345
    `docker exec`), so it dials the container's own localhost. That's what keeps the host's only
    requirement `docker`--no local gdb, no local toolchain, no port juggling between containers."""
 
+DEBUG_STDIN_FILE_NAME = "debug-stdin"
+"""Name of the file `start_debug_session` writes into the working directory's `.meta/` to redirect
+   the debugged program's stdin from. A copy rather than the test case's own file, so that exactly
+   the bytes the caller specified reach the program--see `start_debug_session`."""
+
 _GDBSERVER_LOG = f"{BUILD_DIR}/gdbserver.log"
 _GDBSERVER_PID = f"{BUILD_DIR}/gdbserver.pid"
 
@@ -174,8 +179,11 @@ def start_debug_script(input_file: str) -> str:
 
        The redirection is the reason a debug session is set up by a command of ours rather than left
        to the debug adapter: doing it in a shell we control sidesteps cppdbg's notoriously
-       unreliable stdin handling entirely. Test-case input files are already real files on disk and
-       visible inside the read-only `/src` mount, so nothing has to be copied in."""
+       unreliable stdin handling entirely.
+
+       `input_file` is a container path to a file `start_debug_session` wrote itself, *not* the test
+       case's own file--see there for why redirecting from the test case would feed the wrong
+       bytes."""
     binary = f"{BUILD_DIR}/debug/solution"
     src = shlex.quote(input_file)
     return f"""
@@ -336,25 +344,28 @@ class CgCppLanguage(CgLanguage):
     async def start_debug_session(
                 self,
                 ctx: CgLanguageContext,
-                input_file: Path,
+                stdin_text: str,
                 *,
                 timeout: float = DEFAULT_BUILD_TIMEOUT_SECONDS,
             ) -> CgDebugSession:
-        """Build the debug profile and start a stopped `gdbserver` with `input_file` as stdin.
+        """Build the debug profile and start a stopped `gdbserver` fed by `stdin_text`.
 
-           `input_file` must live inside the working directory (test-case inputs do), since the
-           container only sees `/src`."""
+           `stdin_text` is written to `<meta_dir>/debug-stdin` and redirected from there rather than
+           from the test case's own file. Copying is not incidental: a contribution's test-case file
+           carries a final newline this client added (see `common.text_files`), and redirecting from
+           it would put one extra byte on stdin--diverging from `cg contribution play` and from
+           CodinGame, which appends nothing. A copy also drops the requirement that the caller's file
+           live inside the working directory, since this one does by construction.
+
+           `meta_dir` is the natural home: it's gitignored scratch space and it sits inside `root`,
+           so it's already visible inside the read-only `/src` mount with no extra plumbing."""
         build_result = await self.build(ctx, profile="debug", timeout=timeout)
         if not build_result.ok:
             return CgDebugSession(ok=False, output=build_result.output)
-        try:
-            relative = input_file.resolve().relative_to(ctx.root)
-        except ValueError:
-            return CgDebugSession(
-                    ok=False,
-                    output=f"{input_file} is outside {ctx.root}, so it isn't visible inside the "
-                           "container (only the working directory is mounted).",
-                )
+        stdin_file = ctx.meta_dir / DEBUG_STDIN_FILE_NAME
+        stdin_file.parent.mkdir(parents=True, exist_ok=True)
+        stdin_file.write_text(stdin_text, encoding="utf-8")
+        relative = stdin_file.relative_to(ctx.root)
         toolchain = await self._toolchain(ctx, timeout=timeout)
         result = await run_argv_capture(
                 docker_exec_argv(

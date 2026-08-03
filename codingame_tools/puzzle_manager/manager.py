@@ -69,6 +69,7 @@ from ..client.common.protocol.test_session import (
     CgSubmitRequest,
 )
 from ..client.common.raw_client import CgClientHttpError
+from ..common.text_files import file_to_server_text, server_text_to_file
 from ..config.resolver import default_global_data_dir
 from ..language import (
     DEFAULT_BUILD_TIMEOUT_SECONDS,
@@ -442,7 +443,7 @@ class CgPuzzleManager:
            needs `repair()`)."""
         if not self.statement_file.is_file():
             return None
-        return self.statement_file.read_text(encoding="utf-8")
+        return file_to_server_text(self.statement_file.read_text(encoding="utf-8"))
 
     def load_server_data(self) -> CgPuzzleServerData | None:
         """Load `.meta/puzzle-server-data.json`, or None if it's missing (needs `repair()`--e.g.
@@ -488,7 +489,7 @@ class CgPuzzleManager:
         Raises:
             FileNotFoundError: if `solution.src` doesn't exist.
         """
-        return self.solution_file.read_text(encoding="utf-8")
+        return file_to_server_text(self.solution_file.read_text(encoding="utf-8"))
 
     # --- puzzle reference resolution -------------------------------------------------------
 
@@ -647,8 +648,10 @@ class CgPuzzleManager:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.meta_dir.mkdir(parents=True, exist_ok=True)
         self._write_solution(solution_code, solution_language)
-        (self.meta_dir / STATEMENT_FILE_NAME).write_text(question.statement, encoding="utf-8")
-        (self.meta_dir / STUB_GENERATOR_FILE_NAME).write_text(f"{question.stub_generator}\n", encoding="utf-8")
+        (self.meta_dir / STATEMENT_FILE_NAME).write_text(
+                server_text_to_file(question.statement), encoding="utf-8")
+        (self.meta_dir / STUB_GENERATOR_FILE_NAME).write_text(
+                server_text_to_file(question.stub_generator), encoding="utf-8")
         await download_test_cases(self.client, question.test_cases, self.tests_dir)
         _write_meta_gitignore(self.puzzle_dir)
 
@@ -727,8 +730,10 @@ class CgPuzzleManager:
         question = session.current_question.question
 
         self.meta_dir.mkdir(parents=True, exist_ok=True)
-        (self.meta_dir / STATEMENT_FILE_NAME).write_text(question.statement, encoding="utf-8")
-        (self.meta_dir / STUB_GENERATOR_FILE_NAME).write_text(f"{question.stub_generator}\n", encoding="utf-8")
+        (self.meta_dir / STATEMENT_FILE_NAME).write_text(
+                server_text_to_file(question.statement), encoding="utf-8")
+        (self.meta_dir / STUB_GENERATOR_FILE_NAME).write_text(
+                server_text_to_file(question.stub_generator), encoding="utf-8")
         await download_test_cases(self.client, question.test_cases, self.tests_dir)
         _write_meta_gitignore(self.puzzle_dir)
 
@@ -774,7 +779,8 @@ class CgPuzzleManager:
             CgPuzzleManagerError: if `.meta/` is missing (run `repair()` first).
         """
         self._require_state()
-        local_lines = self.solution_file.read_text(encoding="utf-8").splitlines(keepends=True) \
+        local_lines = file_to_server_text(
+                self.solution_file.read_text(encoding="utf-8")).splitlines(keepends=True) \
             if self.solution_file.is_file() else []
         current = await self._fetch_current_answer_code()
         server_lines = current[0].splitlines(keepends=True) if current is not None else []
@@ -785,9 +791,13 @@ class CgPuzzleManager:
 
            Every writer of `solution.src` goes through here so the snapshot can never drift from
            the file--that snapshot is what lets `set_language()` tell "the user edited this" from
-           "this is still what we generated", without re-deriving anything."""
+           "this is still what we generated", without re-deriving anything.
+
+           `code` is a server-side value throughout: rendered to the file's on-disk form (see
+           `common.text_files.server_text_to_file`) and stored in the snapshot as the value, so
+           the snapshot compares directly against what `load_solution()` reads back out."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.solution_file.write_text(code, encoding="utf-8")
+        self.solution_file.write_text(server_text_to_file(code), encoding="utf-8")
         self.meta_dir.mkdir(parents=True, exist_ok=True)
         CgPuzzleSolutionSnapshot(solution_language=language, code=code).save(
                 self.solution_snapshot_file)
@@ -817,7 +827,8 @@ class CgPuzzleManager:
            A missing snapshot falls through to the server comparison, which errs toward refusing.
         """
         local = _normalize_solution(
-                self.solution_file.read_text(encoding="utf-8") if self.solution_file.is_file() else "")
+                file_to_server_text(self.solution_file.read_text(encoding="utf-8"))
+                if self.solution_file.is_file() else "")
         snapshot = self.load_solution_snapshot()
         if snapshot is not None and snapshot.solution_language == language \
                 and _normalize_solution(snapshot.code) == local:
@@ -963,7 +974,7 @@ class CgPuzzleManager:
                           `find_report_by_submission_when_ready`'s default timeout.
         """
         _, server_data, puzzle_data = self._require_state()
-        code = self.solution_file.read_text(encoding="utf-8")
+        code = file_to_server_text(self.solution_file.read_text(encoding="utf-8"))
         request = CgSubmitRequest(code=code, programming_language_id=puzzle_data.solution_language)
         submission_id = await self.client.services.test_session.submit(server_data.test_session_handle, request)
         return await self.client.services.report.helper.find_report_by_submission_when_ready(submission_id)
@@ -1023,7 +1034,7 @@ class CgPuzzleManager:
         _, server_data, puzzle_data = self._require_state()
         downloaded = list_downloaded_test_cases(self.tests_dir)
         labels_by_index = {tc.index: tc.label for tc in downloaded}
-        code = self.solution_file.read_text(encoding="utf-8")
+        code = file_to_server_text(self.solution_file.read_text(encoding="utf-8"))
         request = CgPlayRequest(
                 code=code,
                 programming_language_id=puzzle_data.solution_language,
@@ -1194,8 +1205,10 @@ class CgPuzzleManager:
         if test_case is None:
             raise CgPuzzleManagerError(f"No downloaded test case with index {test_index}.")
         ctx = self.language_context(puzzle_data.solution_language)
+        # The downloaded file's bytes verbatim: `.meta/tests/` holds byte-exact fileservlet
+        # downloads, so this is already exactly what CodinGame puts on the solution's stdin.
         return await get_language(puzzle_data.solution_language).start_debug_session(
-                ctx, test_case.input_file, timeout=timeout)
+                ctx, test_case.input_text, timeout=timeout)
 
     async def stop_debug_session(self) -> None:
         """Tear down whatever `start_debug_session()` started. Safe to call when nothing is
