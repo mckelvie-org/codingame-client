@@ -12,13 +12,29 @@
   per-language recall makes switching reversible — since the server copy is precisely what the next
   push destroys. Purely local: no network call, as there's no per-language code to fetch.
 
-  Only Python3 offers a create-stub today, so switching to any other language *removes*
-  `solution.src` and leaves the `solution.<ext>` symlink dangling, exactly as `cg contribution
-  create` already does. That's required, not a shortfall: `updateContribution` skips solution
-  validation entirely when `solutionSource` is null, but validates any non-null one against every
-  test case — and `create()` seeds a real test/validator pair. Python3's stub echoes its input
-  specifically so it passes them; a comment-only placeholder for another language would be non-null,
-  fail validation, and block `push()`.
+  Only Python3 offers a create-stub that genuinely passes the seeded test cases, so switching to
+  any other language leaves `data/solution.src` **empty** rather than writing a placeholder. That's
+  required, not a shortfall: `updateContribution` skips solution validation entirely when
+  `solutionSource` is null, but validates any non-null one against every test case — and `create()`
+  seeds a real test/validator pair. Python3's stub echoes its input specifically so it passes them;
+  a comment-only placeholder for another language would be non-null, fail validation, and block
+  `push()`.
+
+- An **empty `data/solution.src` now means "no reference solution"** and is pushed as a null
+  `solutionSource` — strictly zero-length, not merely blank. Treating a file as a list of lines, no
+  lines is `""` and one empty line is `"\n"`; those are different files, so a whitespace-only file
+  stays a real (broken) program that the server will reject rather than being silently reinterpreted
+  as no solution. `ensure_trailing_newline` correspondingly no longer turns empty text into `"\n"`,
+  which would have made "no solution" unrepresentable — and the two drifted copies of that helper
+  (one in `contribution_manager.manager`, one in `.test_cases_dir`) are now a single shared one, so
+  an empty test case input is also written as a genuinely empty file rather than a stray newline.
+  (What reaches the server was already correct there, since `update_contribution` strips one
+  trailing newline via `strip_test_final_eols`; this is about the file on disk being honest.) This
+  replaces deleting the file: `create()` and `set-language` now always leave a `solution.src`
+  present, so the `solution.<ext>` symlink resolves instead of dangling and there's a file to type
+  into straight away. It conflates a server-side solution that is genuinely the empty string with a
+  null one — accepted deliberately, since an empty program passes no test cases and so could never
+  have been an accepted solution.
 
 - **You can now switch a puzzle's language, and get your own saved code back.** CodinGame keeps
   your most recent source *per language* for a puzzle, not just one; a previously-unknown API

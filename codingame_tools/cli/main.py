@@ -2122,8 +2122,9 @@ class CgCli(CliBase):
             if result.wrote_stub:
                 self.eprint(f"  wrote a starter {result.language} solution to {manager.solution_file}.")
             else:
-                self.eprint(f"  no starter stub available for {result.language}--removed "
-                            f"{manager.solution_file}; write it yourself before pushing.")
+                self.eprint(f"  no starter stub available for {result.language}--left "
+                            f"{manager.solution_file} empty; write your solution there. (An empty "
+                            "solution is pushed as none at all, which is valid.)")
         p = cmd.get_parser()
         p.add_argument("language", type=str, metavar="LANGUAGE",
                        help="CodinGame language ID to switch to, e.g. 'C++', 'Python3'.")

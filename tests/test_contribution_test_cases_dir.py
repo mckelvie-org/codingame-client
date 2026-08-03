@@ -16,6 +16,7 @@ from codingame_tools.contribution_manager.test_cases_dir import (
     VALIDATOR_SUBDIR_NAME,
     CgTestCaseFileMeta,
     commit_test_cases,
+    ensure_trailing_newline,
     import_test_cases,
     list_local_test_cases,
     normalize_test_title,
@@ -320,3 +321,33 @@ def test_list_local_natural_sorts_ordinals(tmp_path: Path) -> None:
     entries = list_local_test_cases(tests_dir)
 
     assert [e.title for e in entries] == ["First", "Inserted", "Tenth"]
+
+
+def test_ensure_trailing_newline_leaves_empty_text_empty() -> None:
+    """A file is a list of lines, correctly expanded as `"\\n".join(lines) + ("\\n" if lines else
+       "")`: no lines is a zero-length file, one empty line is `"\\n"`, and those are different
+       files. Beyond being right in its own terms, this is what makes "no reference solution"
+       representable--`contribution_manager.manager` spells it as a zero-length `solution.src`,
+       which would be impossible if every write produced at least a newline."""
+    assert ensure_trailing_newline("") == ""
+    assert ensure_trailing_newline("\n") == "\n"
+    assert ensure_trailing_newline("abc") == "abc\n"
+    assert ensure_trailing_newline("abc\n") == "abc\n"
+
+
+def test_an_empty_test_input_round_trips_as_a_zero_length_file(tmp_path: Path) -> None:
+    """An empty test input is written as an empty file, not a stray newline, and reads back
+       unchanged. (What reaches the server was already correct either way--
+       `CgContributionServiceHelper.update_contribution` strips one trailing newline via
+       `strip_test_final_eols`--so this is about the file on disk being honest.)"""
+    import_test_cases([
+            CgTestCase(title="Empty input", test_in="", test_out="ok",
+                       is_test=True, is_validator=False, need_validation=True),
+        ], tmp_path)
+
+    input_file = next(tmp_path.rglob("input.txt"))
+    assert input_file.read_bytes() == b""
+
+    (committed,) = commit_test_cases(tmp_path)
+    assert committed.test_in == ""
+    assert committed.test_out == "ok\n"

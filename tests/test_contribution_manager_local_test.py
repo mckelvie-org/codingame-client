@@ -263,15 +263,17 @@ async def test_set_language_switches_a_freshly_created_contribution(tmp_path: Pa
     assert (tmp_path / "solution.cpp").is_symlink()
 
 
-async def test_set_language_removes_the_solution_when_a_language_has_no_stub(tmp_path: Path) -> None:
-    """Only Python3 offers a create-stub today, so every other language leaves solution.src absent
-       and the symlink dangling--exactly what create() does for such a language."""
+async def test_set_language_leaves_an_empty_solution_when_a_language_has_no_stub(tmp_path: Path) -> None:
+    """Only Python3 offers a create-stub that actually passes the seeded test cases, so every other
+       language gets an empty solution.src--this client's spelling of a null solutionSource, which
+       `updateContribution` accepts without validating. A placeholder would block the push."""
     manager = await _created(tmp_path)
 
     result = await manager.set_language("C++")
 
     assert not result.wrote_stub
-    assert not manager.solution_file.exists()
+    assert manager.solution_file.is_file()
+    assert manager.solution_file.read_text().strip() == ""
 
 
 async def test_set_language_refuses_when_a_real_solution_would_be_lost(tmp_path: Path) -> None:
@@ -339,3 +341,43 @@ async def test_set_language_updates_the_snapshot_so_it_can_switch_again(tmp_path
     await manager.set_language("Java")  # must not raise: still only our generated stub
 
     assert manager.load().data.solution_language == "Java"
+
+
+async def test_only_a_zero_length_solution_file_is_pushed_as_no_solution(tmp_path: Path) -> None:
+    """The point of keeping an empty file instead of deleting it: `updateContribution` skips
+       solution validation when solutionSource is null but validates any non-null value against
+       every test case, so an empty file must reach the server as null.
+
+       **Exactly zero length**, not "blank". Treating a file as a list of lines, no lines is `""`
+       and one empty line is `"\n"`--different files. A whitespace-only file is a real (broken)
+       program and is pushed as one, rather than being silently reinterpreted as no solution."""
+    from codingame_tools.contribution_manager.manager import _read_local_data
+
+    manager = await _created(tmp_path)
+    base = manager.load().data
+
+    manager.solution_file.write_text("")
+    data, _ = _read_local_data(manager.data_dir, base)
+    assert data.solution is None
+
+    for not_empty in ("\n", "   \n\t\n", "n = input()\nprint(n)\n"):
+        manager.solution_file.write_text(not_empty)
+        data, _ = _read_local_data(manager.data_dir, base)
+        assert data.solution == not_empty, f"{not_empty!r} must pass through verbatim"
+
+
+async def test_writing_an_empty_sidecar_leaves_a_zero_length_file(tmp_path: Path) -> None:
+    """`_ensure_trailing_newline` must leave empty text empty, or "no reference solution" would be
+       unrepresentable--every write would produce a one-newline file that pushes as a real (broken)
+       solution."""
+    from codingame_tools.contribution_manager.manager import _write_sidecar
+
+    path = tmp_path / "solution.src"
+    _write_sidecar(path, "")
+    assert path.read_bytes() == b""
+
+    _write_sidecar(path, "code")  # non-empty still gets its trailing newline
+    assert path.read_bytes() == b"code\n"
+
+    _write_sidecar(path, "code\n")  # ...and isn't doubled
+    assert path.read_bytes() == b"code\n"

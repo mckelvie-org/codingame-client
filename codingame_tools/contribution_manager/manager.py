@@ -123,6 +123,7 @@ from .test_cases_dir import (
     TESTS_SUBDIR_NAME,
     CgContributionLocalTestCase,
     commit_test_cases,
+    ensure_trailing_newline,
     import_test_cases,
     list_local_test_cases,
     renormalize_test_case_dirs,
@@ -402,13 +403,12 @@ class CgContributionSetLanguageResult:
 
     wrote_stub: bool
     """True when a starter `data/solution.src` was written for the new language; False when that
-       language has no stub to offer and `solution.src` was removed instead, leaving the
-       `solution.<ext>` symlink dangling until you write it yourself (the same thing `create()`
-       does for such a language).
+       language has no stub to offer and `solution.src` was left *empty* for you to fill in (the
+       same thing `create()` does for such a language).
 
-       Removal is correct rather than a shortfall: a null `solutionSource` makes
-       `updateContribution` skip solution validation, whereas any non-null one must pass every
-       test case--so a placeholder would block `push()`."""
+       An empty file rather than a placeholder is correct, not a shortfall: it's sent as a null
+       `solutionSource`, which makes `updateContribution` skip solution validation, whereas any
+       non-null one must pass every test case--so a placeholder would block `push()`."""
 
 
 class CgContributionLocalTestFailedError(CgContributionManagerError):
@@ -437,17 +437,17 @@ class CgContributionBuildFailedError(CgContributionManagerError):
         super().__init__(f"solution failed to build:\n{result.output}")
 
 
-def _ensure_trailing_newline(text: str) -> str:
-    """See `test_cases_dir._ensure_trailing_newline`--same rationale, used here for the other
-       sidecar text files (statement.cgmd, solution.src, etc.)."""
-    return text if text.endswith("\n") else text + "\n"
+def _normalize_solution(code: str | None) -> str:
+    """Solution text for the "is this still the stub we generated?" comparison only.
 
+       Tolerates a trailing-newline difference, since `_write_sidecar` adds one to a stub that
+       didn't already end in a newline, and maps `None` (no file) onto `""`.
 
-def _normalize_optional_solution(code: str | None) -> str | None:
-    """Solution text for equality checks, ignoring trailing-newline differences (`_write_sidecar`
-       appends one, the generated stub may not have had it). `None`--meaning "no solution file at
-       all"--stays distinct from an empty file."""
-    return None if code is None else code.rstrip("\n")
+       Deliberately *more* forgiving than the null-solution test in `_read_local_data`, which is
+       exact: the two answer different questions. "Has the user written anything real here?" can
+       afford to ignore a stray newline; "should this be pushed as a null solutionSource?" must not,
+       because it changes what the server is asked to validate."""
+    return "" if code is None else code.rstrip("\n")
 
 
 def _write_sidecar(path: Path, content: str | None) -> None:
@@ -458,7 +458,7 @@ def _write_sidecar(path: Path, content: str | None) -> None:
             path.unlink()
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_ensure_trailing_newline(content), encoding="utf-8")
+    path.write_text(ensure_trailing_newline(content), encoding="utf-8")
 
 
 def _read_sidecar(path: Path) -> str | None:
@@ -557,7 +557,10 @@ def _materialize_data(
     _write_sidecar(target_dir / OUTPUT_DESCRIPTION_FILE_NAME, data.output_description)
     _write_sidecar(target_dir / CONSTRAINTS_FILE_NAME, data.constraints)
     _write_sidecar(target_dir / STUB_GENERATOR_FILE_NAME, data.stub_generator)
-    _write_sidecar(target_dir / SOLUTION_FILE_NAME, data.solution)
+    # solution.src is always written, empty when there is no solution--never removed. An empty
+    # file is this client's representation of a null solutionSource (see _read_local_data), which
+    # keeps the `solution.<ext>` symlink from dangling and gives the author a file to type into.
+    _write_sidecar(target_dir / SOLUTION_FILE_NAME, data.solution or "")
 
     cover_path = target_dir / COVER_IMAGE_FILE_NAME
     if cover_bytes is not None:
@@ -589,7 +592,23 @@ def _read_local_data(data_dir: Path, working_data: CgContributionData) -> tuple[
        non-file-backed fields (`title`/`difficulty`/`topics`/`solution_language`)--and the current
        `cover.png` bytes, if any. `cover_binary_id` is left `None`; resolving it (network/hash-
        reuse) is `push()`'s job, not this function's."""
+    # An *empty* solution.src means "no reference solution", and is sent as a null solutionSource.
+    # `updateContribution` skips solution validation entirely for null, but validates any non-null
+    # value against every test case (see CgLanguage.build_contribution_create_stub_source). Spelling
+    # "none" as an empty file rather than a missing one is what lets this client always keep the
+    # file present, so the `solution.<ext>` symlink resolves and there's something to type into.
+    #
+    # Strictly zero-length, not "blank": treating a file as a list of lines, no lines is `""` while
+    # one empty line is `"\n"`, and those are different files. A whitespace-only file is a real
+    # (broken) program and is pushed as one, where the server will reject it--rather than being
+    # silently reinterpreted as "no solution at all".
+    #
+    # This does conflate a server-side solution that is genuinely `""` with a null one. Accepted
+    # deliberately: an empty program passes no test cases, so no contribution could have been
+    # accepted with one.
     solution = _read_sidecar(data_dir / SOLUTION_FILE_NAME)
+    if solution == "":
+        solution = None
     cover_path = data_dir / COVER_IMAGE_FILE_NAME
     cover_bytes = cover_path.read_bytes() if cover_path.is_file() else None
     data = dataclasses.replace(
@@ -1897,7 +1916,7 @@ class CgContributionManager:
             return False
         current = self.solution_file.read_text(encoding="utf-8") \
             if self.solution_file.is_file() else None
-        return _normalize_optional_solution(current) == _normalize_optional_solution(snapshot.code)
+        return _normalize_solution(current) == _normalize_solution(snapshot.code)
 
     async def set_language(
                 self,
@@ -1956,13 +1975,14 @@ class CgContributionManager:
                     "somewhere outside this working directory first, then pass --force."
                 )
 
-        # A language with no stub yields None, which _write_sidecar turns into "remove
-        # solution.src". That is deliberate, not a shortfall: `updateContribution` skips solution
-        # validation entirely when solutionSource is null, but validates a non-null one against
-        # every test case. Writing a placeholder here would fail that validation and block `push()`
-        # -- see CgLanguage.build_contribution_create_stub_source.
+        # A language with no stub yields None, written as an *empty* solution.src rather than no
+        # file at all--empty is this client's spelling of a null solutionSource (see
+        # _read_local_data), so `push()` still skips solution validation while the author keeps a
+        # file to type into and a symlink that resolves. Writing a comment-only placeholder instead
+        # would be non-null, fail validation, and block the push--see
+        # CgLanguage.build_contribution_create_stub_source.
         stub = await get_language(language).build_contribution_create_stub_source()
-        _write_sidecar(self.solution_file, stub)
+        _write_sidecar(self.solution_file, stub or "")
         self._write_solution_snapshot(language, stub)
         self.save(dataclasses.replace(
                 view, data=dataclasses.replace(view.data, solution_language=language)))

@@ -236,11 +236,11 @@ class CgLanguage(ABC):  # noqa: B024 -- deliberately no @abstractmethod; see doc
            exactly that reason.
 
            A null `solutionSource` is explicitly allowed and makes the server skip solution
-           validation entirely, so returning `None` (which drops `solution.src`, leaving the
-           `solution.<ext>` symlink dangling until the author writes it) keeps `push()` working.
-           Returning a *comment-only placeholder* would be strictly worse than `None`: non-null,
-           failing validation, and blocking the push. Do not add one here to "fix" a language that
-           returns `None`--write a real working solution or leave it.
+           validation entirely, so returning `None` keeps `push()` working: the contribution manager
+           writes an *empty* `solution.src` for it, and sends a blank file as null. Returning a
+           *comment-only placeholder* would be strictly worse than `None`: non-null, failing
+           validation, and blocking the push. Do not add one here to "fix" a language that returns
+           `None`--write a real working solution or leave it.
 
            Contrast `format_comment`, whose comment-only placeholder *is* fine for a puzzle: nothing
            validates a puzzle's local solution file.

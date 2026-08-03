@@ -543,7 +543,11 @@ async def test_create_default_language_is_python_with_a_working_stub(tmp_path: P
     assert (tmp_path / "solution.py").resolve() == (tmp_path / "data" / "solution.src").resolve()
 
 
-async def test_create_non_python_language_creates_symlink_but_no_source_file(tmp_path: Path) -> None:
+async def test_create_non_python_language_leaves_an_empty_source_file(tmp_path: Path) -> None:
+    """Only Python3 has a stub that genuinely passes the seeded test cases, so every other language
+       gets an *empty* solution.src rather than a placeholder. Empty is this client's spelling of a
+       null solutionSource, which `updateContribution` accepts without running solution validation;
+       a placeholder would be non-null, fail validation, and block the push."""
     data = _make_full_data()
     contribution = _make_contribution(data)
     client, _, _, _ = _make_fake_client(contribution)
@@ -552,9 +556,11 @@ async def test_create_non_python_language_creates_symlink_but_no_source_file(tmp
     view = await manager.create(title="My Puzzle", language="Java")
 
     assert view.data.solution_language == "Java"
-    assert not (tmp_path / "data" / "solution.src").exists()
-    assert (tmp_path / "solution.java").is_symlink()  # dangling--points at a file that doesn't exist yet
-    assert not (tmp_path / "solution.java").exists()  # is_symlink() is True even when the target is missing
+    solution_file = tmp_path / "data" / "solution.src"
+    assert solution_file.is_file()  # present, so the symlink resolves and there's a file to edit
+    assert solution_file.read_text().strip() == ""
+    assert (tmp_path / "solution.java").is_symlink()
+    assert (tmp_path / "solution.java").exists()  # resolves, unlike when the target was omitted
 
 
 async def test_create_unmapped_language_creates_no_symlink(tmp_path: Path) -> None:
@@ -565,7 +571,8 @@ async def test_create_unmapped_language_creates_no_symlink(tmp_path: Path) -> No
 
     await manager.create(title="My Puzzle", language="SomeUnknownLanguage")
 
-    assert not (tmp_path / "data" / "solution.src").exists()
+    # No known extension, so no symlink--but solution.src still exists (empty) to type into.
+    assert (tmp_path / "data" / "solution.src").read_text().strip() == ""
     assert list(tmp_path.glob("solution.*")) == []
 
 
