@@ -108,9 +108,6 @@ class CgLastActivityPuzzle(JSONWizardX):
     forum_link: str
     """Relative URL path (minus domain) to the puzzle's discussion forum thread."""
 
-    contributor: CgLastActivityContributor
-    """The codingamer who authored this community puzzle."""
-
     feedback: CgPuzzleFeedback
     """Community feedback/rating summary for this puzzle."""
 
@@ -152,6 +149,12 @@ class CgLastActivityPuzzle(JSONWizardX):
     """When the puzzle was created."""
 
     extra_data: CatchAll = field(default_factory=dict)
+
+    contributor: CgLastActivityContributor | None = None
+    """The codingamer who authored this puzzle, or `None` for a puzzle CodinGame provides itself.
+
+       Confirmed live (2026-08-02) absent entirely--not `null`--for official puzzles, which is what
+       `community_creation: False` marks. Only community-created puzzles have an author to name."""
 
     test_session_handle: str | None = None
     """Opaque handle for a test session against this puzzle. Not always present--absent (along

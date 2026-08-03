@@ -146,12 +146,6 @@ class CgTestSessionQuestionDetails(JSONWizardX):
     available_languages: list[CgAvailableLanguage]
     """Programming languages available to solve this puzzle in."""
 
-    contributor: CgLastActivityContributor
-    """The codingamer who authored this puzzle."""
-
-    contribution: CgTestSessionContribution
-    """Lightweight contribution metadata for this puzzle."""
-
     test_cases: list[CgTestSessionTestCase]
     """The puzzle's test cases (metadata only--content is referenced by binary ID)."""
 
@@ -160,6 +154,22 @@ class CgTestSessionQuestionDetails(JSONWizardX):
        observed so far."""
 
     extra_data: CatchAll = field(default_factory=dict)
+
+    contributor: CgLastActivityContributor | None = None
+    """The codingamer who authored this puzzle, or `None` for a puzzle CodinGame itself provides.
+
+       Confirmed live (2026-08-02) absent entirely--not `null`--for an official puzzle
+       ("Temperatures"), which also reports the sentinel `user_id: -2`. Only community
+       *contributions* have an author to name."""
+
+    contribution: CgTestSessionContribution | None = None
+    """Lightweight contribution metadata, or `None` for a puzzle CodinGame itself provides--an
+       official puzzle was never a community contribution, so there's nothing to describe.
+
+       Confirmed live (2026-08-02) absent entirely for "Temperatures". Note this is the only source
+       of a puzzle's `contribution_type`, so that is simply unknowable for an official puzzle--see
+       `codingame_tools.puzzle_manager.manager.CgPuzzleManager.import_`, which treats absence as a
+       standard in/out puzzle rather than refusing every official puzzle outright."""
 
 
 @dataclass

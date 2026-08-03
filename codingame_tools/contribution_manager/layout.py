@@ -18,6 +18,7 @@ __all__ = [
     "META_SUBDIR_NAME",
     "GIT_METADATA_SUBDIR_NAME",
     "CONTRIBUTION_STATUS_CACHE_FILE_NAME",
+    "SOLUTION_SNAPSHOT_FILE_NAME",
     "GITIGNORE_FILE_NAME",
     "MAIN_BRANCH_NAME",
     "SERVER_BRANCH_NAME",
@@ -67,6 +68,10 @@ GIT_METADATA_SUBDIR_NAME = ".contribution-git"
    may ever carry a literal `.git` marker."""
 
 CONTRIBUTION_STATUS_CACHE_FILE_NAME = "contribution-status.json"
+
+SOLUTION_SNAPSHOT_FILE_NAME = "solution-snapshot.json"
+"""Name of the `.meta/` file recording the starter stub this client last generated into
+   `data/solution.src`--see `CgContributionSolutionSnapshot`."""
 """Name of the offline cache of non-version-tied server metadata (score/votes/comment count/
    views/moderator approve-reject tallies/etc.), under `META_SUBDIR_NAME`--see
    `schema.CgContributionStatusCache`. Deliberately NOT git-tracked (unlike `contribution-data.

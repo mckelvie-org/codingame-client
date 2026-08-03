@@ -224,10 +224,26 @@ class CgLanguage(ABC):  # noqa: B024 -- deliberately no @abstractmethod; see doc
         return None if prefix is None else f"{prefix} {text}"
 
     async def build_contribution_create_stub_source(self) -> str | None:
-        """Build a trivial, real, working starter `data/solution.src` for `cg contribution
-           create` that passes the seeded title-only test/validator pair (input `"1"` -> output
-           `"1"`), or `None` if this language has no such stub yet (the working directory's
-           `solution.src` is then left empty/unwritten).
+        """Build a starter `data/solution.src` for `cg contribution create`, or `None` if this
+           language has no suitable one.
+
+           **The bar here is "a real, working solution", not "a placeholder", and `None` is a
+           correct answer rather than a gap to fill.** `Contribution/updateContribution` validates
+           server-side: a non-null `solutionSource` must actually pass *every* provided test case,
+           and a contribution must provide at least one local and one validator case. `cg
+           contribution create` therefore seeds a trivial pair (input `"1"` -> output `"1"`), and
+           any stub returned here must genuinely satisfy them--Python3's echoes its input for
+           exactly that reason.
+
+           A null `solutionSource` is explicitly allowed and makes the server skip solution
+           validation entirely, so returning `None` (which drops `solution.src`, leaving the
+           `solution.<ext>` symlink dangling until the author writes it) keeps `push()` working.
+           Returning a *comment-only placeholder* would be strictly worse than `None`: non-null,
+           failing validation, and blocking the push. Do not add one here to "fix" a language that
+           returns `None`--write a real working solution or leave it.
+
+           Contrast `format_comment`, whose comment-only placeholder *is* fine for a puzzle: nothing
+           validates a puzzle's local solution file.
 
            Async so a plugin is free to do real work to produce this (render a template, consult
            a language service) rather than only ever returning a fixed string. Base

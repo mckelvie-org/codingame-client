@@ -1451,6 +1451,29 @@ class CgCli(CliBase):
                        help="The test session's numeric ID (CgTestSession.test_session_id).")
         return handler
 
+    @cli_command("Fetch the codingamer's most recently saved code for one language in a test "
+                 "session. CodinGame keeps your latest source per language, not just one; this "
+                 "reaches the ones the session isn't currently on. Prints JSON null if you've "
+                 "never attempted the puzzle in that language. This is a pure read--it does NOT "
+                 "make that language the session's current one (only running a test or submitting "
+                 "does that).")
+    async def cmd_api__test_session__get_previous_code_by_language_id(
+                self, cmd: CliCommand[Self],
+            ) -> OptCmdFunc:
+        async def handler() -> None:
+            test_session_handle: str = self.args.test_session_handle
+            programming_language_id: str = self.args.language_id
+            client = await self.get_client()
+            code = await client.services.test_session.get_previous_code_by_language_id(
+                    test_session_handle, programming_language_id)
+            print(json.dumps(code))
+        p = cmd.get_parser()
+        p.add_argument("test_session_handle", type=str, metavar="TEST-SESSION-HANDLE",
+                       help="The puzzle's test session handle.")
+        p.add_argument("language_id", type=str, metavar="LANGUAGE-ID",
+                       help="CodinGame language ID, e.g. 'Python3', 'C++'.")
+        return handler
+
     @cli_command("Submit a final solution to a puzzle for credit. Code is read from stdin.")
     async def cmd_api__test_session__submit(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
@@ -2075,6 +2098,39 @@ class CgCli(CliBase):
                        help="Overwrite an existing .vscode/ config file that isn't strict JSON "
                             "(VS Code allows comments there, which can't be merged into safely). "
                             "Without this, such a file is left untouched and an error is reported.")
+        return handler
+
+    @cli_command("Switch this contribution's reference-solution language, writing a fresh starter "
+                 "stub. DESTRUCTIVE: unlike a puzzle, a contribution stores only ONE solution with "
+                 "no per-language history, so there is nothing to restore and nothing to switch "
+                 "back to--the existing solution is replaced by a stub, and the next `cg "
+                 "contribution push` overwrites the last durable copy. Refuses unless "
+                 "data/solution.src is still exactly the stub cg generated; note that matching "
+                 "what the server currently has does NOT make it safe, since that copy is what the "
+                 "next push destroys. Purely local--no network call.")
+    async def cmd_contribution__set_language(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            language: str = self.args.language
+            force: bool = self.args.force
+            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
+            # No client: there is no per-language code to fetch, unlike `cg puzzle set-language`.
+            manager = CgContributionManager(
+                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+            result = await manager.set_language(language, force=force)
+            self.eprint(f"{resolved_dir}: {result.previous_language!r} -> {result.language!r}")
+            if result.wrote_stub:
+                self.eprint(f"  wrote a starter {result.language} solution to {manager.solution_file}.")
+            else:
+                self.eprint(f"  no starter stub available for {result.language}--removed "
+                            f"{manager.solution_file}; write it yourself before pushing.")
+        p = cmd.get_parser()
+        p.add_argument("language", type=str, metavar="LANGUAGE",
+                       help="CodinGame language ID to switch to, e.g. 'C++', 'Python3'.")
+        p.add_argument("--force", "-f", default=False, action="store_true",
+                       help="Switch even though a real reference solution would be discarded. There "
+                            "is no way to get it back--save a copy outside the working directory "
+                            "first.")
         return handler
 
     @cli_command("Show which contribution working directory would be used.")
@@ -2790,7 +2846,7 @@ class CgCli(CliBase):
     async def cmd_puzzle__import(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             puzzle_ref: str = self.args.puzzle_ref
-            language: str = self.args.language
+            language: str | None = self.args.language
             puzzle_dir: Path | None = self.args.puzzle_dir
             resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings(), allow_default=True)
             client = await self.get_client()
@@ -2807,9 +2863,11 @@ class CgCli(CliBase):
                             "lowercased with spaces replaced by hyphens, e.g. "
                             "'literary-alfabet-soupe'), exact title, or case-insensitive title--"
                             "tried in that order until one resolves to a real puzzle.")
-        p.add_argument("--language", "-l", type=str, default="Python3", metavar="LANGUAGE",
-                       help="Language for the placeholder solution.src, if this puzzle has never been "
-                            "attempted before. Defaults to 'Python3'. Ignored if an existing answer is found.")
+        p.add_argument("--language", "-l", type=str, default=None, metavar="LANGUAGE",
+                       help="Language to start in, e.g. 'C++'. Restores your most recent saved code "
+                            "for that language, or writes a placeholder if you've never used it "
+                            "here. Omit to use whichever language you last used for this puzzle "
+                            "(or Python3 if you've never attempted it at all).")
         return handler
 
     @cli_command("Reconstruct .meta/ (gitignored server-derived cache: the test session handle, "
@@ -3270,6 +3328,38 @@ class CgCli(CliBase):
                     f"removed {len(result.containers)} container(s) and "
                     f"{len(result.images)} image(s)."
                 )
+        return handler
+
+    @cli_command("Switch this puzzle to a different language, restoring your own most recent code "
+                 "for it. CodinGame keeps your latest source per language, so anything you'd "
+                 "previously written in the target language comes back; a language you've never "
+                 "used gets a placeholder. Refuses if data/solution.src holds work the server "
+                 "doesn't have (submit it first, or pass --force to discard it). Changes local "
+                 "state only--the server's current language follows once you run a server-side "
+                 "test or submit in the new one.")
+    async def cmd_puzzle__set_language(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            puzzle_dir: Path | None = self.args.puzzle_dir
+            language: str = self.args.language
+            force: bool = self.args.force
+            resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
+            client = await self.get_client()
+            manager = CgPuzzleManager(resolved_dir, client, toolchain_dir=self.resolve_toolchain_dir())
+            result = await manager.set_language(language, force=force)
+            self.eprint(
+                    f"{resolved_dir}: {result.previous_language!r} -> {result.language!r}")
+            if result.from_server:
+                self.eprint(f"  restored your saved {result.language} solution "
+                            f"({len(result.code.splitlines())} lines).")
+            else:
+                self.eprint(f"  no saved {result.language} solution on the server--wrote a "
+                            "placeholder to start from.")
+        p = cmd.get_parser()
+        p.add_argument("language", type=str, metavar="LANGUAGE",
+                       help="CodinGame language ID to switch to, e.g. 'C++', 'Python3'.")
+        p.add_argument("--force", "-f", default=False, action="store_true",
+                       help="Switch even if data/solution.src has changes the server doesn't have, "
+                            "discarding them.")
         return handler
 
     @cli_command("Show which puzzle working directory would be used.")

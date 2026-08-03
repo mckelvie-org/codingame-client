@@ -34,6 +34,7 @@ from .manager import (
     CgPuzzleManager,
     CgPuzzleManagerError,
     CgPuzzleRemoteTestResult,
+    CgPuzzleSetLanguageResult,
     CgPuzzleStatus,
 )
 from .resolver import (
@@ -58,6 +59,7 @@ __all__ = [
     "CgPuzzleManager",
     "CgPuzzleManagerError",
     "CgPuzzleDiscardResult",
+    "CgPuzzleSetLanguageResult",
     "CgPuzzleLocalTestResult",
     "CgPuzzleBuildFailedError",
     "CgPuzzleLocalTestFailedError",

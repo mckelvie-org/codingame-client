@@ -2,6 +2,66 @@
 
 ## {{UNRELEASED}}
 
+- New `cg contribution set-language LANGUAGE [--force]` — deliberately **stricter** than the puzzle
+  equivalent, because a contribution stores exactly one solution with no per-language history.
+  There is nothing to restore and nothing to switch back to: the existing solution is replaced by a
+  starter stub, and the next `cg contribution push` overwrites the last durable copy. So it refuses
+  unless `data/solution.src` is still exactly the stub cg generated (recorded in
+  `.meta/solution-snapshot.json` by `create()` and by each switch). Notably, *matching what the
+  server currently has* does **not** count as safe here — unlike `cg puzzle set-language`, where
+  per-language recall makes switching reversible — since the server copy is precisely what the next
+  push destroys. Purely local: no network call, as there's no per-language code to fetch.
+
+  Only Python3 offers a create-stub today, so switching to any other language *removes*
+  `solution.src` and leaves the `solution.<ext>` symlink dangling, exactly as `cg contribution
+  create` already does. That's required, not a shortfall: `updateContribution` skips solution
+  validation entirely when `solutionSource` is null, but validates any non-null one against every
+  test case — and `create()` seeds a real test/validator pair. Python3's stub echoes its input
+  specifically so it passes them; a comment-only placeholder for another language would be non-null,
+  fail validation, and block `push()`.
+
+- **You can now switch a puzzle's language, and get your own saved code back.** CodinGame keeps
+  your most recent source *per language* for a puzzle, not just one; a previously-unknown API
+  (`TestSession/getPreviousCodeByLanguageId`, now wrapped as
+  `CgTestSessionService.get_previous_code_by_language_id` and `cg api test-session
+  get-previous-code-by-language-id`) reaches the languages the session isn't currently on.
+
+  New `cg puzzle set-language LANGUAGE [--force]` switches `data/solution.src`,
+  `data/puzzle-data.json` and the `solution.<ext>` symlink, seeding the file with whatever you'd
+  previously written in that language — a placeholder only when you've genuinely never used it
+  there. It refuses when the current file holds work the server doesn't have (switching would
+  discard it); `--force` overrides.
+
+  "Has the user edited this?" is answered from a **recorded snapshot** of what cg last wrote
+  (`.meta/solution-snapshot.json`, written by every path that touches `solution.src`), not by
+  regenerating a placeholder and comparing. Regeneration would break silently the moment
+  placeholder output stopped being byte-identical across releases — a template tweak or an embedded
+  timestamp would be enough — and an untouched working directory would start claiming unsaved
+  changes. A missing snapshot (fresh clone, or a directory from an older version) falls back to
+  comparing against the server, which errs toward refusing rather than discarding. Comparisons
+  ignore a trailing newline, which the server's copy routinely differs by.
+
+  `cg puzzle import --language` changes meaning to match: it now *switches to* that language
+  (restoring saved code for it) instead of being silently ignored whenever any answer existed.
+  Omit it to get whichever language you last used, as before. `import --language X` is now exactly
+  `import` followed by `set-language X`, sharing one code path.
+
+  Two API semantics confirmed live and documented, since both are easy to assume wrongly: fetching
+  code for a language is a **pure read** that does *not* make it the session's current language
+  (only running a test or submitting does), and a language you've never attempted returns **null**
+  rather than a generated stub.
+
+- Fix: **official CodinGame puzzles couldn't be imported at all.** A puzzle the site provides
+  itself was never a community contribution, so `TestSession/startTestSession` omits `contributor`
+  and `contribution` **entirely** (not null) — and both were required fields, so `cg puzzle import
+  Temperatures` failed to parse the response outright. The same omission broke
+  `LastActivities/getLastActivities` via `CgLastActivityPuzzle.contributor`, which is what
+  `communityCreation: false` marks. All three are now optional. A puzzle's `contributionType` is
+  consequently unknowable for an official puzzle, so `import_` treats its absence as a standard
+  in/out puzzle and records `puzzleType: null` rather than refusing — failing closed there would
+  have blocked every official puzzle on the site. A type that *is* present and unsupported is still
+  rejected as before.
+
 - Containers are now strictly **one per working directory**. Container names are per-language, so
   changing a working directory's `solution_language` previously orphaned the old language's
   container--still running, still bind-mounted, never referenced again. Creating a container now

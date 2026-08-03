@@ -114,6 +114,32 @@ class CgPuzzleServerData(JSONWizardX):
 
 
 @dataclass
+class CgPuzzleSolutionSnapshot(JSONWizardX):
+    """`.meta/solution-snapshot.json`: exactly what this client last wrote into
+       `data/solution.src`, and in which language.
+
+       Exists to answer one question without guessing: *has the user edited the solution since we
+       wrote it?* The alternative--regenerating the placeholder and comparing--would silently break
+       the moment placeholder generation stopped being byte-identical, which it is not guaranteed to
+       be across releases (a template tweak, or a generated timestamp, would be enough). An
+       untouched working directory would then start claiming it had unsaved changes.
+
+       Gitignored cache like the rest of `.meta/`, and deliberately fail-safe: if it's missing (a
+       fresh clone, or a directory imported by a version that predates it) the caller falls back to
+       comparing against the server, which errs toward *refusing* to discard rather than toward
+       discarding silently."""
+
+    solution_language: CgSolutionLanguage
+    """The language `code` was written for. A snapshot whose language no longer matches
+       `CgPuzzleData.solution_language` describes a previous state and must not be trusted."""
+
+    code: str
+    """The exact text written to `data/solution.src`."""
+
+    extra_data: CatchAll = field(default_factory=dict)
+
+
+@dataclass
 class CgPuzzleData(JSONWizardX):
     """The `data/puzzle-data.json` manifest: the one piece of metadata that genuinely travels
        with a solution submission (alongside `data/solution.src` itself), as opposed to read-only

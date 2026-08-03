@@ -17,10 +17,11 @@ from codingame_tools.client.common.protocol.contribution import CgContributionDa
 from codingame_tools.contribution_manager.manager import (
     CgContributionLocalTestFailedError,
     CgContributionManager,
+    CgContributionManagerError,
 )
 from codingame_tools.contribution_manager.schema import CgContributionView
 from codingame_tools.contribution_manager.test_cases_dir import import_test_cases
-from codingame_tools.language import CgLanguageOperationNotSupportedError
+from codingame_tools.language import CgLanguageOperationNotSupportedError, get_language
 
 
 def _tc(title: str, test_in: str, test_out: str, *, is_test: bool, is_validator: bool) -> CgTestCase:
@@ -233,3 +234,108 @@ async def test_build_solution_is_a_no_op_success_for_python(tmp_path: Path) -> N
 
     assert result.ok
     assert result.up_to_date
+
+
+# --- set_language ---------------------------------------------------------------------------
+
+
+async def _created(tmp_path: Path, language: str = "Python3") -> CgContributionManager:
+    """A contribution as `create()` leaves it: a generated starter stub and nothing else."""
+    manager = CgContributionManager(tmp_path, object())  # type: ignore[arg-type]
+    stub = await get_language(language).build_contribution_create_stub_source()
+    manager.save(CgContributionView(
+            data=CgContributionData(title="T", solution_language=language)))
+    manager.solution_file.parent.mkdir(parents=True, exist_ok=True)
+    if stub is not None:
+        manager.solution_file.write_text(stub)
+    manager._write_solution_snapshot(language, stub)  # what create() records
+    return manager
+
+
+async def test_set_language_switches_a_freshly_created_contribution(tmp_path: Path) -> None:
+    manager = await _created(tmp_path)
+
+    result = await manager.set_language("C++")
+
+    assert result.previous_language == "Python3"
+    assert result.language == "C++"
+    assert manager.load().data.solution_language == "C++"
+    assert (tmp_path / "solution.cpp").is_symlink()
+
+
+async def test_set_language_removes_the_solution_when_a_language_has_no_stub(tmp_path: Path) -> None:
+    """Only Python3 offers a create-stub today, so every other language leaves solution.src absent
+       and the symlink dangling--exactly what create() does for such a language."""
+    manager = await _created(tmp_path)
+
+    result = await manager.set_language("C++")
+
+    assert not result.wrote_stub
+    assert not manager.solution_file.exists()
+
+
+async def test_set_language_refuses_when_a_real_solution_would_be_lost(tmp_path: Path) -> None:
+    manager = await _created(tmp_path)
+    manager.solution_file.write_text("n = int(input())\nprint(n * 2)\n")  # real work
+
+    with pytest.raises(CgContributionManagerError, match="only ONE solution"):
+        await manager.set_language("C++")
+
+    assert manager.solution_file.read_text() == "n = int(input())\nprint(n * 2)\n"
+    assert manager.load().data.solution_language == "Python3"  # unchanged
+
+
+async def test_set_language_force_discards_a_real_solution(tmp_path: Path) -> None:
+    manager = await _created(tmp_path)
+    manager.solution_file.write_text("n = int(input())\nprint(n * 2)\n")
+
+    await manager.set_language("C++", force=True)
+
+    assert manager.load().data.solution_language == "C++"
+
+
+async def test_matching_the_server_does_not_make_switching_safe(tmp_path: Path) -> None:
+    """The key asymmetry with `cg puzzle set-language`. On a puzzle, "the server has this code" is
+       a real escape hatch, because per-language recall brings it back on switching return. A
+       contribution has no per-language history, so the server's copy is precisely what the next
+       push destroys--it must not count as safe."""
+    manager = await _created(tmp_path)
+    solution = "n = int(input())\nprint(n * 2)\n"
+    manager.solution_file.write_text(solution)
+    # Model "already pushed": the server's stored solution is byte-identical to the local file.
+    # This must still refuse.
+    with pytest.raises(CgContributionManagerError, match="only ONE solution"):
+        await manager.set_language("C++")
+
+
+async def test_set_language_refuses_after_git_rewrote_the_solution(tmp_path: Path) -> None:
+    """A snapshot deliberately isn't updated by git-driven writes (merge/discard-local/rebase);
+       after one, solution.src holds real content and must no longer look like our stub."""
+    manager = await _created(tmp_path)
+    manager.solution_file.write_text("// content restored from the server branch\n")
+
+    with pytest.raises(CgContributionManagerError):
+        await manager.set_language("C++")
+
+
+async def test_set_language_rejects_an_unknown_language(tmp_path: Path) -> None:
+    manager = await _created(tmp_path)
+
+    with pytest.raises(CgContributionManagerError, match="isn't a language"):
+        await manager.set_language("Cobol")
+
+
+async def test_set_language_rejects_the_current_language(tmp_path: Path) -> None:
+    manager = await _created(tmp_path)
+
+    with pytest.raises(CgContributionManagerError, match="already using"):
+        await manager.set_language("Python3")
+
+
+async def test_set_language_updates_the_snapshot_so_it_can_switch_again(tmp_path: Path) -> None:
+    manager = await _created(tmp_path)
+
+    await manager.set_language("C++")
+    await manager.set_language("Java")  # must not raise: still only our generated stub
+
+    assert manager.load().data.solution_language == "Java"

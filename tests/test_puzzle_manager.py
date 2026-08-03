@@ -49,7 +49,7 @@ from codingame_tools.puzzle_manager.test_cases_dir import (
 def _make_test_session(
             *,
             answer: CgTestSessionAnswer | None = None,
-            contribution_type: str = "PUZZLE_INOUT",
+            contribution_type: str | None = "PUZZLE_INOUT",
             title: str = "Literary Alfabet Soupe",
             pretty_id: str = "literary-alfabet-soupe",
             puzzle_id: int = 10075,
@@ -59,14 +59,17 @@ def _make_test_session(
             stub_generator: str = "read a:int",
         ) -> CgTestSession:
     contributor = CgLastActivityContributor(user_id=1, pseudo="someone", public_handle="contributor-handle")
-    contribution = CgTestSessionContribution(
+    # contribution_type=None models a puzzle CodinGame provides itself, which omits both
+    # `contributor` and `contribution` entirely--see CgTestSessionQuestionDetails.
+    contribution = None if contribution_type is None else CgTestSessionContribution(
             id=1, public_handle="contribution-handle", status="ACCEPTED", moderators=[],
             contribution_type=contribution_type,
         )
     question = CgTestSessionQuestionDetails(
             id=1094622, title=title, statement=statement, stub_generator=stub_generator,
             duration=1000, index=0, initial_id=1094622, user_id=1, available_languages=[],
-            contributor=contributor, contribution=contribution,
+            contributor=None if contribution_type is None else contributor,
+            contribution=contribution,
             test_cases=[
                     CgTestSessionTestCase(index=1, input_binary_id=1, output_binary_id=2, label="Test 1"),
                     CgTestSessionTestCase(index=2, input_binary_id=3, output_binary_id=4, label="Test 2"),
@@ -191,13 +194,18 @@ class _FakeTestSessionService:
     def __init__(
                 self, session: CgTestSession, *, play_result: CgPlayResult | None = None,
                 submit_result: int = 424242,
+                previous_code: dict[str, str] | None = None,
             ) -> None:
         self.session = session
         self.play_result = play_result
         self.submit_result = submit_result
+        # CodinGame stores the codingamer's most recent source per language; a language absent
+        # here models one they've never attempted, which the real API answers with null.
+        self.previous_code: dict[str, str] = dict(previous_code or {})
         self.start_calls: list[str] = []
         self.play_calls: list[dict[str, Any]] = []
         self.submit_calls: list[dict[str, Any]] = []
+        self.previous_code_calls: list[tuple[str, str]] = []
 
     async def start_test_session(self, test_session_handle: str) -> CgTestSession:
         self.start_calls.append(test_session_handle)
@@ -213,6 +221,12 @@ class _FakeTestSessionService:
             ) -> int:
         self.submit_calls.append({"test_session_handle": test_session_handle, "request": request})
         return self.submit_result
+
+    async def get_previous_code_by_language_id(
+                self, test_session_handle: str, programming_language_id: str,
+            ) -> str | None:
+        self.previous_code_calls.append((test_session_handle, programming_language_id))
+        return self.previous_code.get(programming_language_id)
 
 
 class _FakeServices:
@@ -253,9 +267,11 @@ class _FakeClient:
 
 def _make_fake_client(
             session: CgTestSession, *, play_result: CgPlayResult | None = None,
+            previous_code: dict[str, str] | None = None,
         ) -> tuple[_FakeClient, _FakePuzzleService, _FakeTestSessionService, _FakeFileServletServlet]:
     puzzle_service = _FakePuzzleService(session.test_session_handle)
-    test_session_service = _FakeTestSessionService(session, play_result=play_result)
+    test_session_service = _FakeTestSessionService(
+            session, play_result=play_result, previous_code=previous_code)
     file_servlet = _FakeFileServletServlet()
     search_service = _FakeSearchService()
     report_service = _FakeReportService()
@@ -1175,3 +1191,223 @@ async def test_build_solution_requires_prior_import(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError):
         await manager.build_solution()
+
+
+async def test_import_accepts_an_official_puzzle_with_no_contribution(tmp_path: Path) -> None:
+    """A puzzle CodinGame provides itself has no contribution, so its contribution type is
+       unknowable. Refusing on that would block importing every official puzzle on the site
+       (confirmed live 2026-08-02 with "Temperatures"), so absence is treated as a standard in/out
+       puzzle and recorded as an unknown type."""
+    session = _make_test_session(answer=None, contribution_type=None)
+    client, _, _, _ = _make_fake_client(session)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+
+    await manager.import_("literary-alfabet-soupe", language="C++")
+
+    server_data = manager.load_server_data()
+    assert server_data is not None
+    assert server_data.puzzle_type is None
+
+
+async def test_import_still_refuses_a_known_unsupported_contribution_type(tmp_path: Path) -> None:
+    """Absence is tolerated; a type that's present and unsupported is still rejected."""
+    session = _make_test_session(contribution_type="PUZZLE_OPTI")
+    client, _, _, _ = _make_fake_client(session)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+
+    with pytest.raises(CgPuzzleManagerError):
+        await manager.import_("literary-alfabet-soupe")
+
+
+# --- import --language / set_language ------------------------------------------------------------
+
+
+async def test_import_with_a_language_restores_saved_code_for_that_language(tmp_path: Path) -> None:
+    """An explicit --language means "start in this one", not "use it only if nothing is saved".
+       CodinGame keeps your latest source per language, so asking for a language you'd previously
+       written a solution in must bring that solution back rather than a placeholder."""
+    answer = CgTestSessionAnswer(code="print('py')\n", programming_language_id="Python3")
+    session = _make_test_session(answer=answer)
+    client, _, ts, _ = _make_fake_client(session, previous_code={"C++": "int main(){}\n"})
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+
+    puzzle_data = await manager.import_("literary-alfabet-soupe", language="C++")
+
+    assert puzzle_data.solution_language == "C++"
+    assert manager.solution_file.read_text() == "int main(){}\n"
+    assert ("session-handle-1", "C++") in ts.previous_code_calls
+
+
+async def test_import_with_an_unused_language_falls_back_to_a_placeholder(tmp_path: Path) -> None:
+    answer = CgTestSessionAnswer(code="print('py')\n", programming_language_id="Python3")
+    session = _make_test_session(answer=answer)
+    client, _, _, _ = _make_fake_client(session)  # nothing saved in any other language
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+
+    puzzle_data = await manager.import_("literary-alfabet-soupe", language="C++")
+
+    assert puzzle_data.solution_language == "C++"
+    assert "TODO" in manager.solution_file.read_text()
+
+
+async def test_import_without_a_language_still_uses_the_saved_answer(tmp_path: Path) -> None:
+    """The no---language path is unchanged: whichever language you last used."""
+    answer = CgTestSessionAnswer(code="print('py')\n", programming_language_id="Python3")
+    session = _make_test_session(answer=answer)
+    client, _, ts, _ = _make_fake_client(session, previous_code={"C++": "int main(){}\n"})
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+
+    puzzle_data = await manager.import_("literary-alfabet-soupe")
+
+    assert puzzle_data.solution_language == "Python3"
+    assert manager.solution_file.read_text() == "print('py')\n"
+    assert ts.previous_code_calls == []  # no need to ask; the session already answered
+
+
+async def _imported(tmp_path: Path, **kwargs: Any) -> tuple[CgPuzzleManager, _FakeTestSessionService]:
+    answer = CgTestSessionAnswer(code="print('py')\n", programming_language_id="Python3")
+    session = _make_test_session(answer=answer)
+    client, _, ts, _ = _make_fake_client(session, **kwargs)
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe")
+    return manager, ts
+
+
+async def test_set_language_restores_saved_code_for_the_new_language(tmp_path: Path) -> None:
+    manager, _ = await _imported(tmp_path, previous_code={
+            "Python3": "print('py')\n", "C++": "int main(){ /* mine */ }\n"})
+
+    result = await manager.set_language("C++")
+
+    assert result.previous_language == "Python3"
+    assert result.language == "C++"
+    assert result.from_server
+    assert manager.solution_file.read_text() == "int main(){ /* mine */ }\n"
+    puzzle_data = manager.load_puzzle_data()
+    assert puzzle_data is not None
+    assert puzzle_data.solution_language == "C++"
+    assert (tmp_path / "solution.cpp").is_symlink()  # symlink follows the language
+
+
+async def test_set_language_writes_a_placeholder_for_a_never_used_language(tmp_path: Path) -> None:
+    manager, _ = await _imported(tmp_path, previous_code={"Python3": "print('py')\n"})
+
+    result = await manager.set_language("C++")
+
+    assert not result.from_server
+    assert "TODO" in manager.solution_file.read_text()
+
+
+async def test_set_language_refuses_when_local_edits_are_unsaved(tmp_path: Path) -> None:
+    """Switching overwrites solution.src, so work the server doesn't have would be lost."""
+    manager, _ = await _imported(tmp_path, previous_code={"Python3": "print('py')\n"})
+    manager.solution_file.write_text("print('my unsaved edit')\n")
+
+    with pytest.raises(CgPuzzleManagerError, match="discard"):
+        await manager.set_language("C++")
+
+    assert manager.solution_file.read_text() == "print('my unsaved edit')\n"  # untouched
+
+
+async def test_set_language_force_discards_unsaved_edits(tmp_path: Path) -> None:
+    manager, _ = await _imported(tmp_path, previous_code={
+            "Python3": "print('py')\n", "C++": "int main(){}\n"})
+    manager.solution_file.write_text("print('my unsaved edit')\n")
+
+    await manager.set_language("C++", force=True)
+
+    assert manager.solution_file.read_text() == "int main(){}\n"
+
+
+async def test_set_language_tolerates_a_trailing_newline_difference(tmp_path: Path) -> None:
+    """The server's stored code and a locally-written file routinely differ by one trailing
+       newline; that must not read as "you have unsaved changes" on an untouched directory."""
+    manager, _ = await _imported(tmp_path, previous_code={
+            "Python3": "print('py')", "C++": "int main(){}\n"})  # note: no trailing \n
+
+    await manager.set_language("C++")  # must not raise
+
+    assert manager.solution_file.read_text() == "int main(){}\n"
+
+
+async def test_set_language_treats_our_own_placeholder_as_safe_to_discard(tmp_path: Path) -> None:
+    """Importing with a language you've never used writes a placeholder that was never saved
+       server-side. Without this, such a directory could never switch away without --force."""
+    answer = CgTestSessionAnswer(code=None, programming_language_id=None)
+    session = _make_test_session(answer=answer)
+    client, _, _, _ = _make_fake_client(session, previous_code={"C++": "int main(){}\n"})
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe", language="Rust")  # placeholder, never saved
+
+    await manager.set_language("C++")  # must not raise
+
+    assert manager.solution_file.read_text() == "int main(){}\n"
+
+
+async def test_untouched_solution_is_recognized_even_if_placeholder_generation_changes(
+            tmp_path: Path,
+            monkeypatch: pytest.MonkeyPatch,
+        ) -> None:
+    """The reason the snapshot is *recorded* rather than regenerated: placeholder generation is not
+       guaranteed byte-identical forever (a template tweak, or an embedded timestamp, would be
+       enough). Regenerating and comparing would make an untouched working directory suddenly claim
+       it had unsaved changes and refuse to switch."""
+    answer = CgTestSessionAnswer(code=None, programming_language_id=None)
+    session = _make_test_session(answer=answer)
+    client, _, _, _ = _make_fake_client(session, previous_code={"C++": "int main(){}\n"})
+    manager = CgPuzzleManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("literary-alfabet-soupe", language="Rust")
+    untouched = manager.solution_file.read_text()
+
+    # Simulate a future release generating a different placeholder.
+    monkeypatch.setattr(
+            "codingame_tools.puzzle_manager.manager._placeholder_solution",
+            lambda language, title, pretty_id: "# COMPLETELY DIFFERENT TEMPLATE\n")
+
+    await manager.set_language("C++")  # must still not raise
+
+    assert manager.solution_file.read_text() == "int main(){}\n"
+    assert untouched != "# COMPLETELY DIFFERENT TEMPLATE\n"  # the templates really do differ
+
+
+async def test_set_language_refuses_when_the_snapshot_is_missing_and_server_differs(
+            tmp_path: Path,
+        ) -> None:
+    """Fail-safe: a directory with no snapshot (fresh clone, or imported by an older version) falls
+       back to the server comparison, which errs toward refusing rather than discarding silently."""
+    manager, _ = await _imported(tmp_path, previous_code={"C++": "int main(){}\n"})
+    manager.solution_snapshot_file.unlink()
+
+    with pytest.raises(CgPuzzleManagerError, match="discard"):
+        await manager.set_language("C++")
+
+
+async def test_writing_the_solution_always_records_a_snapshot(tmp_path: Path) -> None:
+    """Every writer of solution.src goes through one funnel, so the snapshot can't drift."""
+    manager, _ = await _imported(tmp_path, previous_code={"C++": "int main(){}\n"})
+
+    snapshot = manager.load_solution_snapshot()
+    assert snapshot is not None
+    assert snapshot.solution_language == "Python3"
+    assert snapshot.code == manager.solution_file.read_text()
+
+    await manager.set_language("C++")
+
+    snapshot = manager.load_solution_snapshot()
+    assert snapshot is not None
+    assert snapshot.solution_language == "C++"
+    assert snapshot.code == manager.solution_file.read_text()
+
+
+async def test_set_language_rejects_an_unknown_language(tmp_path: Path) -> None:
+    manager, _ = await _imported(tmp_path, previous_code={"Python3": "print('py')\n"})
+
+    with pytest.raises(CgPuzzleManagerError, match="isn't a language"):
+        await manager.set_language("Cobol")
+
+
+async def test_set_language_rejects_switching_to_the_current_language(tmp_path: Path) -> None:
+    manager, _ = await _imported(tmp_path, previous_code={"Python3": "print('py')\n"})
+
+    with pytest.raises(CgPuzzleManagerError, match="already using"):
+        await manager.set_language("Python3")

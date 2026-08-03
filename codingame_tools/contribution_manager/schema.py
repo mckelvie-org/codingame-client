@@ -28,6 +28,7 @@ from ..client.common.protocol.contribution import (
     CgContributionId,
     CgContributionModerator,
     CgPuzzleType,
+    CgSolutionLanguage,
 )
 from ..common.dataclass_wizard_x import Alias, CatchAll, CgEpochMillis, JSONWizardX
 
@@ -89,6 +90,38 @@ class CgContributionIdentity(JSONWizardX):
        when nothing else was already tracking this location); `False` -> external, at
        `<contribution_dir>/.meta/.contribution-git/` (chosen when this directory was already
        inside another git repository at creation time). See `manager`'s module docstring."""
+
+
+@dataclass
+class CgContributionSolutionSnapshot(JSONWizardX):
+    """`.meta/solution-snapshot.json`: the starter stub this client last generated into
+       `data/solution.src`, and the language it was generated for.
+
+       Records **only generated stubs**, never a real reference solution. Its one job is to answer
+       "is `solution.src` still just the placeholder we wrote, or does it hold actual work?"--which
+       is what `CgContributionManager.set_language` needs, because switching a contribution's
+       language is destructive in a way switching a puzzle's is not.
+
+       A contribution stores exactly one solution server-side, with no per-language history (unlike
+       a puzzle--see `CgTestSessionService.get_previous_code_by_language_id`). So there is nothing
+       to restore when switching, and the previous solution is gone for good once the next
+       `updateContribution` lands. "Matches what the server currently has" deliberately does *not*
+       count as safe here for that reason.
+
+       Deliberately not updated by git-driven writes (`merge`, `discard_local`, `rebase`): after any
+       of those, `solution.src` holds real content and no longer matches this snapshot, which is
+       exactly the answer wanted."""
+
+    solution_language: CgSolutionLanguage
+    """The language the stub was generated for. A snapshot whose language no longer matches
+       `CgContributionData.solution_language` describes a previous state and must not be trusted."""
+
+    code: str | None
+    """The exact stub text written, or `None` when the language had no stub to offer and
+       `solution.src` was removed entirely (see
+       `CgLanguage.build_contribution_create_stub_source`)."""
+
+    extra_data: CatchAll = field(default_factory=dict)
 
 
 @dataclass

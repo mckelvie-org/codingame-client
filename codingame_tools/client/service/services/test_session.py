@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 
 from json_data_types import JsonData
 
+from ...common.protocol.schema import CgSolutionLanguage
 from ...common.protocol.test_session import CgPlayRequest, CgPlayResult, CgSubmitRequest, CgTestSession
 from ..cg_service import CgService, CgServiceHelper
 
@@ -111,6 +112,48 @@ class CgTestSessionService(CgService):
         """
         result = await self.service_request("generateLspToken", [test_session_id])
         return cast(str, result)
+
+    async def get_previous_code_by_language_id(
+                self,
+                test_session_handle: str,
+                programming_language_id: CgSolutionLanguage,
+            ) -> str | None:
+        """Fetch the codingamer's most recently saved code for one language in a test session.
+
+           CodinGame keeps your latest source *per language* for a puzzle, not just one. A test
+           session hands back whichever language you last used; this reaches the others, and is how
+           the IDE's language dropdown restores your previous work when you switch.
+
+           Two semantics confirmed live (2026-08-02) against "Temperatures", both easy to assume
+           wrongly:
+
+           - **This is a pure read.** It does *not* make `programming_language_id` the session's
+             current language--after fetching Python3 from a session whose current language was
+             C++, the session still reported C++. The current language only moves when you actually
+             run a test against it or submit it (see `play`/`submit`).
+           - **A language you have never attempted returns `None`**, not a generated starter stub
+             (verified with Haskell). There is nothing saved to return, and this API does not
+             render a stub from the puzzle's `stub_generator`.
+
+        Args:
+            test_session_handle:     The puzzle's test session handle.
+            programming_language_id: CodinGame's language ID, e.g. "Python3", "C++" (see
+                                      `CgSolutionLanguage`).
+
+        Returns:
+            The saved source for that language, or `None` if the codingamer has never attempted
+            this puzzle in it.
+
+        Raises:
+            CgAuthenticationError:
+                If the session is not authenticated and cannot implicitly login.
+            CgClientHttpError:
+                If a transport error occurs, if the response content could not be decoded at all,
+                or if the status code is not 2xx.
+        """
+        result = await self.service_request(
+                "getPreviousCodeByLanguageId", [test_session_handle, programming_language_id])
+        return None if result is None else cast(str, result)
 
     async def submit(
                 self,

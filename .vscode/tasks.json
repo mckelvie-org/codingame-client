@@ -69,6 +69,26 @@
       ],
       "group": "test",
       "problemMatcher": []
+    },
+    {
+      "label": "CG puzzle: start debug session",
+      "type": "shell",
+      "command": "cg puzzle --puzzle-dir /Users/sam/projects/pypi/codingame-tools/puzzle debug start ${input:cg_puzzle_testCase}",
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "CG puzzle: stop debug session",
+      "type": "shell",
+      "command": "cg puzzle --puzzle-dir /Users/sam/projects/pypi/codingame-tools/puzzle debug stop",
+      "presentation": {
+        "reveal": "never",
+        "panel": "shared"
+      },
+      "problemMatcher": []
     }
   ]
 }

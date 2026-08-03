@@ -82,6 +82,7 @@ from ..language import (
     CgVsCodeRequest,
     find_workspace_root,
     get_language,
+    list_language_cg_ids,
     remove_containers_for_root,
     write_provisioning,
 )
@@ -100,6 +101,7 @@ from .schema import (
     CgPuzzleData,
     CgPuzzleIdentity,
     CgPuzzleServerData,
+    CgPuzzleSolutionSnapshot,
 )
 from .test_cases_dir import (
     TESTS_SUBDIR_NAME,
@@ -117,6 +119,7 @@ __all__ = [
     "TESTS_SUBDIR_NAME",
     "CgPuzzleManagerError",
     "CgPuzzleDiscardResult",
+    "CgPuzzleSetLanguageResult",
     "CgPuzzleLocalTestResult",
     "CgPuzzleLocalTestFailedError",
     "CgPuzzleRemoteTestResult",
@@ -126,8 +129,13 @@ __all__ = [
 
 _SUPPORTED_CONTRIBUTION_TYPE = "PUZZLE_INOUT"
 
+_DEFAULT_IMPORT_LANGUAGE: CgSolutionLanguage = "Python3"
+"""Language for a placeholder solution when a puzzle has never been attempted and the
+   caller didn't ask for a particular one."""
+
 _PUZZLE_DATA_FILE_NAME = "puzzle-data.json"
 _PUZZLE_SERVER_DATA_FILE_NAME = "puzzle-server-data.json"
+_SOLUTION_SNAPSHOT_FILE_NAME = "solution-snapshot.json"
 
 
 class CgPuzzleManagerError(Exception):
@@ -149,6 +157,27 @@ class CgPuzzleDiscardResult:
        language than `data/puzzle-data.json`'s previously-recorded `solution_language`--this is
        the fresh, now-authoritative value; `discard_local()` updates `puzzle-data.json` to
        match)."""
+
+
+@dataclass(frozen=True)
+class CgPuzzleSetLanguageResult:
+    """The outcome of `CgPuzzleManager.set_language()`."""
+
+    language: CgSolutionLanguage
+    """The language now recorded in `data/puzzle-data.json`."""
+
+    previous_language: CgSolutionLanguage
+    """What it was before."""
+
+    code: str
+    """The new contents of `data/solution.src`."""
+
+    from_server: bool
+    """True when `code` is the codingamer's real saved work for `language`, restored from the
+       server; False when they had never attempted this puzzle in that language and `code` is just
+       a generated placeholder. Worth surfacing--the difference is invisible in the file itself,
+       and "your old solution is back" and "here's an empty starting point" are very different
+       things to be told."""
 
 
 @dataclass(frozen=True)
@@ -294,6 +323,30 @@ def _refresh_solution_symlink(puzzle_dir: Path, solution_language: str | None) -
     (puzzle_dir / link_name).symlink_to(f"{DATA_SUBDIR_NAME}/{SOLUTION_FILE_NAME}")
 
 
+def _placeholder_solution(language: CgSolutionLanguage, title: str, puzzle_pretty_id: str) -> str:
+    """Starter `data/solution.src` for a puzzle the codingamer has never attempted in `language`.
+
+       Confirmed live (2026-08-02): an unconditional `# TODO: ...` was invalid syntax for any
+       language whose single-line comments aren't "#"-prefixed, so this leaves the file empty
+       rather than guessing when the comment syntax isn't known (`format_comment` returns None).
+       Shared by `import_()` and `set_language()` so the two can't drift.
+
+       Note CodinGame's own IDE would show a real generated stub here, rendered from the puzzle's
+       `stub_generator`; this client has no renderer for that."""
+    placeholder = get_language(language).format_comment(
+            f"TODO: solve {title!r} ({puzzle_pretty_id})")
+    return f"{placeholder}\n" if placeholder is not None else ""
+
+
+def _normalize_solution(code: str) -> str:
+    """Solution text for equality checks, ignoring trailing-newline differences.
+
+       The server's stored code and a locally-written file routinely differ by exactly one trailing
+       newline, which would otherwise read as "you have unsaved changes" on an untouched working
+       directory."""
+    return code.rstrip("\n")
+
+
 def _write_meta_gitignore(puzzle_dir: Path) -> None:
     """Write `puzzle_dir/.gitignore` containing `.meta/`, so `.meta/`'s contents (gitignored
        cache--see the module docstring) can never end up tracked by whatever project comes to
@@ -359,6 +412,11 @@ class CgPuzzleManager:
     @property
     def solution_file(self) -> Path:
         return self.data_dir / SOLUTION_FILE_NAME
+
+    @property
+    def solution_snapshot_file(self) -> Path:
+        """Path to `.meta/solution-snapshot.json`--see `CgPuzzleSolutionSnapshot`."""
+        return self.meta_dir / _SOLUTION_SNAPSHOT_FILE_NAME
 
     @property
     def puzzle_data_file(self) -> Path:
@@ -496,7 +554,7 @@ class CgPuzzleManager:
                 self,
                 puzzle_ref: str,
                 *,
-                language: CgSolutionLanguage = "Python3",
+                language: CgSolutionLanguage | None = None,
             ) -> CgPuzzleData:
         """Build this working directory from an existing puzzle: resolves `puzzle_ref` to a real
            pretty ID (see `_resolve_puzzle_ref`--a numeric ID, a pretty ID, an exact title match,
@@ -504,13 +562,21 @@ class CgPuzzleManager:
            codingamer's test session for it (`Puzzle/generateSessionFromPuzzlePrettyId`), then
            `TestSession/startTestSession` to fetch its current state.
 
-           Writes `data/solution.src` from the codingamer's existing saved answer if there is one
-           (`CgTestSessionQuestion.answer`--i.e. this puzzle has been attempted/submitted before),
-           in whatever language that answer was written in (`language` is ignored in that case).
-           Otherwise (never attempted before), writes a minimal placeholder comment in `language`
-           instead--this package does not interpret the puzzle's stub-generator DSL to produce a
-           real starter solution the way an IDE would; `.meta/stub_generator.cgstub` (see below)
-           is written as a read-only reference instead, for the solver to consult by hand.
+           What lands in `data/solution.src` depends on `language`:
+
+           - **`language=None`** (the default): the codingamer's existing saved answer, in whatever
+             language they last used (`CgTestSessionQuestion.answer`), or a placeholder in
+             `_DEFAULT_IMPORT_LANGUAGE` if this puzzle has never been attempted at all.
+           - **`language` given**: that language, seeded with the codingamer's most recent saved
+             code *for it* (CodinGame keeps one per language--see
+             `CgTestSessionService.get_previous_code_by_language_id`), or a placeholder if they've
+             never attempted this puzzle in it. Equivalent to importing and then calling
+             `set_language()`, and it shares that code path.
+
+           A placeholder is a bare comment: this package does not interpret the puzzle's
+           stub-generator DSL to produce a real starter solution the way an IDE would;
+           `.meta/stub_generator.cgstub` (see below) is written as a read-only reference instead,
+           for the solver to consult by hand.
 
            Also writes `.meta/statement.html`, `.meta/stub_generator.cgstub`, and `.meta/tests/`
            (each test case's downloaded input/output--see
@@ -522,9 +588,9 @@ class CgPuzzleManager:
         Args:
             puzzle_ref: A general puzzle reference--numeric ID, pretty ID, exact title, or
                         case-insensitive title (see `_resolve_puzzle_ref`).
-            language:   Language for the placeholder starter `solution.src`, if this puzzle has
-                        no existing answer to import instead. Defaults to "Python3". Ignored if
-                        an existing answer is found.
+            language:   Language to start in. Defaults to `None`, meaning "whichever language the
+                        codingamer last used for this puzzle". When given, switches to it and
+                        restores any code already saved in it--see above.
 
         Raises:
             CgPuzzleManagerError: if this directory already tracks a puzzle, if `puzzle_ref`
@@ -543,8 +609,14 @@ class CgPuzzleManager:
                 puzzle_pretty_id)
         session = await self.client.services.test_session.start_test_session(test_session_handle)
         question = session.current_question.question
-        contribution_type = question.contribution.contribution_type
-        if contribution_type != _SUPPORTED_CONTRIBUTION_TYPE:
+        # `contribution` is absent for a puzzle CodinGame itself provides (confirmed live
+        # 2026-08-02 with "Temperatures"), since an official puzzle was never a community
+        # contribution--so its contribution type is simply unknowable. Treat that as a standard
+        # in/out puzzle rather than refusing: this check exists to reject *known* unsupported kinds,
+        # and failing closed here would block importing every official puzzle on the site.
+        contribution_type = (
+                question.contribution.contribution_type if question.contribution is not None else None)
+        if contribution_type is not None and contribution_type != _SUPPORTED_CONTRIBUTION_TYPE:
             raise CgPuzzleManagerError(
                     f"Puzzle {puzzle_pretty_id!r} is a {contribution_type!r} puzzle--only "
                     f"{_SUPPORTED_CONTRIBUTION_TYPE!r} puzzles are supported so far."
@@ -554,23 +626,27 @@ class CgPuzzleManager:
         # `answer` itself can be non-None (an empty placeholder object) even with no solution
         # ever submitted--`code`/`programming_language_id` are the actual "has a real answer"
         # signal; see CgTestSessionAnswer's docstring.
-        if answer is not None and answer.code is not None and answer.programming_language_id is not None:
+        if language is not None:
+            # An explicit language means "start in this one", not merely "use it if there's nothing
+            # saved"--so fetch the codingamer's own most recent code for it, exactly as
+            # `set_language()` would. Without this, asking for a language you'd previously written
+            # a solution in would silently discard that solution in favor of a placeholder.
+            solution_language = language
+            saved = await self.client.services.test_session.get_previous_code_by_language_id(
+                    test_session_handle, language)
+            solution_code = saved if saved is not None else _placeholder_solution(
+                    language, question.title, puzzle_pretty_id)
+        elif answer is not None and answer.code is not None and answer.programming_language_id is not None:
             solution_language = answer.programming_language_id
             solution_code = answer.code
         else:
-            solution_language = language
-            # Confirmed live (2026-08-02): the previous unconditional `# TODO: ...` placeholder
-            # was invalid syntax for any language whose single-line comments aren't "#"-prefixed.
-            # format_comment() returns None for a language whose comment syntax isn't known
-            # (including every language but Python3 today)--an empty file in that case, rather
-            # than guessing wrong.
-            placeholder = get_language(solution_language).format_comment(
-                    f"TODO: solve {question.title!r} ({puzzle_pretty_id})")
-            solution_code = f"{placeholder}\n" if placeholder is not None else ""
+            solution_language = _DEFAULT_IMPORT_LANGUAGE
+            solution_code = _placeholder_solution(
+                    solution_language, question.title, puzzle_pretty_id)
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.meta_dir.mkdir(parents=True, exist_ok=True)
-        self.solution_file.write_text(solution_code, encoding="utf-8")
+        self._write_solution(solution_code, solution_language)
         (self.meta_dir / STATEMENT_FILE_NAME).write_text(question.statement, encoding="utf-8")
         (self.meta_dir / STUB_GENERATOR_FILE_NAME).write_text(f"{question.stub_generator}\n", encoding="utf-8")
         await download_test_cases(self.client, question.test_cases, self.tests_dir)
@@ -659,7 +735,12 @@ class CgPuzzleManager:
         server_data = CgPuzzleServerData(
                 test_session_handle=test_session_handle, title=progress.title,
                 puzzle_pretty_id=progress.pretty_id,
-                puzzle_type=question.contribution.contribution_type,
+                # None for an official CodinGame puzzle, which has no contribution to read a
+                # type from--see import_(). CgPuzzleServerData.puzzle_type is already
+                # optional, so this stores cleanly.
+                puzzle_type=(
+                        question.contribution.contribution_type
+                        if question.contribution is not None else None),
                 difficulty=session.puzzle.level,
             )
         server_data.save(self.server_data_file)
@@ -699,6 +780,126 @@ class CgPuzzleManager:
         server_lines = current[0].splitlines(keepends=True) if current is not None else []
         return "".join(difflib.unified_diff(server_lines, local_lines, fromfile="server", tofile="local"))
 
+    def _write_solution(self, code: str, language: CgSolutionLanguage) -> None:
+        """Write `data/solution.src` and record exactly what was written.
+
+           Every writer of `solution.src` goes through here so the snapshot can never drift from
+           the file--that snapshot is what lets `set_language()` tell "the user edited this" from
+           "this is still what we generated", without re-deriving anything."""
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.solution_file.write_text(code, encoding="utf-8")
+        self.meta_dir.mkdir(parents=True, exist_ok=True)
+        CgPuzzleSolutionSnapshot(solution_language=language, code=code).save(
+                self.solution_snapshot_file)
+
+    def load_solution_snapshot(self) -> CgPuzzleSolutionSnapshot | None:
+        """What this client last wrote to `data/solution.src`, or `None` if unknown (never
+           written, or `.meta/` predates the snapshot)."""
+        if not self.solution_snapshot_file.is_file():
+            return None
+        return CgPuzzleSolutionSnapshot.load(self.solution_snapshot_file)
+
+    async def _solution_is_safe_to_replace(
+                self, server_data: CgPuzzleServerData, language: CgSolutionLanguage,
+            ) -> bool:
+        """Whether `data/solution.src` can be overwritten without losing anything.
+
+           Safe in exactly two cases:
+
+           - It still matches what this client last wrote (`.meta/solution-snapshot.json`), so the
+             user never touched it. Checked first, and needs no network. Deliberately a recorded
+             snapshot rather than a regenerated one: re-deriving a placeholder and comparing would
+             break silently the moment generation stopped being byte-identical across releases, and
+             an untouched directory would start claiming unsaved changes.
+           - It matches the server's saved code for `language`--the user did edit it, but has since
+             submitted those edits, so nothing local is unique.
+
+           A missing snapshot falls through to the server comparison, which errs toward refusing.
+        """
+        local = _normalize_solution(
+                self.solution_file.read_text(encoding="utf-8") if self.solution_file.is_file() else "")
+        snapshot = self.load_solution_snapshot()
+        if snapshot is not None and snapshot.solution_language == language \
+                and _normalize_solution(snapshot.code) == local:
+            return True
+        saved = await self.client.services.test_session.get_previous_code_by_language_id(
+                server_data.test_session_handle, language)
+        return saved is not None and _normalize_solution(saved) == local
+
+    async def set_language(
+                self,
+                language: CgSolutionLanguage,
+                *,
+                force: bool = False,
+            ) -> CgPuzzleSetLanguageResult:
+        """Switch this working directory to a different language, restoring the codingamer's own
+           most recent code for it.
+
+           CodinGame keeps your latest source *per language* for a puzzle, so switching is not
+           "throw away what you have and start over"--any solution you'd previously written in the
+           target language comes back (see
+           `CgTestSessionService.get_previous_code_by_language_id`). Only a language you have never
+           attempted gets a placeholder.
+
+           **This changes local state only.** The server's notion of your current language is not
+           moved by fetching code (confirmed live--it's a pure read); it follows once you actually
+           run a server-side test or submit in the new language.
+
+           Refuses when `data/solution.src` holds work the server doesn't have, since switching
+           overwrites it. Local edits are considered safe to discard when they match either the
+           server's saved code for the current language *or* the placeholder this package would
+           have generated for it--the latter matters because importing with an explicit language
+           you've never used writes a placeholder that was never saved server-side, which would
+           otherwise leave the working directory permanently unable to switch away.
+
+        Args:
+            language: CodinGame language ID to switch to, e.g. "C++" (see `CgSolutionLanguage`).
+            force:    Switch even when local edits would be lost.
+
+        Returns:
+            A `CgPuzzleSetLanguageResult`--check `from_server` to tell "your old solution is back"
+            from "here's an empty starting point".
+
+        Raises:
+            FileNotFoundError: if this working directory has never been imported.
+            CgPuzzleManagerError: if `language` isn't one this client knows, if it's already the
+                                   current language, or if local edits would be lost and `force`
+                                   is False.
+        """
+        _, server_data, puzzle_data = self._require_state()
+        previous_language = puzzle_data.solution_language
+        if language not in list_language_cg_ids():
+            raise CgPuzzleManagerError(
+                    f"{language!r} isn't a language this client knows. Known languages: "
+                    f"{', '.join(list_language_cg_ids())}."
+                )
+        if language == previous_language:
+            raise CgPuzzleManagerError(
+                    f"{self.puzzle_dir} is already using {language!r}--nothing to switch."
+                )
+
+        test_session = self.client.services.test_session
+        if not force and not await self._solution_is_safe_to_replace(server_data, previous_language):
+            raise CgPuzzleManagerError(
+                    f"{self.solution_file} has {previous_language!r} changes the server doesn't "
+                    "have--switching would discard them. Submit them first (`cg puzzle submit`), "
+                    "or pass --force to discard them."
+                )
+
+        saved_new = await test_session.get_previous_code_by_language_id(
+                server_data.test_session_handle, language)
+        from_server = saved_new is not None
+        code = saved_new if saved_new is not None else _placeholder_solution(
+                language, server_data.title or "", server_data.puzzle_pretty_id or "")
+
+        self._write_solution(code, language)
+        dataclasses.replace(puzzle_data, solution_language=language).save(self.puzzle_data_file)
+        _refresh_solution_symlink(self.puzzle_dir, language)
+        return CgPuzzleSetLanguageResult(
+                language=language, previous_language=previous_language,
+                code=code, from_server=from_server,
+            )
+
     async def discard_local(self) -> CgPuzzleDiscardResult:
         """Discard local edits: overwrite `data/solution.src` with the server's current
            last-submitted answer for this puzzle (and update `data/puzzle-data.json`'s
@@ -720,8 +921,7 @@ class CgPuzzleManager:
                     "submitted)--nothing to discard local edits to."
                 )
         code, solution_language = current
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.solution_file.write_text(code, encoding="utf-8")
+        self._write_solution(code, solution_language)
         if solution_language != puzzle_data.solution_language:
             dataclasses.replace(puzzle_data, solution_language=solution_language).save(self.puzzle_data_file)
         _refresh_solution_symlink(self.puzzle_dir, solution_language)

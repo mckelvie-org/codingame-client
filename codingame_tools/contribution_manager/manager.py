@@ -75,6 +75,7 @@ from ..language import (
     CgVsCodeRequest,
     find_workspace_root,
     get_language,
+    list_language_cg_ids,
     remove_containers_for_root,
     write_provisioning,
 )
@@ -99,6 +100,7 @@ from .layout import (
     SERVER_BRANCH_NAME,
     SERVER_TAG_PREFIX,
     SOLUTION_FILE_NAME,
+    SOLUTION_SNAPSHOT_FILE_NAME,
     STATEMENT_FILE_NAME,
     STUB_GENERATOR_FILE_NAME,
     TRAILER_CONTRIBUTION_ID,
@@ -113,6 +115,7 @@ from .schema import (
     CONTRIBUTION_IDENTITY_FILE_NAME,
     CONTRIBUTION_SCHEMA_VERSION,
     CgContributionIdentity,
+    CgContributionSolutionSnapshot,
     CgContributionStatusCache,
     CgContributionView,
 )
@@ -387,6 +390,27 @@ class CgContributionLocalTestResult:
        unexpected exception for this one test case--see `cg contribution play`."""
 
 
+@dataclasses.dataclass(frozen=True)
+class CgContributionSetLanguageResult:
+    """The outcome of `CgContributionManager.set_language()`."""
+
+    language: CgSolutionLanguage
+    """The language now recorded in `data/contribution-data.json`."""
+
+    previous_language: CgSolutionLanguage | None
+    """What it was before (`None` if the contribution had no language set yet)."""
+
+    wrote_stub: bool
+    """True when a starter `data/solution.src` was written for the new language; False when that
+       language has no stub to offer and `solution.src` was removed instead, leaving the
+       `solution.<ext>` symlink dangling until you write it yourself (the same thing `create()`
+       does for such a language).
+
+       Removal is correct rather than a shortfall: a null `solutionSource` makes
+       `updateContribution` skip solution validation, whereas any non-null one must pass every
+       test case--so a placeholder would block `push()`."""
+
+
 class CgContributionLocalTestFailedError(CgContributionManagerError):
     """Raised by `CgContributionManager.run_local_test` callers (not by `run_local_test` itself,
        which reports one test at a time) to summarize a batch where at least one test case failed.
@@ -417,6 +441,13 @@ def _ensure_trailing_newline(text: str) -> str:
     """See `test_cases_dir._ensure_trailing_newline`--same rationale, used here for the other
        sidecar text files (statement.cgmd, solution.src, etc.)."""
     return text if text.endswith("\n") else text + "\n"
+
+
+def _normalize_optional_solution(code: str | None) -> str | None:
+    """Solution text for equality checks, ignoring trailing-newline differences (`_write_sidecar`
+       appends one, the generated stub may not have had it). `None`--meaning "no solution file at
+       all"--stays distinct from an empty file."""
+    return None if code is None else code.rstrip("\n")
 
 
 def _write_sidecar(path: Path, content: str | None) -> None:
@@ -1087,6 +1118,9 @@ class CgContributionManager:
         if not git_dir_in_data:
             _write_meta_gitignore(self.contribution_dir)
         self._save_identity(None, git_dir_in_data=git_dir_in_data)
+        # Record the generated stub, so `set_language()` can tell a brand-new contribution (nothing
+        # to lose) from one whose solution.src holds real work.
+        self._write_solution_snapshot(language, solution)
         _refresh_solution_symlink(self.contribution_dir, data.solution_language)
 
         init_repo(git_dir, self.data_dir)
@@ -1832,6 +1866,109 @@ class CgContributionManager:
                 solution_link=link if link is not None and link.exists() else None,
                 meta_dir=self.meta_dir,
                 toolchain_dir=self.toolchain_dir,
+            )
+
+    @property
+    def solution_snapshot_file(self) -> Path:
+        """Path to `.meta/solution-snapshot.json`--see `CgContributionSolutionSnapshot`."""
+        return self.meta_dir / SOLUTION_SNAPSHOT_FILE_NAME
+
+    def load_solution_snapshot(self) -> CgContributionSolutionSnapshot | None:
+        """The starter stub this client last generated into `data/solution.src`, or `None` if there
+           isn't one (never generated, or `.meta/` predates the snapshot)."""
+        if not self.solution_snapshot_file.is_file():
+            return None
+        return CgContributionSolutionSnapshot.load(self.solution_snapshot_file)
+
+    def _write_solution_snapshot(self, language: CgSolutionLanguage, code: str | None) -> None:
+        """Record a freshly generated starter stub. Called only where this client *generates* a
+           solution (`create()`, `set_language()`)--never for content that came from the server or
+           from git, since the point of the snapshot is to distinguish "still just our placeholder"
+           from "holds real work"."""
+        self.meta_dir.mkdir(parents=True, exist_ok=True)
+        CgContributionSolutionSnapshot(solution_language=language, code=code).save(
+                self.solution_snapshot_file)
+
+    def _solution_is_generated_stub(self, language: CgSolutionLanguage | None) -> bool:
+        """Whether `data/solution.src` is still exactly the stub this client generated for
+           `language`--i.e. there is no real reference solution to lose."""
+        snapshot = self.load_solution_snapshot()
+        if snapshot is None or language is None or snapshot.solution_language != language:
+            return False
+        current = self.solution_file.read_text(encoding="utf-8") \
+            if self.solution_file.is_file() else None
+        return _normalize_optional_solution(current) == _normalize_optional_solution(snapshot.code)
+
+    async def set_language(
+                self,
+                language: CgSolutionLanguage,
+                *,
+                force: bool = False,
+            ) -> CgContributionSetLanguageResult:
+        """Switch this contribution's reference-solution language, writing a fresh starter stub.
+
+           **This is destructive in a way the puzzle equivalent is not, and deliberately harder to
+           do by accident.** A contribution stores exactly one solution server-side, with no
+           per-language history--unlike a puzzle, where CodinGame keeps your latest source for each
+           language and switching is reversible (see
+           `CgTestSessionService.get_previous_code_by_language_id`). Here there is nothing to
+           restore and nothing to switch back to: the existing solution is replaced by a stub, and
+           the last durable copy is overwritten as soon as the next `push()` lands.
+
+           So the only non-destructive case is "`data/solution.src` is still exactly the stub this
+           client generated" (see `_solution_is_generated_stub`). Notably, *matching what the server
+           currently has* does **not** count as safe, unlike the puzzle version--the server copy is
+           precisely what the next push destroys.
+
+           Purely local: no network call, because there is no per-language code to fetch.
+
+        Args:
+            language: CodinGame language ID to switch to, e.g. "C++" (see `CgSolutionLanguage`).
+            force:    Switch even though a real reference solution would be discarded.
+
+        Returns:
+            A `CgContributionSetLanguageResult`--`wrote_stub` is False when the new language has no
+            stub to offer and `solution.src` was removed instead.
+
+        Raises:
+            FileNotFoundError: if this working directory hasn't been imported/initialized.
+            CgContributionManagerError: if `language` isn't one this client knows, if it's already
+                                         the current language, or if a real solution would be lost
+                                         and `force` is False.
+        """
+        view = self.load()
+        previous_language = view.data.solution_language
+        if language not in list_language_cg_ids():
+            raise CgContributionManagerError(
+                    f"{language!r} isn't a language this client knows. Known languages: "
+                    f"{', '.join(list_language_cg_ids())}."
+                )
+        if language == previous_language:
+            raise CgContributionManagerError(
+                    f"{self.contribution_dir} is already using {language!r}--nothing to switch."
+                )
+        if not force and not self._solution_is_generated_stub(previous_language):
+            raise CgContributionManagerError(
+                    f"{self.solution_file} holds a real {previous_language!r} reference solution. "
+                    "A contribution stores only ONE solution, with no per-language history, so "
+                    "switching replaces it with a starter stub and the next `cg contribution push` "
+                    "overwrites the last durable copy--there is nothing to switch back to. Save it "
+                    "somewhere outside this working directory first, then pass --force."
+                )
+
+        # A language with no stub yields None, which _write_sidecar turns into "remove
+        # solution.src". That is deliberate, not a shortfall: `updateContribution` skips solution
+        # validation entirely when solutionSource is null, but validates a non-null one against
+        # every test case. Writing a placeholder here would fail that validation and block `push()`
+        # -- see CgLanguage.build_contribution_create_stub_source.
+        stub = await get_language(language).build_contribution_create_stub_source()
+        _write_sidecar(self.solution_file, stub)
+        self._write_solution_snapshot(language, stub)
+        self.save(dataclasses.replace(
+                view, data=dataclasses.replace(view.data, solution_language=language)))
+        _refresh_solution_symlink(self.contribution_dir, language)
+        return CgContributionSetLanguageResult(
+                language=language, previous_language=previous_language, wrote_stub=stub is not None,
             )
 
     async def provision_vscode(
