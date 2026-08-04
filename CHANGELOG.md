@@ -2,6 +2,28 @@
 
 ## {{UNRELEASED}}
 
+- **Removed the git-URL dependency on a private dataclass-wizard fork; the package is publishable
+  again.** PyPI rejects any distribution whose metadata contains a direct URL dependency, so the
+  `git+https://` pin could never be released — and publishing the fork under its own name would have
+  meant owning a package on PyPI forever, since names can't be reclaimed and a yank doesn't help
+  anyone who already pinned it.
+
+  The fork turned out to be **two one-line changes**: dataclass-wizard 1.0.0's load/dump codegen
+  does `field_to_aliases.pop(CATCH_ALL, None)` on a dict that *is* its shared per-class cache, so
+  the first codegen pass permanently strips the marker and the class silently loses every unknown
+  field in any later context (nested rather than top-level, say). `common/dataclass_wizard_x.py`
+  now works around that against stock `dataclass-wizard==1.0.0` from PyPI, by installing a
+  `pop`-resistant mapping under **our own classes' cache keys only**.
+
+  Deliberately scoped rather than monkeypatching the library's functions, which would have been
+  shorter and fixed the bug process-wide: this is a library, and silently altering dataclass-wizard's
+  behaviour for every other package in an importing application isn't ours to decide.
+
+  The pin is exact because the workaround uses private API. `tests/test_dataclass_wizard_catch_all.py`
+  describes the *behaviour* rather than the workaround, so it keeps passing unchanged once upstream
+  ships a fix — which is what will tell you the workaround can be deleted. Removal instructions are
+  in the module docstring.
+
 - **Documentation.** Everything beyond `README.md`/`CONTRIBUTING.md` now lives under `doc/`: an
   overview, concepts (authentication, profiles, working directories, languages), workflow guides for
   puzzles/contributions/debugging, the programmatic client and managers, and design notes recording

@@ -29,7 +29,12 @@ classifiers = [
 ]
 dependencies = [
       "json-data-types>=0.2.0",
-      "dataclass-wizard @ git+https://github.com/mckelvie-org/dataclass-wizard.git@fix/catchall-reuse-across-contexts",
+      # Pinned exactly, not ranged: codingame_tools/common/dataclass_wizard_x.py works around an
+      # upstream CatchAll bug in 1.0.0 using dataclass_wizard's private API, so an upgrade can break
+      # it. See that module's docstring, including how to remove the workaround once upstream ships
+      # a fix. (Previously a git+https:// pin to our own fork -- PyPI rejects direct URL
+      # dependencies, so that could never be published.)
+      "dataclass-wizard==1.0.0",
       "playwright>=1.61.0",
       "private-files>=3.0.0",
       "aiohttp>=3.14.1",

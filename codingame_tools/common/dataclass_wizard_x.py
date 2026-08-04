@@ -1,11 +1,37 @@
-"""Refinement of dataclass_wizard.JSONWizard to use stronger JSONDict type hints"""
+"""Refinement of dataclass_wizard.JSONWizard to use stronger JSONDict type hints.
+
+   ---------------------------------------------------------------------------------------------
+   WARNING: this module contains a workaround that reaches into dataclass_wizard's PRIVATE API.
+   ---------------------------------------------------------------------------------------------
+
+   See `_CatchAllPreservingDict` and `JSONWizardX._apply_catch_all_workaround` below. In short:
+   dataclass_wizard 1.0.0 destroys its own per-class `CatchAll` marker the first time it generates
+   load/dump code for a class, so the *second* context that class appears in silently loses every
+   unknown field -- and since this client's whole tolerance for an undocumented, changing API rests
+   on `CatchAll`, that is not survivable.
+
+   TODO: DELETE THE WORKAROUND once dataclass_wizard ships the fix.
+     - Upstream bug: the codegen does `field_to_aliases.pop(CATCH_ALL, None)` on a dict that *is*
+       the shared per-class cache (`_loaders.py` and `_dumpers.py`); it should use `.get()`.
+     - Reported upstream, with a pull request, against 1.0.0. No response so far.
+     - When a release containing the fix appears: bump the pin in `pyproject.toml`, delete
+       `_CatchAllPreservingDict`, `_apply_catch_all_workaround` and its three call sites, and drop
+       the private imports below. `tests/test_dataclass_wizard_catch_all.py` must keep passing
+       untouched--it tests the *behaviour*, not the workaround, so it is exactly the check that
+       tells you the fix really landed.
+
+   The dependency is pinned to `dataclass-wizard==1.0.0` **because** of this. Private API means an
+   upgrade can break the workaround, so the pin is deliberate, not laziness--do not relax it to a
+   range without re-running the catch-all tests.
+"""
 
 import json
 import logging
 from collections.abc import Collection
+from dataclasses import is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, ClassVar, Protocol, cast
 
 import yaml
 from dataclass_wizard import JSONWizard
@@ -13,6 +39,25 @@ from dataclass_wizard.models import Alias, CatchAll
 from json_data_types import JsonDict, validate_json_dict
 
 from .typedefs import Self
+
+# --- PRIVATE dataclass_wizard API, used only by the CatchAll workaround --------------------------
+# Imported explicitly (rather than defensively) so that an upgrade which moves or renames any of
+# them fails loudly at import time, naming this module--rather than leaving the workaround silently
+# inert and this client silently discarding every unknown field the server sends.
+try:
+    from dataclass_wizard._class_helper import (  # noqa: PLC2701
+        DATACLASS_FIELD_TO_ALIAS_FOR_DUMP,
+        DATACLASS_FIELD_TO_ALIAS_FOR_LOAD,
+        setup_config_for_cls,
+    )
+    from dataclass_wizard.constants import CATCH_ALL  # noqa: PLC2701
+except ImportError as e:  # pragma: no cover - only reachable on an unsupported dataclass_wizard
+    raise ImportError(
+        f"{__name__} depends on dataclass_wizard internals that this version doesn't provide "
+        f"({e}). This client pins dataclass-wizard==1.0.0 to work around an upstream CatchAll bug "
+        "(see this module's docstring). If you have upgraded deliberately, check whether the "
+        "upstream fix has landed--if so, the workaround can be deleted entirely."
+    ) from e
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +70,38 @@ __all__ = [
     "DEFAULT_YAML_ENCODER",
     "Alias", "CgEpochMillis",
 ]
+
+
+class _CatchAllPreservingDict(dict[Any, Any]):
+    """WORKAROUND (see this module's docstring) -- a per-class alias mapping whose `CatchAll` marker
+       survives being popped.
+
+       dataclass_wizard 1.0.0's load/dump codegen starts with
+
+           catch_all_field = field_to_aliases.pop(CATCH_ALL, None)
+
+       believing `field_to_aliases` is its own scratch mapping. It isn't: it's a direct reference
+       into a module-level, per-class cache. So the pop permanently strips the marker, and the next
+       time code is generated for that same class in a different structural context (nested inside
+       another dataclass rather than at the top level, say) the class no longer looks like it has a
+       catch-all field at all. Unknown keys are then dropped, or the load blows up with an obscure
+       `'_UnsetType' object is not callable`.
+
+       Overriding `pop` for that one key keeps the caller's behaviour *within* a codegen pass
+       identical--it still receives the value it asked for--while leaving the cached entry intact
+       for the next pass.
+
+       **Scoped deliberately.** The obvious alternative is to monkeypatch
+       `_loaders.resolve_dataclass_field_to_alias_for_load`/`_dumpers....for_dump` to return copies,
+       which is shorter and fixes the bug for the whole process. This client is a *library*: doing
+       that would silently change dataclass_wizard's behaviour for every other package in whatever
+       application imports us, which is not ours to decide. Installing this dict only under our own
+       classes' cache keys leaves every other class in the process exactly as upstream ships it."""
+
+    def pop(self, key: Any, default: Any = None) -> Any:
+        if key == CATCH_ALL:
+            return self.get(key, default)
+        return super().pop(key, default)
 
 
 class CgEpochMillis(datetime):
@@ -115,6 +192,42 @@ class JSONWizardX(JSONWizard):
         type_to_load_hook = {CgEpochMillis: ("runtime", _load_cg_epoch_millis)}
         type_to_dump_hook = {CgEpochMillis: ("runtime", _dump_cg_epoch_millis)}
 
+    _catch_all_workaround_pending: ClassVar[list[type["JSONWizardX"]]] = []
+    """Subclasses registered but not yet protected--see `_apply_catch_all_workaround`."""
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Register the subclass for the CatchAll workaround (see this module's docstring).
+
+           Registration only--the protection itself can't happen here. `__init_subclass__` runs
+           during class *creation*, which is before `@dataclass` has been applied to the class body,
+           so there are no fields yet for dataclass_wizard to build an alias mapping from."""
+        super().__init_subclass__(**kwargs)
+        JSONWizardX._catch_all_workaround_pending.append(cls)
+
+    @staticmethod
+    def _apply_catch_all_workaround() -> None:
+        """WORKAROUND (see this module's docstring). Swap every registered subclass's cached alias
+           mapping for a `_CatchAllPreservingDict`, so the codegen can't destroy its own marker.
+
+           Applied to *every* registered class rather than just the one being loaded, and applied
+           before any codegen runs. That's the whole point: the bug bites a class the second time
+           code is generated for it, which for a nested schema is typically triggered by loading its
+           *parent*. Protecting only the class you were asked for would leave every nested one
+           exposed.
+
+           Amortized to nothing--the pending list is drained on the first call and refilled only
+           when a new subclass is defined."""
+        pending = JSONWizardX._catch_all_workaround_pending
+        while pending:
+            cls = pending.pop()
+            if not is_dataclass(cls):
+                continue  # not a usable schema class; nothing to protect
+            setup_config_for_cls(cls)
+            for cache in (DATACLASS_FIELD_TO_ALIAS_FOR_LOAD, DATACLASS_FIELD_TO_ALIAS_FOR_DUMP):
+                entry = cache.get(cls)
+                if entry is not None and not isinstance(entry, _CatchAllPreservingDict):
+                    cache[cls] = _CatchAllPreservingDict(entry)
+
     def __post_init__(self) -> None:
         """Logs a debug message if the instance has a non-empty `extra_data` (CatchAll) field--i.e.
            the server response included fields not recognized by this dataclass's schema. Runs on
@@ -144,6 +257,7 @@ class JSONWizardX(JSONWizard):
            not when it's explicitly present as None--so the keyword is only forwarded here when
            the caller actually wants to override the Meta-configured default.
         """
+        self._apply_catch_all_workaround()  # WORKAROUND -- see this module's docstring
         kwargs: dict[str, Any] = {}
         if skip_defaults is not None:
             kwargs["skip_defaults"] = skip_defaults
@@ -152,11 +266,13 @@ class JSONWizardX(JSONWizard):
     @classmethod
     def from_dict(cls, d: JsonDict) -> Self:
         """Create a dataclass instance from a JSON-compatible dictionary."""
+        cls._apply_catch_all_workaround()  # WORKAROUND -- see this module's docstring
         return super().from_dict(d)
 
     @classmethod
     def from_list(cls, list_of_dict: list[JsonDict]) -> list[Self]:
         """Create a list of dataclass instances from a JSON-compatible list of dictionaries."""
+        cls._apply_catch_all_workaround()  # WORKAROUND -- see this module's docstring
         return super().from_list(list_of_dict)
 
     @classmethod
