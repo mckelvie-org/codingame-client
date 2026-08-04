@@ -60,14 +60,18 @@ def find_contribution_dir(
 
         1. `explicit` (typically the resolved value of a `--contribution-dir` CLI flag), if given.
         2. The `CG_CONTRIBUTION_DIR` environment variable, if set.
-        3. `settings.contribution_dir` (see `CgSettings.contribution_dir`), if given and set.
-        4. `start_dir` (or the current directory, if not given), if it contains a
+        3. `settings.current_contribution_dir`--the *active* working directory, set by
+           `cg contribution import`/`create` and `cg contribution activate`. Outranks the configured default
+           below so that creating a working directory somewhere isn't silently overridden by a
+           standing `contribution_dir` preference pointing elsewhere.
+        4. `settings.contribution_dir` (see `CgSettings.contribution_dir`), if given and set.
+        5. `start_dir` (or the current directory, if not given), if it contains a
            `contribution.json`.
-        5. `start_dir / "contribution"`, if it contains a `contribution.json`.
+        6. `start_dir / "contribution"`, if it contains a `contribution.json`.
 
-       Steps 1-3 are taken at face value--the resolved directory need not contain a
+       Steps 1-4 are taken at face value--the resolved directory need not contain a
        `contribution.json` yet (e.g. a fresh, empty target directory for `cg contribution
-       import`). Steps 4-5 are implicit inference and are deliberately conservative: they only
+       import`). Steps 5-6 are implicit inference and are deliberately conservative: they only
        match if a `contribution.json` is actually already there.
 
     Returns:
@@ -79,6 +83,8 @@ def find_contribution_dir(
     env_value = os.environ.get(CG_CONTRIBUTION_DIR_ENV_VAR)
     if env_value:
         return Path(env_value).expanduser().resolve()
+    if settings is not None and settings.current_contribution_dir is not None:
+        return settings.current_contribution_dir
     if settings is not None and settings.contribution_dir is not None:
         return settings.contribution_dir
     start = Path(start_dir).resolve() if start_dir is not None else Path.cwd()

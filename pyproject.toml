@@ -58,6 +58,10 @@ cg = "codingame_tools.cli.main:main"
 
 [dependency-groups]
 dev = [
+    # Only for scripts/gen_cover_placeholder.py, which regenerates a *committed* asset. Never
+    # imported at runtime -- see that script's docstring for why the image is baked rather than
+    # rendered on demand.
+    "pillow>=10.1.0",
     "mypy>=1.11.0",
     "pytest>=8.3.0",
     "ruff>=0.6.0",
@@ -116,6 +120,7 @@ includes = ["codingame_tools"]
 [tool.pdm.scripts]
 test = "pytest"
 gen-docs = "python scripts/gen_cli_docs.py"
+gen-cover = "python scripts/gen_cover_placeholder.py"
 test-live-unauthenticated = "pytest -m live_unauthenticated"
 test-live = "pytest -m live"
 lint = "ruff check ."

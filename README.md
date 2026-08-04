@@ -52,28 +52,53 @@ own editor, under version control — instead of in the browser IDE.
 pip install codingame-tools
 ```
 
-## Quick start
+## Quick start -- solve a puzzle
 
 ```bash
 cg login                          # opens a browser, saves credentials
 cg whoami
 
-cg puzzle import temperatures     # pull a puzzle into ./puzzle
-$EDITOR puzzle/solution.py
-cg puzzle play                    # run locally against downloaded test cases -- no network
+# pull a puzzle into ./puzzle and make it the working puzzle
+cg puzzle import --language Python3 ./puzzle temperatures
+
+# implement a solution
+$EDITOR "$(cg puzzle where)/solution.py"
+
+cg puzzle play                    # Test locally against downloaded test cases -- no network
 cg puzzle submit                  # graded submission
 ```
 
-Authoring a contribution:
+## Quick start -- author a contribution
 
 ```bash
-cg contribution create ./my-puzzle "My Puzzle"   # purely local; nothing exists server-side yet
-$EDITOR my-puzzle/data/statement.cgmd
-cg contribution play                             # validate locally
-cg contribution push                             # now it exists
+# Create a new contribution and make it the working contribution
+# (purely local; nothing exists server-side until pushed)
+cg contribution create -t PUZZLE_INOUT --language Python3 ./contribution "My Puzzle"
+cd "$(cg contribution where)"
+
+$EDITOR data/statement.cgmd
+$EDITOR data/input_description.cgmd
+$EDITOR data/output_description.cgmd
+$EDITOR data/constraints.cgmd
+$EDITOR data/stub_generator.cgstub
+cp $COVER_ART_1920x1080_PNG data/cover.png
+
+# Create a reference solution
+$EDITOR solution.py
+
+# Create a suite of test cases (both local and validator)
+$EDITOR data/tests/**/*
+
+# Validate the reference solution locally against all test cases
+cg contribution play
+
+# Push the contribution to the server
+cg contribution push
+
+# now it exists on server
 ```
 
-Or use the client directly:
+## Quick start -- use the async client directly:
 
 ```python
 import asyncio
@@ -93,10 +118,13 @@ asyncio.run(main())
   library, and a [command reference](doc/cli/reference/index.md) generated from the CLI itself.
 - **[Documentation for the latest release](https://github.com/mckelvie-org/codingame-tools/blob/prod-latest/doc/index.md)**
   — if you're reading an older version's page and want current docs.
+- **[Documentation for in-development code](https://github.com/mckelvie-org/codingame-tools/blob/main/doc/index.md)**
+  — the tip of `main`, describing work that hasn't been released yet.
 
 The first link is relative in the repository and is rewritten to an absolute, tag-pinned URL when a
 release is cut, so it resolves both on GitHub and on PyPI, and always points at the docs as they
-were for *that* version.
+were for *that* version. The other two are absolute and deliberately unpinned, so they keep tracking
+`prod-latest` and `main` no matter which version's page you found them on.
 
 ## Caveats
 

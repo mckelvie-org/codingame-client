@@ -38,6 +38,7 @@ from ..config import (
     resolve_config,
 )
 from ..contribution_manager import (
+    CONTRIBUTION_IDENTITY_FILE_NAME,
     SERVER_BRANCH_NAME,
     CgContributionCommitMetadata,
     CgContributionLocalTestResult,
@@ -68,6 +69,7 @@ from ..language import (
     clean_managed,
 )
 from ..puzzle_manager import (
+    PUZZLE_IDENTITY_FILE_NAME,
     CgPuzzleManager,
     CgPuzzleManagerError,
     CgPuzzleStatus,
@@ -319,6 +321,48 @@ class CgCli(CliBase):
             config = await self.get_config()
             self._resolved_settings = resolve_settings(config)
         return self._resolved_settings
+
+    async def set_current_working_dir(self, kind: str, directory: Path) -> None:
+        """Record `directory` as the active puzzle/contribution working directory.
+
+           `kind` is `"puzzle"` or `"contribution"`. Called after import/create/activate, so that
+           subsequent commands operate on what was just set up--without this, a standing
+           `puzzleDir`/`contributionDir` preference would silently redirect them somewhere else.
+           Stored relative to settings.json's own directory (see `relativize_settings_dir`), so the
+           active directory doesn't move when `cg` is run from elsewhere.
+
+           Uses `resolve_default_settings()`, not `get_settings()`: the strict resolver raises when
+           there's no config.yaml, and this runs *after* `import`/`create` has already built the
+           working directory--so a user without a config.yaml would get a fully-created directory
+           followed by an error. A failed write is likewise a warning rather than an error, for the
+           same reason: the real work succeeded, and the only consequence is that discovery falls
+           back to the usual rules."""
+        settings = self.resolve_default_settings()
+        value = relativize_settings_dir(directory, settings.settings_file.parent)
+        setattr(settings.raw_data, f"current_{kind}_dir", value)
+        try:
+            settings.save()
+        except OSError as e:
+            self.eprint(f"warning: could not record the active {kind} directory in "
+                        f"{settings.settings_file}: {e}")
+
+    async def clear_current_working_dir(self, kind: str, *, only_if: Path | None = None) -> Path | None:
+        """Clear the active puzzle/contribution working directory, returning what it was.
+
+           With `only_if`, clears only when the active directory is that one--so deleting some
+           *other* working directory doesn't silently deactivate the one you're working on.
+
+           Non-strict settings resolution, for the same reason as `set_current_working_dir`."""
+        settings = self.resolve_default_settings()
+        attribute = f"current_{kind}_dir"
+        current: Path | None = getattr(settings, attribute)
+        if current is None:
+            return None
+        if only_if is not None and current != Path(only_if).expanduser().resolve():
+            return None
+        setattr(settings.raw_data, attribute, None)
+        settings.save()
+        return current
 
     def resolve_default_settings(self) -> CgSettings:
         """Best-effort settings resolution: honors -c/--config, but--unlike `get_settings()`--
@@ -1810,7 +1854,7 @@ class CgCli(CliBase):
     async def cmd_contribution__import(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             contribution_id: str = self.args.contribution_id
-            directory: Path = self.args.directory
+            directory: Path = Path(self.args.directory).expanduser().resolve()
             if directory.exists():
                 # Not an outright refusal: a directory whose contribution.json already tracks
                 # this exact contribution is a legitimate repair target (e.g. an outer project
@@ -1832,16 +1876,22 @@ class CgCli(CliBase):
             client = await self.get_client()
             manager = CgContributionManager(directory, client)
             working = await manager.import_(contribution_id)
+            await self.set_current_working_dir("contribution", directory)
             self.eprint(f"Imported contribution {contribution_id!r} into {directory}")
             self.eprint(f"  title: {working.data.title!r}")
             self.eprint(f"  puzzleType: {working.puzzle_type!r}")
+            self.eprint("  (now the active contribution--`cg contribution where` prints it, "
+                        "`cg contribution deactivate` clears it)")
         p = cmd.get_parser()
-        p.add_argument("contribution_id", type=str, metavar="CONTRIBUTION-ID",
-                       help="Opaque contribution ID string (see `cg api contribution find-contribution`).")
         p.add_argument("directory", type=Path, metavar="DIRECTORY",
                        help="New directory to create the working directory in, or an existing "
                             "one whose contribution.json already tracks CONTRIBUTION-ID (to "
-                            "repair a missing git-dir--see also `cg contribution repair`).")
+                            "repair a missing git-dir--see also `cg contribution repair`). Always "
+                            "first, matching `cg contribution create` and `cg puzzle import`. "
+                            "Becomes the active contribution directory (see `cg contribution "
+                            "activate`).")
+        p.add_argument("contribution_id", type=str, metavar="CONTRIBUTION-ID",
+                       help="Opaque contribution ID string (see `cg api contribution find-contribution`).")
         return handler
 
     @cli_command("Reconstruct this working directory's git-dir from scratch, without disturbing "
@@ -1886,7 +1936,7 @@ class CgCli(CliBase):
                  "Ignores --contribution-dir.")
     async def cmd_contribution__create(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
-            directory: Path = self.args.directory
+            directory: Path = Path(self.args.directory).expanduser().resolve()
             title: str | None = self.args.title
             puzzle_type: str = self.args.puzzle_type
             language: str = self.args.language
@@ -1901,6 +1951,7 @@ class CgCli(CliBase):
             client = await self.get_client()
             manager = CgContributionManager(directory, client)
             working = await manager.create(title=title, puzzle_type=puzzle_type, language=language)
+            await self.set_current_working_dir("contribution", directory)
             self.eprint(f"Initialized a new local-only contribution working directory at {directory}")
             self.eprint("  (not yet pushed to the server)")
             self.eprint(f"  title: {working.data.title!r}")
@@ -1908,6 +1959,8 @@ class CgCli(CliBase):
             self.eprint(f"  language: {language!r}")
             self.eprint("  (seeded with placeholder statement/difficulty/test cases--edit, then "
                          "`cg contribution push` to create it on the server)")
+            self.eprint("  (now the active contribution--`cg contribution where` prints it, "
+                        "`cg contribution deactivate` clears it)")
         p = cmd.get_parser()
         p.add_argument("directory", type=Path, metavar="DIRECTORY",
                        help="New directory to create the working directory in. Must not already exist.")
@@ -2121,15 +2174,52 @@ class CgCli(CliBase):
                             "first.")
         return handler
 
+    @cli_command("Make DIRECTORY the active contribution working directory, so subsequent `cg contribution` "
+                 "commands use it without needing --contribution-dir. Set automatically by `cg contribution "
+                 "import`/`cg contribution create`, so this is for switching between working directories "
+                 "you already have. Outranks the configured default (`cg settings set contribution-dir`); "
+                 "`cg contribution deactivate` clears it.")
+    async def cmd_contribution__activate(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            directory = Path(self.args.directory).expanduser().resolve()
+            if not (directory / CONTRIBUTION_IDENTITY_FILE_NAME).is_file():
+                raise CliError(
+                        f"{directory} is not a contribution working directory (no {CONTRIBUTION_IDENTITY_FILE_NAME}). "
+                        "Use `cg contribution import DIRECTORY CONTRIBUTION-ID` to create one.")
+            await self.set_current_working_dir("contribution", directory)
+            self.eprint(f"Active contribution directory set to {directory}")
+        p = cmd.get_parser()
+        p.add_argument("directory", type=Path, nargs="?", default=Path.cwd(), metavar="DIRECTORY",
+                       help="The contribution working directory to activate. Defaults to the current "
+                            "directory, so `cd` into one and run this with no arguments.")
+        return handler
+
+    @cli_command("Clear the active contribution working directory, so `cg contribution` commands fall back to "
+                 "the configured default and the usual directory discovery. Does not touch any "
+                 "files--only the selection.")
+    async def cmd_contribution__deactivate(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            previous = await self.clear_current_working_dir("contribution")
+            if previous is None:
+                self.eprint("No active contribution directory was set; nothing to do.")
+            else:
+                self.eprint(f"Active contribution directory cleared (was {previous})")
+        return handler
+
     @cli_command("Show which contribution working directory would be used.")
     async def cmd_contribution__where(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             contribution_dir: Path | None = self.args.contribution_dir
             found = find_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
             if found is None:
-                print("No contribution working directory found. Run `cg contribution import CONTRIBUTION-ID DIRECTORY` to create one.")
-                return
-            print(f"Contribution directory: {found}")
+                raise CliError(
+                        "No contribution working directory found. Run "
+                        "`cg contribution import DIRECTORY CONTRIBUTION-ID` to create one.")
+            # stdout carries the resolved path and nothing else, so this composes:
+            #     $EDITOR "$(cg contribution where)/data/solution.src"
+            # Anything explanatory goes to stderr, and "not found" is a non-zero exit rather than a
+            # friendly line of prose a shell would happily substitute into a path.
+            print(found)
         return handler
 
     @cli_command("Human-friendly summary of this contribution: submission/review status, sync "
@@ -2351,6 +2441,12 @@ class CgCli(CliBase):
                 if reply != "DELETE":
                     raise CliError("Confirmation did not match--aborted, nothing was deleted.")
             await manager.delete(keep_local=keep_local, keep_server=keep_server)
+            # The directory is gone, so leaving it selected would make every later command fail with
+            # a confusing "not a working directory". Scoped to *this* directory: deleting some other
+            # one must not deactivate whatever you're actually working on.
+            if (not keep_local
+                    and await self.clear_current_working_dir("contribution", only_if=resolved_dir)):
+                self.eprint("  (was the active contribution; deactivated)")
             if keep_local:
                 self.eprint(
                         f"{resolved_dir}: contribution {contribution_handle!r} deleted from "
@@ -2835,17 +2931,23 @@ class CgCli(CliBase):
         async def handler() -> None:
             puzzle_ref: str = self.args.puzzle_ref
             language: str | None = self.args.language
-            puzzle_dir: Path | None = self.args.puzzle_dir
-            resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings(), allow_default=True)
+            resolved_dir = Path(self.args.directory).expanduser().resolve()
             client = await self.get_client()
             manager = CgPuzzleManager(resolved_dir, client)
             puzzle_data = await manager.import_(puzzle_ref, language=language)
             server_data = manager.load_server_data()
             assert server_data is not None
+            await self.set_current_working_dir("puzzle", resolved_dir)
             self.eprint(f"Imported puzzle {server_data.puzzle_pretty_id!r} into {resolved_dir}")
             self.eprint(f"  title: {server_data.title!r}")
             self.eprint(f"  solutionLanguage: {puzzle_data.solution_language!r}")
+            self.eprint("  (now the active puzzle--`cg puzzle where` prints it, "
+                        "`cg puzzle deactivate` clears it)")
         p = cmd.get_parser()
+        p.add_argument("directory", type=Path, metavar="DIRECTORY",
+                       help="Directory to build the working directory in. Required and always "
+                            "first, matching `cg contribution import`/`create`. Becomes the active "
+                            "puzzle directory (see `cg puzzle activate`).")
         p.add_argument("puzzle_ref", type=str, metavar="PUZZLE",
                        help="A puzzle reference: numeric puzzle ID, pretty ID (displayed title, "
                             "lowercased with spaces replaced by hyphens, e.g. "
@@ -3350,15 +3452,52 @@ class CgCli(CliBase):
                             "discarding them.")
         return handler
 
+    @cli_command("Make DIRECTORY the active puzzle working directory, so subsequent `cg puzzle` "
+                 "commands use it without needing --puzzle-dir. Set automatically by `cg puzzle "
+                 "import`, so this is for switching between working directories "
+                 "you already have. Outranks the configured default (`cg settings set puzzle-dir`); "
+                 "`cg puzzle deactivate` clears it.")
+    async def cmd_puzzle__activate(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            directory = Path(self.args.directory).expanduser().resolve()
+            if not (directory / PUZZLE_IDENTITY_FILE_NAME).is_file():
+                raise CliError(
+                        f"{directory} is not a puzzle working directory (no {PUZZLE_IDENTITY_FILE_NAME}). "
+                        "Use `cg puzzle import DIRECTORY PUZZLE` to create one.")
+            await self.set_current_working_dir("puzzle", directory)
+            self.eprint(f"Active puzzle directory set to {directory}")
+        p = cmd.get_parser()
+        p.add_argument("directory", type=Path, nargs="?", default=Path.cwd(), metavar="DIRECTORY",
+                       help="The puzzle working directory to activate. Defaults to the current "
+                            "directory, so `cd` into one and run this with no arguments.")
+        return handler
+
+    @cli_command("Clear the active puzzle working directory, so `cg puzzle` commands fall back to "
+                 "the configured default and the usual directory discovery. Does not touch any "
+                 "files--only the selection.")
+    async def cmd_puzzle__deactivate(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            previous = await self.clear_current_working_dir("puzzle")
+            if previous is None:
+                self.eprint("No active puzzle directory was set; nothing to do.")
+            else:
+                self.eprint(f"Active puzzle directory cleared (was {previous})")
+        return handler
+
     @cli_command("Show which puzzle working directory would be used.")
     async def cmd_puzzle__where(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         async def handler() -> None:
             puzzle_dir: Path | None = self.args.puzzle_dir
             found = find_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
             if found is None:
-                print("No puzzle working directory found. Run `cg puzzle import PUZZLE-PRETTY-ID` to create one.")
-                return
-            print(f"Puzzle directory: {found}")
+                raise CliError(
+                        "No puzzle working directory found. Run "
+                        "`cg puzzle import DIRECTORY PUZZLE` to create one.")
+            # stdout carries the resolved path and nothing else, so this composes:
+            #     $EDITOR "$(cg puzzle where)/data/solution.src"
+            # Anything explanatory goes to stderr, and "not found" is a non-zero exit rather than a
+            # friendly line of prose a shell would happily substitute into a path.
+            print(found)
         return handler
 
     @cli_command("Delete this puzzle working directory. Purely local--there is no server-side "
@@ -3392,6 +3531,9 @@ class CgCli(CliBase):
                     raise CliError("Confirmation did not match--aborted, nothing was deleted.")
             await manager.delete()
             self.eprint(f"{resolved_dir}: local puzzle working directory removed.")
+            # See `cg contribution delete` for why this is scoped to the deleted directory.
+            if await self.clear_current_working_dir("puzzle", only_if=resolved_dir) is not None:
+                self.eprint("  (was the active puzzle; deactivated)")
         p = cmd.get_parser()
         p.add_argument("--force", "-f", default=False, action="store_true",
                        help="Skip the interactive confirmation prompt. Required if stdin/stdout "

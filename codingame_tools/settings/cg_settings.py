@@ -88,6 +88,22 @@ class CgSettingsData(JSONWizardX):
        isn't given explicitly and `CG_PUZZLE_DIR` isn't set. Same resolution rules as
        `contribution_dir`--see `CgSettings.puzzle_dir` for the resolved value."""
 
+    current_contribution_dir: str | None = None
+    """The *active* contribution working directory--the one most recently created, imported, or
+       explicitly selected with `cg contribution activate`. Cleared by `cg contribution deactivate`,
+       and by `cg contribution delete` when it's the directory being deleted.
+
+       Distinct from `contribution_dir`, and takes precedence over it: `contribution_dir` is a
+       standing preference you set once ("my contributions live here"), while this is transient
+       state tracking whatever you're working on right now. Without it, configuring
+       `contribution_dir` would silently redirect every command away from a directory you had just
+       created somewhere else. Same relative-path storage rules as `contribution_dir`."""
+
+    current_puzzle_dir: str | None = None
+    """The *active* puzzle working directory--set by `cg puzzle import`, cleared by
+       `cg puzzle deactivate`/`cg puzzle delete`. See `current_contribution_dir` for why this is
+       separate from `puzzle_dir` and outranks it."""
+
 
 def overlay_settings_data(base: CgSettingsData, override: CgSettingsData) -> CgSettingsData:
     """Return a new `CgSettingsData` with each of `default_profile`/`contribution_dir`/
@@ -100,6 +116,12 @@ def overlay_settings_data(base: CgSettingsData, override: CgSettingsData) -> CgS
             default_profile=override.default_profile if override.default_profile is not None else base.default_profile,
             contribution_dir=override.contribution_dir if override.contribution_dir is not None else base.contribution_dir,
             puzzle_dir=override.puzzle_dir if override.puzzle_dir is not None else base.puzzle_dir,
+            current_contribution_dir=(
+                override.current_contribution_dir if override.current_contribution_dir is not None
+                else base.current_contribution_dir),
+            current_puzzle_dir=(
+                override.current_puzzle_dir if override.current_puzzle_dir is not None
+                else base.current_puzzle_dir),
         )
 
 
@@ -191,6 +213,22 @@ class CgSettings:
         if resolved is not None:
             return resolved
         return self.config.puzzle_dir
+
+    @property
+    def current_contribution_dir(self) -> Path | None:
+        """The active contribution working directory, resolved to an absolute path, or None if
+           none is active. See `CgSettingsData.current_contribution_dir`.
+
+           Unlike `contribution_dir`, this deliberately does *not* fall back to `CgConfig`: it's
+           app-managed state describing what you're working on right now, not a preference you
+           declare. A `config.yaml` pinning it would defeat `activate`/`deactivate` entirely."""
+        return resolve_settings_dir(self.raw_data.current_contribution_dir, self.settings_file.parent)
+
+    @property
+    def current_puzzle_dir(self) -> Path | None:
+        """The active puzzle working directory, resolved to an absolute path, or None if none is
+           active. See `current_contribution_dir` for why this doesn't consult `CgConfig`."""
+        return resolve_settings_dir(self.raw_data.current_puzzle_dir, self.settings_file.parent)
 
     def save(self) -> None:
         """Write `raw_data` back to `settings_file`."""

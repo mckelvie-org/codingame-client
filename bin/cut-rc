@@ -20,23 +20,49 @@ if [[ "${1:-}" == "--force" ]]; then
     FORCE=1
 fi
 
-if ! git diff --quiet || ! git diff --cached --quiet; then
-    echo "error: working tree has uncommitted changes — commit or stash first" >&2
-    exit 1
-fi
+# Everything the release is cut from must already be on origin/main: a tag pointing at a commit
+# nobody else has is worse than no tag. Checked twice -- once now, and again after bin/cut-rc-prep
+# has had its chance to change things (see below).
+verify_clean_and_synced() {
+    local when="$1"
 
-if [[ "$(git branch --show-current)" != "main" ]]; then
-    echo "error: cut-rc must be run on main" >&2
-    exit 1
-fi
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "error: working tree has uncommitted changes $when — commit or stash first" >&2
+        exit 1
+    fi
 
-git fetch --force --tags origin main
+    if [[ "$(git branch --show-current)" != "main" ]]; then
+        echo "error: cut-rc must be run on main" >&2
+        exit 1
+    fi
 
-LOCAL_SHA=$(git rev-parse HEAD)
-REMOTE_SHA=$(git rev-parse origin/main)
-if [[ "$LOCAL_SHA" != "$REMOTE_SHA" ]]; then
-    echo "error: local main ($LOCAL_SHA) is not in sync with origin/main ($REMOTE_SHA) — pull/rebase (and push, if you have local commits) first" >&2
-    exit 1
+    git fetch --force --tags origin main
+
+    local local_sha remote_sha
+    local_sha=$(git rev-parse HEAD)
+    remote_sha=$(git rev-parse origin/main)
+    if [[ "$local_sha" != "$remote_sha" ]]; then
+        echo "error: local main ($local_sha) is not in sync with origin/main ($remote_sha) $when — pull/rebase (and push, if you have local commits) first" >&2
+        exit 1
+    fi
+}
+
+verify_clean_and_synced "before preparing the release"
+
+# Project-specific preparation hook, run on main before anything is tagged.
+#
+# cut-rc itself is meant to be reusable across projects, so it holds no policy about what a given
+# project needs doing first -- regenerating build artifacts that are committed, refreshing a
+# generated table, whatever. A project that needs none simply doesn't have this file.
+#
+# The contract: cut-rc-prep may commit and push to main; when it returns, the tree must be clean and
+# in sync with origin/main again. That's re-verified rather than trusted, because everything after
+# this point tags whatever HEAD happens to be -- a hook that left work uncommitted would silently
+# ship a release built from a tree nobody can reproduce.
+if [[ -x "bin/cut-rc-prep" ]]; then
+    echo "Running bin/cut-rc-prep..." >&2
+    ./bin/cut-rc-prep
+    verify_clean_and_synced "after bin/cut-rc-prep"
 fi
 
 eval "$(pdm run python - <<'PY'

@@ -48,6 +48,7 @@ import shutil
 import tempfile
 from datetime import datetime, timezone
 from enum import Enum
+from importlib.resources import files
 from pathlib import Path
 
 from ..client.client import CgClient
@@ -88,9 +89,11 @@ from .contribution_commit_data import (
 )
 from .git_repo import CgGitError, CgGitRepo, init_repo, is_inside_existing_repo
 from .layout import (
+    ASSETS_SUBDIR_NAME,
     CONSTRAINTS_FILE_NAME,
     CONTRIBUTION_STATUS_CACHE_FILE_NAME,
     COVER_IMAGE_FILE_NAME,
+    COVER_PLACEHOLDER_ASSET_NAME,
     DATA_SUBDIR_NAME,
     GIT_METADATA_SUBDIR_NAME,
     GITIGNORE_FILE_NAME,
@@ -522,6 +525,82 @@ def _minimal_valid_contribution_data(title: str) -> CgContributionData:
                     CgTestCase(title="Test 1", test_in="1", test_out="1", is_test=True, is_validator=False, need_validation=True),
                     CgTestCase(title="Validator 1", test_in="1", test_out="1", is_test=False, is_validator=True, need_validation=True),
                 ],
+        )
+
+
+STARTER_STUB_GENERATOR = """\
+read n:int
+write answer
+
+INPUT
+n: the single integer read from stdin
+
+OUTPUT
+A single line holding the answer.
+"""
+"""Stub generator seeded by `create()`, deliberately consistent with the seeded test pair.
+
+   The stub generator is the one seeded file that isn't inert: CodinGame runs it to produce the
+   starter code every solver of this puzzle begins from, so one that disagrees with the test cases
+   hands them a program that reads the wrong thing. `_minimal_valid_contribution_data` seeds a
+   single test/validator pair of `test_in="1"`/`test_out="1"`--one line, one integer--so this reads
+   exactly that: one `int` on one line.
+
+   `write answer` emits a placeholder output line, which is the convention for generated stubs; the
+   solver replaces it. The `INPUT`/`OUTPUT` blocks become explanatory comments in the generated
+   code.
+
+   Syntax reference: https://github.com/CodinGame/codingame-game-engine/blob/master/stubGeneratorSyntax.md
+   Types are `int`, `float`, `long`, `word(<length>)`, `string(<length>)`; `loop`/`loopline`/
+   `gameloop` handle repeated input. Keep this in step with the seeded test cases if either
+   changes--nothing else checks that they agree."""
+
+
+def _cover_placeholder_bytes() -> bytes:
+    """The seeded "under construction" cover image, read from package data.
+
+       Deliberately loud: `push()` uploads whatever is in `data/cover.png`, so this is the one
+       seeded placeholder that becomes *visible*. A tasteful title card would sail past its author
+       unnoticed and end up published; this can't. New contributions are private drafts, so nobody
+       else sees it in the meantime.
+
+       Regenerate with `pdm run gen-cover`--see `scripts/gen_cover_placeholder.py`."""
+    # One component per joinpath() call: Traversable.joinpath is single-argument in the typeshed
+    # signature, and multi-argument support only arrived in 3.11.
+    return (files("codingame_tools.contribution_manager")
+            .joinpath(ASSETS_SUBDIR_NAME)
+            .joinpath(COVER_PLACEHOLDER_ASSET_NAME)
+            .read_bytes())
+
+
+def _starter_contribution_data(title: str) -> CgContributionData:
+    """`create()`'s starting scaffold: the minimal server-accepted payload, plus a placeholder for
+       every remaining editable field.
+
+       Seeding them all means `cg contribution create` produces a working directory where every file
+       an author edits already exists--so they can be listed, opened, and diffed, rather than the
+       author having to know which filenames to conjure. They're placeholders to be replaced, not
+       content: the statement says so.
+
+       All of it is deliberately self-consistent, describing the trivial echo puzzle that the seeded
+       test pair and Python starter solution already implement--input description, output
+       description, constraints and stub generator included. A scaffold whose parts contradict each
+       other is worse than none, because the contradiction is only discovered later, by the server,
+       as a validation failure."""
+    return dataclasses.replace(
+            _minimal_valid_contribution_data(title),
+            statement=(
+                "TODO: write the problem statement.\n"
+                "\n"
+                "This is placeholder scaffolding. The seeded test case, reference solution, stub "
+                "generator and descriptions all describe the same trivial \"read one integer, "
+                "print it back\" puzzle, so that they agree with each other until you replace "
+                "them. Replace all of it."
+            ),
+            input_description="Line 1: An integer [[n]].",
+            output_description="A single line containing [[n]], unchanged.",
+            constraints="0 \u2264 [[n]] \u2264 1000",
+            stub_generator=STARTER_STUB_GENERATOR,
         )
 
 
@@ -1143,10 +1222,10 @@ class CgContributionManager:
         # put their code, for every language, regardless of this).
         solution = await get_language(language).build_contribution_create_stub_source()
         data = dataclasses.replace(
-                _minimal_valid_contribution_data(title), solution_language=language, solution=solution)
+                _starter_contribution_data(title), solution_language=language, solution=solution)
         _materialize_data(
                 self.data_dir, puzzle_type=puzzle_type, draft=True, ready_for_moderation=False,
-                data=data, cover_bytes=None, git_dir_in_data=git_dir_in_data,
+                data=data, cover_bytes=_cover_placeholder_bytes(), git_dir_in_data=git_dir_in_data,
             )
         if not git_dir_in_data:
             _write_meta_gitignore(self.contribution_dir)

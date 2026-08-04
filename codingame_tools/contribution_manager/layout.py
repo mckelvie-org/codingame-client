@@ -14,6 +14,8 @@ __all__ = [
     "STUB_GENERATOR_FILE_NAME",
     "SOLUTION_FILE_NAME",
     "COVER_IMAGE_FILE_NAME",
+    "ASSETS_SUBDIR_NAME",
+    "COVER_PLACEHOLDER_ASSET_NAME",
     "DATA_SUBDIR_NAME",
     "META_SUBDIR_NAME",
     "GIT_METADATA_SUBDIR_NAME",
@@ -44,6 +46,18 @@ SOLUTION_FILE_NAME = "solution.src"
    win. A convenience symlink `solution.<ext>` -> `data/solution.src` is additionally maintained
    at the working directory's own root (never inside `data/`) for the common case where the
    language *is* known; it's disposable/regeneratable."""
+
+ASSETS_SUBDIR_NAME = "assets"
+"""Package-data subdirectory of `codingame_tools.contribution_manager` holding static files shipped
+   in the wheel (currently just the cover placeholder)."""
+
+COVER_PLACEHOLDER_ASSET_NAME = "cover-placeholder.png"
+"""The "under construction" 1920x1080 cover `create()` seeds, as package data.
+
+   Baked rather than rendered at runtime: it's identical for every contribution, so generating it
+   on demand would make every consumer of this library carry a 15 MB compiled imaging dependency to
+   produce a constant. Regenerate with `pdm run gen-cover` (see `scripts/gen_cover_placeholder.py`,
+   which owns the only Pillow dependency and explains why the image is deliberately ugly)."""
 
 COVER_IMAGE_FILE_NAME = "cover.png"
 

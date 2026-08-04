@@ -22,6 +22,8 @@ Every `cg puzzle` subcommand.
 | [`cg puzzle build`](#cg-puzzle-build) | Compile data/solution.src, if its language needs compiling (a no-op for interpreted languages like Python3). |
 | [`cg puzzle vscode`](#cg-puzzle-vscode) | Generate VS Code run/debug configuration for this puzzle working directory. |
 | [`cg puzzle set-language`](#cg-puzzle-set-language) | Switch this puzzle to a different language, restoring your own most recent code for it. |
+| [`cg puzzle activate`](#cg-puzzle-activate) | Make DIRECTORY the active puzzle working directory, so subsequent `cg puzzle` commands use it without needing --puzzle-dir. |
+| [`cg puzzle deactivate`](#cg-puzzle-deactivate) | Clear the active puzzle working directory, so `cg puzzle` commands fall back to the configured default and the usual directory discovery. |
 | [`cg puzzle where`](#cg-puzzle-where) | Show which puzzle working directory would be used. |
 | [`cg puzzle delete`](#cg-puzzle-delete) | Delete this puzzle working directory. Purely local |
 
@@ -117,6 +119,14 @@ positional arguments:
                         work the server doesn't have (submit it first, or pass --force to discard
                         it). Changes local state only--the server's current language follows once
                         you run a server-side test or submit in the new one.
+    activate            Make DIRECTORY the active puzzle working directory, so subsequent `cg
+                        puzzle` commands use it without needing --puzzle-dir. Set automatically by
+                        `cg puzzle import`, so this is for switching between working directories
+                        you already have. Outranks the configured default (`cg settings set
+                        puzzle-dir`); `cg puzzle deactivate` clears it.
+    deactivate          Clear the active puzzle working directory, so `cg puzzle` commands fall
+                        back to the configured default and the usual directory discovery. Does not
+                        touch any files--only the selection.
     where               Show which puzzle working directory would be used.
     delete              Delete this puzzle working directory. Purely local--there is no server-
                         side counterpart to delete (a puzzle already exists on the server before
@@ -134,7 +144,7 @@ options:
 ## `cg puzzle import`
 
 ```text
-usage: cg puzzle import [-h] [--language LANGUAGE] PUZZLE
+usage: cg puzzle import [-h] [--language LANGUAGE] DIRECTORY PUZZLE
 
 Build a fresh puzzle working directory: resolve PUZZLE to a real puzzle (in order of preference: a
 numeric puzzle ID; an exact pretty ID, e.g. 'literary-alfabet-soupe'; an exact-matching title; a
@@ -147,6 +157,9 @@ fallback) rather than requiring an explicit new-directory argument--puzzle worki
 expected to be reused across different puzzles over time, one at a time.
 
 positional arguments:
+  DIRECTORY             Directory to build the working directory in. Required and always first,
+                        matching `cg contribution import`/`create`. Becomes the active puzzle
+                        directory (see `cg puzzle activate`).
   PUZZLE                A puzzle reference: numeric puzzle ID, pretty ID (displayed title,
                         lowercased with spaces replaced by hyphens, e.g. 'literary-alfabet-
                         soupe'), exact title, or case-insensitive title--tried in that order until
@@ -408,6 +421,36 @@ options:
   -h, --help   show this help message and exit
   --force, -f  Switch even if data/solution.src has changes the server doesn't have, discarding
                them.
+```
+
+## `cg puzzle activate`
+
+```text
+usage: cg puzzle activate [-h] [DIRECTORY]
+
+Make DIRECTORY the active puzzle working directory, so subsequent `cg puzzle` commands use it
+without needing --puzzle-dir. Set automatically by `cg puzzle import`, so this is for switching
+between working directories you already have. Outranks the configured default (`cg settings set
+puzzle-dir`); `cg puzzle deactivate` clears it.
+
+positional arguments:
+  DIRECTORY   The puzzle working directory to activate. Defaults to the current directory, so `cd`
+              into one and run this with no arguments.
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## `cg puzzle deactivate`
+
+```text
+usage: cg puzzle deactivate [-h]
+
+Clear the active puzzle working directory, so `cg puzzle` commands fall back to the configured
+default and the usual directory discovery. Does not touch any files--only the selection.
+
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg puzzle where`

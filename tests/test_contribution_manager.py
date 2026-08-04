@@ -863,6 +863,68 @@ async def test_untouched_import_then_push_is_the_identity(tmp_path: Path) -> Non
             == [(tc.test_in, tc.test_out) for tc in data.test_cases]
 
 
+async def test_create_seeds_every_editable_file(tmp_path: Path) -> None:
+    """`create()` leaves a working directory in which every file an author edits already exists.
+
+       Otherwise the author has to know which filenames to conjure -- they can't be listed, opened
+       or diffed until they've been guessed correctly."""
+    data = _make_full_data()
+    client, _, _, _ = _make_fake_client(_make_contribution(data))
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+
+    await manager.create(title="My Puzzle")
+
+    for name in ("statement.cgmd", "input_description.cgmd", "output_description.cgmd",
+                 "constraints.cgmd", "stub_generator.cgstub", "solution.src", "cover.png"):
+        assert (tmp_path / "data" / name).is_file(), f"create() did not seed data/{name}"
+
+
+async def test_create_seeds_a_1920x1080_cover_placeholder(tmp_path: Path) -> None:
+    """The cover is shipped as package data, so this also proves the asset survives packaging --
+       a wheel missing it would fail here rather than at a user's first `create`.
+
+       1920x1080 measured from a real published contribution's cover. PNG dimensions live at a fixed
+       offset in the IHDR chunk, so no imaging library is needed to check them (and none is a
+       runtime dependency -- see scripts/gen_cover_placeholder.py)."""
+    import struct
+
+    data = _make_full_data()
+    client, _, _, _ = _make_fake_client(_make_contribution(data))
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+
+    await manager.create(title="My Puzzle")
+
+    cover = (tmp_path / "data" / "cover.png").read_bytes()
+    assert cover[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
+    assert struct.unpack(">II", cover[16:24]) == (1920, 1080)
+
+
+async def test_the_seeded_scaffold_is_self_consistent(tmp_path: Path) -> None:
+    """The seeded stub generator must describe the seeded test cases.
+
+       It's the one seeded file that isn't inert: CodinGame runs it to generate the starter code
+       every solver begins from, so a stub generator that disagrees with the test data hands them a
+       program that reads the wrong thing. Nothing else checks that these two agree, and the
+       disagreement would surface much later, as somebody else's confusion."""
+    from codingame_tools.contribution_manager.manager import (
+        STARTER_STUB_GENERATOR,
+        _starter_contribution_data,
+    )
+
+    seeded = _starter_contribution_data("My Puzzle")
+
+    # One line holding one integer, which is exactly what `read n:int` consumes.
+    for test_case in seeded.test_cases:
+        assert test_case.test_in.splitlines() == ["1"], test_case.title
+    assert "read n:int" in STARTER_STUB_GENERATOR
+    assert "loop" not in STARTER_STUB_GENERATOR, "a loop would need more input lines than are seeded"
+
+    # And every editable field carries a placeholder, not None (which would omit the file).
+    for field_name in ("statement", "input_description", "output_description", "constraints",
+                       "stub_generator"):
+        assert getattr(seeded, field_name), f"{field_name} not seeded"
+
+
 async def test_push_passes_view_puzzle_type_and_flags(tmp_path: Path) -> None:
     data = _make_full_data()
     contribution = _make_contribution(data, draft=False, ready_for_moderation=True)

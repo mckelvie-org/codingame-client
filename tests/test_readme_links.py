@@ -91,6 +91,56 @@ def test_fenced_code_is_left_alone() -> None:
     assert f"[real](https://github.com/{REPO}/blob/{REF}/doc/index.md)" in result
 
 
+def test_badge_links_are_rewritten() -> None:
+    """A badge is an image nested in a link, `[![alt](img)](target)`, and needs its own handling.
+
+       The plain inline pattern matches the inner image first and leaves the outer `](target)` with
+       no `[...]` in front of it, so it doesn't match at all -- a License badge pointing at a
+       relative `LICENSE` would sail through the rewrite untouched and 404 on PyPI. Every badge in
+       this project's own README happens to link somewhere absolute, so nothing here would have
+       caught it; a stock template README ships exactly that dead link."""
+    assert _rewrite("[![License: MIT](https://img.shields.io/badge/x.svg)](LICENSE)") == (
+        f"[![License: MIT](https://img.shields.io/badge/x.svg)]"
+        f"(https://github.com/{REPO}/blob/{REF}/LICENSE)")
+
+    # A locally-hosted badge image needs the raw URL, and the link still needs the blob URL.
+    assert _rewrite("[![build](docs/badge.svg)](CONTRIBUTING.md)") == (
+        f"[![build](https://raw.githubusercontent.com/{REPO}/{REF}/docs/badge.svg)]"
+        f"(https://github.com/{REPO}/blob/{REF}/CONTRIBUTING.md)")
+
+
+def test_already_pinned_links_are_not_repointed() -> None:
+    """An absolute URL is left alone even when it points at *this* repo at a different ref.
+
+       That's correct in isolation, and it's the reason `bin/cut-prod` restores README.md from the
+       commit the rc was cut from before rewriting. Promotion builds on the rc commit, whose README
+       is already rewritten and pinned to the rc tag; rewriting it again does nothing, and 1.0.0
+       shipped with every "docs for this version" link pointing at v1.0.0-rc.2.
+
+       Deliberately not "solved" by re-pointing any URL that mentions this repo: the README also
+       carries a link to the moving `prod-latest` tag that must *not* be pinned. Regenerating from
+       the pristine source is unambiguous; pattern-matching URLs would not be."""
+    for pinned in (
+                f"[docs](https://github.com/{REPO}/blob/v0.9.0/doc/index.md)",
+                f"[latest](https://github.com/{REPO}/blob/prod-latest/doc/index.md)",
+                f"[dev](https://github.com/{REPO}/blob/main/doc/index.md)",
+            ):
+        assert _rewrite(pinned) == pinned
+
+
+def test_the_readme_offers_pinned_and_unpinned_documentation_links() -> None:
+    """All three doc links, and each pointing where it should after a release rewrite.
+
+       They're easy to conflate and the difference only shows up on a published page: "this version"
+       must be pinned to the release tag, while "latest release" and "in development" must keep
+       tracking `prod-latest` and `main` for a reader who landed on an old version's page."""
+    rewritten = _rewrite((REPO_ROOT / "README.md").read_text(encoding="utf-8"))
+
+    assert f"https://github.com/{REPO}/blob/{REF}/doc/index.md" in rewritten
+    assert f"https://github.com/{REPO}/blob/prod-latest/doc/index.md" in rewritten
+    assert f"https://github.com/{REPO}/blob/main/doc/index.md" in rewritten
+
+
 def test_rewriting_is_idempotent() -> None:
     """A re-run (a retried `cut-rc --force`, say) must not double-rewrite into a URL containing
        another URL."""

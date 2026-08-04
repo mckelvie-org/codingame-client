@@ -59,12 +59,16 @@ def find_puzzle_dir(
 
         1. `explicit` (typically the resolved value of a `--puzzle-dir` CLI flag), if given.
         2. The `CG_PUZZLE_DIR` environment variable, if set.
-        3. `settings.puzzle_dir` (see `CgSettings.puzzle_dir`), if given and set.
-        4. `start_dir` (or the current directory, if not given), if it contains a `puzzle.json`.
-        5. `start_dir / "puzzle"`, if it contains a `puzzle.json`.
+        3. `settings.current_puzzle_dir`--the *active* working directory, set by
+           `cg puzzle import`/`create` and `cg puzzle activate`. Outranks the configured default
+           below so that creating a working directory somewhere isn't silently overridden by a
+           standing `puzzle_dir` preference pointing elsewhere.
+        4. `settings.puzzle_dir` (see `CgSettings.puzzle_dir`), if given and set.
+        5. `start_dir` (or the current directory, if not given), if it contains a `puzzle.json`.
+        6. `start_dir / "puzzle"`, if it contains a `puzzle.json`.
 
-       Steps 1-3 are taken at face value--the resolved directory need not contain a `puzzle.json`
-       yet (e.g. before the first `cg puzzle import`). Steps 4-5 are implicit inference and are
+       Steps 1-4 are taken at face value--the resolved directory need not contain a `puzzle.json`
+       yet (e.g. before the first `cg puzzle import`). Steps 5-6 are implicit inference and are
        deliberately conservative: they only match if a `puzzle.json` is actually already there.
 
     Returns:
@@ -76,6 +80,8 @@ def find_puzzle_dir(
     env_value = os.environ.get(CG_PUZZLE_DIR_ENV_VAR)
     if env_value:
         return Path(env_value).expanduser().resolve()
+    if settings is not None and settings.current_puzzle_dir is not None:
+        return settings.current_puzzle_dir
     if settings is not None and settings.puzzle_dir is not None:
         return settings.puzzle_dir
     start = Path(start_dir).resolve() if start_dir is not None else Path.cwd()

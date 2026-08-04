@@ -6,6 +6,78 @@
 
 ## 1.0.0 (2026-08-04)
 
+- **`cg contribution create` now seeds every editable file**, not just the statement:
+  `input_description.cgmd`, `output_description.cgmd`, `constraints.cgmd` and
+  `stub_generator.cgstub` are written too, so an author can list, open and diff them instead of
+  having to know which filenames to conjure. (`cover.png` is still absent — no sensible
+  placeholder.)
+
+  `data/cover.png` is seeded as well, with a deliberately garish 1920×1080 "UNDER CONSTRUCTION"
+  image (traffic cones, hard hat, hazard stripes) — it's the one seeded placeholder that becomes
+  *visible*, since `push` uploads whatever is there, and a tasteful title card would go unnoticed
+  and get published. Shipped as package data rather than rendered at runtime, so no imaging
+  dependency reaches users; `pdm run gen-cover` regenerates it and owns the only Pillow use, as a
+  dev dependency.
+
+  The seeded content is deliberately self-consistent: statement, descriptions, constraints, stub
+  generator, reference solution and test pair all describe the same trivial "read one integer,
+  print it back" puzzle, so `cg contribution play` passes on a freshly created directory. The stub
+  generator is the one seeded file that isn't inert — CodinGame runs it to produce the starter code
+  every solver begins from — so `read n:int` is matched to the seeded one-line/one-integer test
+  pair, and a test asserts the two keep agreeing.
+
+- **Consistent `import`/`create` syntax.** All three now take the target **directory first, and
+  require it**:
+
+  | | before | now |
+  |---|---|---|
+  | `cg puzzle import` | `PUZZLE` (directory inferred) | `DIRECTORY PUZZLE` |
+  | `cg contribution import` | `CONTRIBUTION-ID DIRECTORY` | `DIRECTORY CONTRIBUTION-ID` |
+  | `cg contribution create` | `DIRECTORY [TITLE]` | unchanged |
+
+  **Breaking**: `cg puzzle import temperatures` becomes `cg puzzle import ./puzzle temperatures`,
+  and `cg contribution import` has its two arguments swapped.
+
+- **Active working directories.** `cg puzzle import`, `cg contribution import` and
+  `cg contribution create` now record what they just built as the *active* working directory
+  (`currentPuzzleDir`/`currentContributionDir` in `settings.json`), and it outranks the configured
+  `puzzleDir`/`contributionDir` default. Without it, setting a default and then importing somewhere
+  else sent every following command to the configured directory instead — the one place you weren't
+  looking.
+
+  New `cg puzzle activate [DIRECTORY]` / `cg puzzle deactivate` (and the `cg contribution`
+  equivalents) switch and clear it; `activate` defaults to the current directory and refuses one
+  that isn't a working directory. `delete` deactivates too, but only when the directory being
+  deleted is the active one.
+
+  Deliberately not readable from `config.yaml`: it's state the app maintains, not a preference you
+  declare, and a config file pinning it would defeat `activate`/`deactivate`.
+
+- **`cg puzzle where` / `cg contribution where` now print only the resolved path**, so they compose:
+  `$EDITOR "$(cg puzzle where)/solution.py"`. Explanatory text goes to stderr, and "not found" is a
+  non-zero exit rather than a line of prose a shell would substitute into a path. **Breaking** for
+  anything parsing the old `Puzzle directory: /path` format.
+
+- The README now offers three documentation links rather than two: **this version** (pinned to the
+  release tag), **the latest release** (`prod-latest`), and **in-development code** (the tip of
+  `main`). The last is for anyone reading a published page who wants to see what's landed since.
+  Both unpinned links are absolute and survive the release-time rewrite untouched.
+
+- **Fixed: a promoted release's README linked back at the release candidate it came from.** 1.0.0
+  shipped with every "documentation for this version" link pointing at `v1.0.0-rc.2`. `cut-prod`
+  builds its release commit on top of the *rc commit*, whose README has already had its links
+  rewritten and pinned by `cut-rc` — and the rewriter deliberately leaves absolute URLs alone, so
+  re-running it changed nothing.
+
+  `bin/cut-prod` now restores `README.md` from the commit the rc was cut from before patching, so
+  the links are regenerated from the pristine source rather than re-derived from a previous
+  derivation. Everything else it patches (`version=`, `Source=`, the badges) was already immune,
+  because it replaces whole lines rather than transforming what it finds.
+
+  Not fixed by re-pointing any URL that mentions this repo: the README also carries a deliberately
+  unpinned link to the moving `prod-latest` tag. Regenerating from source is unambiguous; pattern
+  matching would not be.
+
 - **Removed the git-URL dependency on a private dataclass-wizard fork; the package is publishable
   again.** PyPI rejects any distribution whose metadata contains a direct URL dependency, so the
   `git+https://` pin could never be released — and publishing the fork under its own name would have
@@ -34,13 +106,20 @@
   the decisions that aren't obvious from the code.
 
   The 148-command CLI reference is **generated from the parser** by `pdm run gen-docs` (one page per
-  command group, one per API service endpoint) and committed, so it stays readable on GitHub and
-  shows interface changes as reviewable diffs. Three tests keep it honest, all offline: the
-  generated pages must match a fresh run, every hand-written `cg ...` must resolve against the real
-  parser, and every relative link between pages must point at a file that exists. Command renames
-  are the drift that actually happens here — `cg puzzle push` became `cg puzzle submit`, `revert`
-  became `discard-local` — and each would otherwise have silently invalidated every guide mentioning
-  it.
+  command group, one per API service endpoint), and regeneration prunes pages whose commands were
+  renamed or removed. It's committed — Python has no build step, so an uncommitted file wouldn't
+  exist for anyone browsing GitHub — but treated as a *build artifact* rather than source: `main`'s
+  copy may lag between releases and nothing in CI enforces otherwise. `bin/cut-rc-prep` regenerates
+  it and pushes it to `main` as its own commit at the start of every `cut-rc`, so drift is bounded
+  by one release cycle and the release tag inherits the same files. The cover placeholder is
+  governed the opposite way (source, kept in sync by whoever edits its generator);
+  `CONTRIBUTING.md` documents both, and the new `bin/cut-rc-prep` hook contract that keeps
+  `bin/cut-rc` itself project-agnostic and reusable.
+
+  Two offline tests keep the *hand-written* docs honest: every `cg ...` must resolve against the
+  real parser, and every relative link must point at a file that exists. Command renames are the
+  drift that actually happens here — `cg puzzle push` became `cg puzzle submit`, `revert` became
+  `discard-local` — and each would otherwise have silently invalidated every guide mentioning it.
 
   `CHANGELOG.md` deliberately stays at the repo root: `bin/cut-rc` and `bin/cut-prod` rewrite and
   `git add` it by path.

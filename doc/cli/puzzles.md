@@ -6,10 +6,10 @@ the network, and submit when you're happy.
 ## The loop
 
 ```bash
-cg puzzle import temperatures     # pull it down
-$EDITOR solution.py               # solve it
-cg puzzle play                    # run every test case, locally
-cg puzzle submit                  # graded submission
+cg puzzle import ./puzzle temperatures    # pull it down; becomes the active puzzle
+$EDITOR "$(cg puzzle where)/solution.py"  # solve it
+cg puzzle play                            # run every test case, locally
+cg puzzle submit                          # graded submission
 ```
 
 That's the whole thing. The rest of this page is what to do when it isn't that simple.
@@ -17,24 +17,34 @@ That's the whole thing. The rest of this page is what to do when it isn't that s
 ## Importing
 
 ```bash
-cg puzzle import temperatures
-cg puzzle import 10075
-cg puzzle import "Temperatures"
+cg puzzle import ./puzzle temperatures
+cg puzzle import ./puzzle 10075
+cg puzzle import ./puzzle "Temperatures"
 ```
 
-`PUZZLE` is resolved in order of preference: numeric puzzle ID, exact pretty ID, exact title,
-case-insensitive title. If you've attempted the puzzle before, your existing saved answer is
-imported in whatever language you last used; otherwise you get a placeholder in `--language`
-(default Python3).
+The target directory comes **first and is required**, matching `cg contribution import` and
+`cg contribution create`. `PUZZLE` is then resolved in order of preference: numeric puzzle ID,
+exact pretty ID, exact title, case-insensitive title. If you've attempted the puzzle before, your
+existing saved answer is imported in whatever language you last used; otherwise you get a
+placeholder in `--language` (default Python3).
 
-Puzzle working directories are meant to be reused — solve one puzzle, then import the next over the
-top — so `import` uses the normal [directory resolution](../concepts/profiles.md#default-working-directories)
-rather than demanding a new directory each time.
+Importing also makes that directory the **active** puzzle, so everything afterwards finds it
+without `--puzzle-dir` — see [active working directories](../concepts/profiles.md#active-working-directories).
 
 ```bash
-cg puzzle where           # which directory would be used?
+cg puzzle where           # prints just the resolved path -- built for $(...)
 cg puzzle description     # the problem statement, rendered, no network needed
 ```
+
+`where` writes nothing but the path to stdout, so it composes:
+
+```bash
+$EDITOR "$(cg puzzle where)/solution.py"
+cd "$(cg puzzle where)"
+```
+
+It exits non-zero if no working directory can be found, rather than printing prose a shell would
+happily substitute into a path.
 
 ## Running tests
 
@@ -102,10 +112,13 @@ Rebuilds `.meta/` — the test-session handle, downloaded test cases, cached sta
 anything in the cache looks wrong. Deleting `.meta/` and repairing is always safe.
 
 ```bash
+cg puzzle activate ./other-puzzle   # switch which one commands act on
+cg puzzle activate                  # ...or activate the current directory
+cg puzzle deactivate                # back to the configured default
 cg puzzle delete
 ```
 
-Removes the local directory only. There's no server-side counterpart — the puzzle exists
+`delete` removes the local directory only, and deactivates it if it was active. There's no server-side counterpart — the puzzle exists
 independently of you and isn't yours to remove. Prompts unless `--force`.
 
 ## Full reference

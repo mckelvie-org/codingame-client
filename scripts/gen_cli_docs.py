@@ -1,9 +1,16 @@
 #!/usr/bin/env python
 """Generate the CLI command reference under `doc/cli/reference/` from the real argparse tree.
 
-Run it with `pdm run gen-docs`. `tests/test_doc_cli_reference.py` regenerates into a temp directory
-and fails if the committed output differs, so a command added, renamed, or re-described without
-regenerating breaks the build rather than silently rotting the docs.
+Run it with `pdm run gen-docs`. The output is committed, but treated as a **build artifact rather
+than source**: it can be deleted and rebuilt from the parser at any time, and nothing in CI checks
+that `main`'s copy is current. It's committed only because Python projects have no build step -- an
+uncommitted file simply wouldn't exist for anyone browsing GitHub, and the README links people
+straight at these pages.
+
+So on `main` this is a cached copy that may lag behind the parser, refreshed whenever a developer
+feels like running the command. `bin/cut-rc` regenerates it into every release commit, which is
+where being current actually matters: a *published* version's README links at these pages, and
+trusting whoever last pushed to have remembered is exactly the assumption that fails.
 
 Why introspect the parser rather than scrape `cg --help`: the tree is already a real object
 (`CliBase.init_parser()` builds it), so subcommands, options and help text come out structured
@@ -228,7 +235,32 @@ def generate(output_root: Path) -> list[Path]:
     index_path = reference_dir / "index.md"
     index_path.write_text(render_index(pages), encoding="utf-8")
     written.append(index_path)
+
+    _prune_orphans(reference_dir, written)
     return written
+
+
+def _prune_orphans(reference_dir: Path, written: list[Path]) -> None:
+    """Delete generated pages that this run didn't produce, then any directories left empty.
+
+       Writing alone isn't enough: rename `cg api vote` or drop a command group and its page would
+       otherwise sit in the tree forever, indexed by nothing, describing a command that no longer
+       exists. That used to be caught by the staleness test comparing the committed *set* of files
+       against a fresh one; that test is gone (the reference is a build artifact now, not source--
+       see the module docstring), so pruning has to happen here instead, at the only point that
+       knows what the current command tree actually is.
+
+       Deliberately narrow: only `*.md` strictly under `reference_dir`, which is generated in its
+       entirety. Nothing hand-written lives there, and this must never be able to reach anything
+       that does."""
+    kept = {path.resolve() for path in written}
+    for existing in reference_dir.rglob("*.md"):
+        if existing.resolve() not in kept:
+            existing.unlink()
+    # Deepest first, so a directory emptied by the loop above is itself removable.
+    for directory in sorted((p for p in reference_dir.rglob("*") if p.is_dir()), reverse=True):
+        if not any(directory.iterdir()):
+            directory.rmdir()
 
 
 def main() -> None:

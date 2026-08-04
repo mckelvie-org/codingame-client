@@ -9,18 +9,57 @@ git repository and there's a real merge workflow.
 
 ```bash
 cg contribution create ./my-puzzle "My Puzzle"   # brand new, purely local
-cg contribution import <handle> ./my-puzzle      # existing server-side contribution
+cg contribution import ./my-puzzle <handle>      # existing server-side contribution
 ```
 
-`create` makes **no network call** and creates nothing server-side. You get a complete working
-directory with a Python3 starter solution and a seeded test/validator pair, and nothing exists
-remotely until your first `push`. That's deliberate: it means you can start, change your mind, and
-delete the directory without ever having published anything.
+`create` makes **no network call** and creates nothing server-side. Nothing exists remotely until
+your first `push` — so you can start, change your mind, and delete the directory without ever having
+published anything.
+
+It seeds **every** file you'll edit, so they can be listed, opened and diffed rather than conjured
+from memory: statement, input/output descriptions, constraints, stub generator, a Python3 starter
+solution, and a test/validator pair. All of it is placeholder content describing the same trivial
+"read one integer, print it back" puzzle, so the pieces agree with each other until you replace
+them — `cg contribution play` passes on a freshly created directory.
+
+That self-consistency matters most for `stub_generator.cgstub`, the one seeded file that isn't
+inert: CodinGame runs it to generate the starter code every solver of your puzzle begins from. A
+stub generator that disagrees with your test cases hands them a program that reads the wrong thing.
+Keep the two in step — nothing checks it for you. See CodinGame's
+[stub generator syntax](https://github.com/CodinGame/codingame-game-engine/blob/master/stubGeneratorSyntax.md).
+
+`data/cover.png` is seeded too, with a deliberately garish 1920×1080 "UNDER CONSTRUCTION" image —
+traffic cones, hard hat, hazard stripes. That's the one seeded placeholder that becomes *visible*,
+since `push` uploads whatever is in that file. A tasteful title card would sail past you unnoticed
+and end up published; this can't. New contributions are private drafts, so nobody else sees it in
+the meantime.
+
+The image is shipped as package data rather than rendered on demand — it's identical for every
+contribution, so generating it at runtime would mean every user of this library carrying a 15 MB
+imaging dependency to produce a constant. Regenerate it with `pdm run gen-cover`.
+
+Both take the **directory first**, matching `cg puzzle import`, and both make it the
+[active contribution](../concepts/profiles.md#active-working-directories) — so subsequent commands
+find it wherever you run them from.
 
 `import` needs the contribution's handle. To find your own:
 
 ```bash
 cg contributions
+```
+
+`cg contribution where` prints just the resolved path, so it composes:
+
+```bash
+$EDITOR "$(cg contribution where)/data/statement.cgmd"
+cd "$(cg contribution where)"
+```
+
+To switch between working directories you already have:
+
+```bash
+cg contribution activate ./other    # or with no argument, the current directory
+cg contribution deactivate          # back to the configured default
 ```
 
 ## What you edit
@@ -128,7 +167,8 @@ cg contribution delete
 ```
 
 Deletes the contribution **from the server**, unrecoverably, and by default removes the working
-directory too. Unlike `cg puzzle delete`, this one is not local-only.
+directory too, deactivating it if it was active. Unlike `cg puzzle delete`, this one is not
+local-only.
 
 ## Recovering
 

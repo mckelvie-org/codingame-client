@@ -61,6 +61,48 @@ pdm run test       # pytest
 pdm build
 ```
 
+## Generated files
+
+Two files in the tree are produced by tools rather than written by hand. Both are committed --
+Python has no build step, so an uncommitted file simply doesn't exist for anyone who clones or
+installs -- but they are governed differently, on purpose.
+
+| | `doc/cli/reference/` | `codingame_tools/contribution_manager/assets/cover-placeholder.png` |
+|---|---|---|
+| Regenerate with | `pdm run gen-docs` | `pdm run gen-cover` |
+| Derived from | the `cg` argparse tree, i.e. all of `cli/main.py` | `scripts/gen_cover_placeholder.py` alone |
+| Treated as | a **build artifact** | **source** |
+| May drift on `main`? | yes, but bounded -- see below | no |
+| Kept in sync by | `bin/cut-rc-prep`, at each release candidate | you, when you edit the generator |
+
+**The CLI reference** changes whenever any command's arguments or help text change, which is often
+and rarely on the mind of whoever is changing it. Rather than fail builds over that, `main` carries
+a cached copy that is allowed to lag between releases -- nothing in CI enforces otherwise -- and
+`bin/cut-rc-prep` regenerates it, commits it and pushes it to `main` as its own commit at the start
+of every `cut-rc`. So drift is bounded by one release cycle rather than unbounded, and because
+`cut-rc` builds its release worktree from `HEAD` afterwards, the tagged commit inherits exactly the
+same files: `main` and the tag agree by construction, not coincidence. Refresh yours whenever you
+like -- `pdm run gen-docs`, then `git status` shows the diff.
+
+Regeneration also *prunes*: a page whose command was renamed or removed is deleted, not left behind.
+
+### The `cut-rc-prep` hook
+
+`bin/cut-rc` is meant to be reusable across projects and deliberately contains no policy of its own.
+Anything a specific project must do on `main` before a release is tagged goes in `bin/cut-rc-prep`,
+which `cut-rc` runs if it exists and is executable. A project needing none simply doesn't have the
+file.
+
+The contract: **`cut-rc-prep` may commit and push to `main`; when it returns, the working tree must
+be clean and in sync with `origin/main` again.** `cut-rc` verifies that both before and after
+calling it, rather than trusting it -- everything downstream tags whatever `HEAD` happens to be, so
+a hook that left work uncommitted would ship a release built from a tree nobody can reproduce.
+
+**The cover placeholder** has exactly one input, changes almost never, and its output is a
+non-reproducible binary (PNG bytes vary with Pillow and zlib versions), so an automated sync check
+would be flakier than the problem it guards. If you edit the generator, run `pdm run gen-cover` and
+commit both. Pillow is a dev-only dependency and never reaches users.
+
 ## Release workflow
 
 Releases follow a three-channel model:

@@ -145,6 +145,29 @@ trap 'git worktree remove --force "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 
 git worktree add --detach "$TMP" "$RC_SHA"
 
+# Restore README.md from the commit the rc was cut FROM, before any patching below.
+#
+# The rc commit's README is a derived artifact: cut-rc already rewrote its relative links into
+# absolute ones pinned to the rc tag (see scripts/rewrite_readme_links.py). Re-running that rewrite
+# here is a no-op, because those links are absolute now and the rewriter deliberately leaves
+# absolute URLs alone -- so without this, the published 1.0.0 README would point every "docs for
+# this version" link at v1.0.0-rc.N. (Exactly what shipped in 1.0.0.)
+#
+# The rule this encodes: regenerate derived files from the pristine source, never re-derive them
+# from a previous derivation. Everything else patched below is already immune, because it replaces
+# whole lines (version=, Source=, the badges) rather than transforming what it finds.
+#
+# cut-rc commits exactly one release commit on top of main, so that pristine source is the rc
+# commit's parent. Asserted rather than assumed, so this fails loudly if that ever stops holding.
+RC_SUBJECT=$(git log -1 --format=%s "$RC_SHA")
+if [[ "$RC_SUBJECT" != "chore: release "* ]]; then
+    echo "error: $RC_REF ($RC_SHA) is not a 'chore: release ...' commit (subject: $RC_SUBJECT)" >&2
+    echo "       cannot locate the pristine README.md to regenerate links from" >&2
+    exit 1
+fi
+SOURCE_SHA=$(git rev-parse "${RC_SHA}^")
+git -C "$TMP" checkout "$SOURCE_SHA" -- README.md
+
 pdm run python - "$PROD_VERSION" "$PACKAGE_NAME" "$GITHUB_REPO" "$TMP/pyproject.toml" "$TMP/README.md" <<'PY'
 import re, sys
 new, package_name, github_repo, toml_path, readme_path = sys.argv[1:6]

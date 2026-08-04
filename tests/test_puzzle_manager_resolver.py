@@ -186,3 +186,73 @@ def test_infer_refuses_without_puzzle_json_at_the_inferred_root(tmp_path: Path) 
     solution_file.write_text("print('hi')\n")
     with pytest.raises(CgPuzzleDirInferenceError):
         infer_puzzle_dir(solution_file)
+
+
+# --- active ("current") puzzle directory --------------------------------------------------------
+#
+# `cg puzzle import`/`activate` record what you're working on right now, distinct from the standing
+# `puzzleDir` preference. Without that, configuring `puzzleDir` and then importing somewhere else
+# would send every following command to the configured directory instead -- the one place the user
+# isn't looking.
+
+
+def _settings_with_dirs(
+            tmp_path: Path, *, puzzle_dir: str | None = None, current_puzzle_dir: str | None = None,
+        ) -> CgSettings:
+    config = CgConfig(config_file=tmp_path / "config.yaml", raw_data=CgConfigData())
+    return CgSettings(
+            settings_file=tmp_path / "settings.json",
+            raw_data=CgSettingsData(puzzle_dir=puzzle_dir, current_puzzle_dir=current_puzzle_dir),
+            config=config,
+        )
+
+
+def test_current_puzzle_dir_used_when_set(tmp_path: Path) -> None:
+    settings = _settings_with_dirs(tmp_path, current_puzzle_dir="active")
+
+    assert find_puzzle_dir(settings=settings, start_dir=tmp_path) == (tmp_path / "active").resolve()
+
+
+def test_current_puzzle_dir_outranks_the_configured_default(tmp_path: Path) -> None:
+    """The whole point of the setting: a standing preference must not hijack the directory you just
+       imported into."""
+    settings = _settings_with_dirs(tmp_path, puzzle_dir="configured", current_puzzle_dir="active")
+
+    assert find_puzzle_dir(settings=settings, start_dir=tmp_path) == (tmp_path / "active").resolve()
+
+
+def test_configured_default_used_once_deactivated(tmp_path: Path) -> None:
+    settings = _settings_with_dirs(tmp_path, puzzle_dir="configured", current_puzzle_dir=None)
+
+    assert find_puzzle_dir(settings=settings, start_dir=tmp_path) == (tmp_path / "configured").resolve()
+
+
+def test_explicit_and_env_still_outrank_the_active_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings_with_dirs(tmp_path, current_puzzle_dir="active")
+    explicit = tmp_path / "explicit"
+
+    assert find_puzzle_dir(explicit, settings=settings, start_dir=tmp_path) == explicit.resolve()
+
+    monkeypatch.setenv(CG_PUZZLE_DIR_ENV_VAR, str(tmp_path / "from-env"))
+    assert find_puzzle_dir(settings=settings, start_dir=tmp_path) == (tmp_path / "from-env").resolve()
+
+
+def test_discovery_matches_the_contribution_resolver(tmp_path: Path) -> None:
+    """The two resolvers are meant to be the same algorithm with different filenames. Asserted
+       because they're separate modules and have drifted apart before."""
+    from codingame_tools.contribution_manager.resolver import find_contribution_dir
+    from codingame_tools.contribution_manager.schema import CONTRIBUTION_IDENTITY_FILE_NAME
+
+    for identity, subdir, finder in (
+                (PUZZLE_IDENTITY_FILE_NAME, "puzzle", find_puzzle_dir),
+                (CONTRIBUTION_IDENTITY_FILE_NAME, "contribution", find_contribution_dir),
+            ):
+        root = tmp_path / f"{subdir}-case"
+        # cwd holding the identity file wins...
+        (root / subdir).mkdir(parents=True)
+        (root / identity).write_text("{}")
+        (root / subdir / identity).write_text("{}")
+        assert finder(start_dir=root) == root.resolve()
+        # ...and the conventional subdirectory is the fallback.
+        (root / identity).unlink()
+        assert finder(start_dir=root) == (root / subdir).resolve()

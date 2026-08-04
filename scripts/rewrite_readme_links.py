@@ -32,6 +32,12 @@ __all__ = ["rewrite_links", "rewrite_readme_file"]
 # markdown itself requires them to be escaped or angle-bracketed.
 _INLINE_LINK_RE = re.compile(r"(!?)\[([^\]]*)\]\(([^)\s]+)(\s+\"[^\"]*\")?\)")
 
+# A badge: an image wrapped in a link, `[![alt](img)](target)`. Needs its own pattern and must run
+# first, because `_INLINE_LINK_RE` matches the inner image and leaves the outer `](target)` with no
+# preceding `[...]` to match against--so a badge pointing at a relative path (a License badge
+# linking to `LICENSE`, say) would silently survive the rewrite and 404 on PyPI.
+_IMAGE_LINK_RE = re.compile(r"\[!\[([^\]]*)\]\(([^)\s]+)\)\]\(([^)\s]+)\)")
+
 # Reference-style definitions: `[label]: target` at the start of a line.
 _REFERENCE_DEF_RE = re.compile(r"^(\[[^\]]+\]:\s*)(\S+)(.*)$")
 
@@ -81,6 +87,16 @@ def rewrite_links(text: str, repo: str, ref: str, root: Path) -> str:
         if fence is not None:
             out.append(line)
             continue
+
+        def replace_image_link(match: re.Match[str]) -> str:
+            alt, image_target, link_target = match.groups()
+            if _is_relative_path(image_target):
+                image_target = _absolute_url(image_target, repo, ref, root, is_image=True)
+            if _is_relative_path(link_target):
+                link_target = _absolute_url(link_target, repo, ref, root, is_image=False)
+            return f"[![{alt}]({image_target})]({link_target})"
+
+        line = _IMAGE_LINK_RE.sub(replace_image_link, line)
 
         def replace_inline(match: re.Match[str]) -> str:
             bang, text_part, target, title = match.groups()

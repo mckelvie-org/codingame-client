@@ -17,6 +17,8 @@ Every `cg contribution` subcommand.
 | [`cg contribution build`](#cg-contribution-build) | Compile data/solution.src, if its language needs compiling (a no-op for interpreted languages like Python3). |
 | [`cg contribution vscode`](#cg-contribution-vscode) | Generate VS Code run/debug configuration for this contribution working directory. |
 | [`cg contribution set-language`](#cg-contribution-set-language) | Switch this contribution's reference-solution language, writing a fresh starter stub. |
+| [`cg contribution activate`](#cg-contribution-activate) | Make DIRECTORY the active contribution working directory, so subsequent `cg contribution` commands use it without needing --contribution-dir. |
+| [`cg contribution deactivate`](#cg-contribution-deactivate) | Clear the active contribution working directory, so `cg contribution` commands fall back to the configured default and the usual directory discovery. |
 | [`cg contribution where`](#cg-contribution-where) | Show which contribution working directory would be used. |
 | [`cg contribution status`](#cg-contribution-status) | Human-friendly summary of this contribution: submission/review status, sync status against the server, votes/comments/views, the moderator approve/reject gat... |
 | [`cg contribution discard-local`](#cg-contribution-discard-local) | Discard local edits: reset this working directory's content to match server's current tip exactly. |
@@ -121,6 +123,15 @@ positional arguments:
                         note that matching what the server currently has does NOT make it safe,
                         since that copy is what the next push destroys. Purely local--no network
                         call.
+    activate            Make DIRECTORY the active contribution working directory, so subsequent
+                        `cg contribution` commands use it without needing --contribution-dir. Set
+                        automatically by `cg contribution import`/`cg contribution create`, so
+                        this is for switching between working directories you already have.
+                        Outranks the configured default (`cg settings set contribution-dir`); `cg
+                        contribution deactivate` clears it.
+    deactivate          Clear the active contribution working directory, so `cg contribution`
+                        commands fall back to the configured default and the usual directory
+                        discovery. Does not touch any files--only the selection.
     where               Show which contribution working directory would be used.
     status              Human-friendly summary of this contribution: submission/review status,
                         sync status against the server, votes/comments/views, the moderator
@@ -200,7 +211,7 @@ options:
 ## `cg contribution import`
 
 ```text
-usage: cg contribution import [-h] CONTRIBUTION-ID DIRECTORY
+usage: cg contribution import [-h] DIRECTORY CONTRIBUTION-ID
 
 Build a fresh contribution working directory from an existing server-side contribution:
 findContribution, plus downloading the cover image if one is set, then initialize its git repo
@@ -208,10 +219,12 @@ findContribution, plus downloading the cover image if one is set, then initializ
 must not already exist. Ignores --contribution-dir.
 
 positional arguments:
-  CONTRIBUTION-ID  Opaque contribution ID string (see `cg api contribution find-contribution`).
   DIRECTORY        New directory to create the working directory in, or an existing one whose
                    contribution.json already tracks CONTRIBUTION-ID (to repair a missing git-dir--
-                   see also `cg contribution repair`).
+                   see also `cg contribution repair`). Always first, matching `cg contribution
+                   create` and `cg puzzle import`. Becomes the active contribution directory (see
+                   `cg contribution activate`).
+  CONTRIBUTION-ID  Opaque contribution ID string (see `cg api contribution find-contribution`).
 
 options:
   -h, --help       show this help message and exit
@@ -410,6 +423,38 @@ options:
   -h, --help   show this help message and exit
   --force, -f  Switch even though a real reference solution would be discarded. There is no way to
                get it back--save a copy outside the working directory first.
+```
+
+## `cg contribution activate`
+
+```text
+usage: cg contribution activate [-h] [DIRECTORY]
+
+Make DIRECTORY the active contribution working directory, so subsequent `cg contribution` commands
+use it without needing --contribution-dir. Set automatically by `cg contribution import`/`cg
+contribution create`, so this is for switching between working directories you already have.
+Outranks the configured default (`cg settings set contribution-dir`); `cg contribution deactivate`
+clears it.
+
+positional arguments:
+  DIRECTORY   The contribution working directory to activate. Defaults to the current directory,
+              so `cd` into one and run this with no arguments.
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## `cg contribution deactivate`
+
+```text
+usage: cg contribution deactivate [-h]
+
+Clear the active contribution working directory, so `cg contribution` commands fall back to the
+configured default and the usual directory discovery. Does not touch any files--only the
+selection.
+
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution where`

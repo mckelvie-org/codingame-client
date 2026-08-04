@@ -65,4 +65,45 @@ cg settings set contribution-dir ~/cg/contribution
 
 Without a setting, resolution falls back to the current directory, and then to `./puzzle` or
 `./contribution`. `cg puzzle where` and `cg contribution where` answer "which directory would this
-command actually use", which is usually faster than reasoning about it.
+command actually use", which is usually faster than reasoning about it. They print **only** the
+resolved path, so they compose: `cd "$(cg puzzle where)"`.
+
+## Active working directories
+
+A configured default says *where your work usually lives*. The **active** directory says *what
+you're working on right now*, and it wins:
+
+```bash
+cg puzzle import ./temperatures temperatures   # activates ./temperatures
+cg puzzle activate ./other                     # switch
+cg puzzle activate                             # ...or activate the current directory
+cg puzzle deactivate                           # back to the configured default
+```
+
+`cg contribution create`, `cg contribution import` and `cg contribution activate`/`deactivate` work
+identically.
+
+This exists because the two would otherwise fight. Set `puzzle-dir` to `~/cg/puzzle`, then import a
+puzzle into `./scratch`, and without an active directory every following command would quietly
+operate on `~/cg/puzzle` instead — the one place you weren't looking. Import and create therefore
+record what they just built.
+
+`delete` deactivates too, but only if the directory being deleted is the active one — deleting some
+*other* working directory must not silently change what you're working on.
+
+Stored in `settings.json` as `currentPuzzleDir`/`currentContributionDir`, and deliberately *not*
+readable from `config.yaml`: it's state the app maintains for you, not a preference you declare, and
+a config file pinning it would defeat `activate`/`deactivate` entirely.
+
+## Full resolution order
+
+Most specific first, for both puzzles and contributions:
+
+1. `--puzzle-dir` / `--contribution-dir`, or the directory argument to `import`/`create`
+2. `CG_PUZZLE_DIR` / `CG_CONTRIBUTION_DIR`
+3. the **active** directory (above)
+4. the configured default (`cg settings set puzzle-dir`, or `config.yaml`)
+5. the current directory, if it holds a `puzzle.json` / `contribution.json`
+6. `./puzzle` / `./contribution`, if it holds one
+
+Steps 1–4 are taken at face value; 5–6 only match when the identity file is actually there.
