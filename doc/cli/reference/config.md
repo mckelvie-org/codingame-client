@@ -14,63 +14,63 @@ Every `cg config` subcommand.
 ## `cg config`
 
 ```text
-usage: cg config [-h] COMMAND ...
+[1;34musage: [0m[1;35mcg config[0m [[32m-h[0m] [32mCOMMAND ...[0m
 
 Configuration commands.
 
-positional arguments:
-  COMMAND
-    init      Create a new config.yaml--project-local (under the current directory, or --at DIR)
+[1;34mpositional arguments:[0m
+  [1;32mCOMMAND[0m
+    [1;32minit[0m      Create a new config.yaml--project-local (under the current directory, or --at DIR)
               by default, or the shared per-user fallback location with --global. Does not consult
               the top-level --config/-c flag or CG_CONFIG--that's a discovery override for reading
               an existing config, not a placement option for creating a new one.
-    where     Show which config.yaml (if any) would be used, and where its persistent data
+    [1;32mwhere[0m     Show which config.yaml (if any) would be used, and where its persistent data
               directory resolves to.
-    dump      Dump the resolved configuration as JSON.
+    [1;32mdump[0m      Dump the resolved configuration as JSON.
 
-options:
-  -h, --help  show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
 ```
 
 ## `cg config init`
 
 ```text
-usage: cg config init [-h] [--global] [--at DIR] [--force]
+[1;34musage: [0m[1;35mcg config init[0m [[32m-h[0m] [[36m--global[0m] [[36m--at [33mDIR[0m] [[36m--force[0m]
 
 Create a new config.yaml--project-local (under the current directory, or --at DIR) by default, or
 the shared per-user fallback location with --global. Does not consult the top-level --config/-c
 flag or CG_CONFIG--that's a discovery override for reading an existing config, not a placement
 option for creating a new one.
 
-options:
-  -h, --help   show this help message and exit
-  --global     Create the shared, per-user fallback config instead of a project-local one.
-  --at DIR     Project-local only: directory to create .cg/config/config.yaml under. Defaults to
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m   show this help message and exit
+  [1;36m--global[0m     Create the shared, per-user fallback config instead of a project-local one.
+  [1;36m--at[0m [1;33mDIR[0m     Project-local only: directory to create .cg/config/config.yaml under. Defaults to
                the current directory.
-  --force, -f  Overwrite an existing config file at the target location.
+  [1;36m--force[0m, [1;32m-f[0m  Overwrite an existing config file at the target location.
 ```
 
 ## `cg config where`
 
 ```text
-usage: cg config where [-h]
+[1;34musage: [0m[1;35mcg config where[0m [[32m-h[0m]
 
 Show which config.yaml (if any) would be used, and where its persistent data directory resolves
 to.
 
-options:
-  -h, --help  show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
 ```
 
 ## `cg config dump`
 
 ```text
-usage: cg config dump [-h]
+[1;34musage: [0m[1;35mcg config dump[0m [[32m-h[0m]
 
 Dump the resolved configuration as JSON.
 
-options:
-  -h, --help  show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
 ```
 
 ---

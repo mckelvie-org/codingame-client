@@ -12,32 +12,32 @@ The `survey` service endpoint. See [`cg api`](index.md) for how these relate to 
 ## `cg api survey`
 
 ```text
-usage: cg api survey [-h] COMMAND ...
+[1;34musage: [0m[1;35mcg api survey[0m [[32m-h[0m] [32mCOMMAND ...[0m
 
 Survey service commands.
 
-positional arguments:
-  COMMAND
-    find-survey  Find a survey to potentially show a codingamer (UNVERIFIED--response shape
+[1;34mpositional arguments:[0m
+  [1;32mCOMMAND[0m
+    [1;32mfind-survey[0m  Find a survey to potentially show a codingamer (UNVERIFIED--response shape
                  unconfirmed).
 
-options:
-  -h, --help     show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m     show this help message and exit
 ```
 
 ## `cg api survey find-survey`
 
 ```text
-usage: cg api survey find-survey [-h] [--codingamer-id ID] [--limit N]
+[1;34musage: [0m[1;35mcg api survey find-survey[0m [[32m-h[0m] [[36m--codingamer-id [33mID[0m] [[36m--limit [33mN[0m]
 
 Find a survey to potentially show a codingamer (UNVERIFIED--response shape unconfirmed).
 
-options:
-  -h, --help            show this help message and exit
-  --codingamer-id, -g ID
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
                         Codingamer to find a survey for. Defaults to the logged-in codingamer's
                         ID.
-  --limit, -n N         Assumed maximum number of results; unconfirmed. Defaults to 2.
+  [1;36m--limit[0m, [1;32m-n[0m [1;33mN[0m         Assumed maximum number of results; unconfirmed. Defaults to 2.
 ```
 
 ---

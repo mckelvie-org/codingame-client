@@ -13,30 +13,30 @@ The `quest` service endpoint. See [`cg api`](index.md) for how these relate to t
 ## `cg api quest`
 
 ```text
-usage: cg api quest [-h] COMMAND ...
+[1;34musage: [0m[1;35mcg api quest[0m [[32m-h[0m] [32mCOMMAND ...[0m
 
 Quest service commands.
 
-positional arguments:
-  COMMAND
-    find-quest-map      Find a codingamer's quest map.
-    count-lootable-quests
+[1;34mpositional arguments:[0m
+  [1;32mCOMMAND[0m
+    [1;32mfind-quest-map[0m      Find a codingamer's quest map.
+    [1;32mcount-lootable-quests[0m
                         Count a codingamer's completed-but-unclaimed (lootable) quests.
 
-options:
-  -h, --help            show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
 ```
 
 ## `cg api quest find-quest-map`
 
 ```text
-usage: cg api quest find-quest-map [-h] [--codingamer-id ID]
+[1;34musage: [0m[1;35mcg api quest find-quest-map[0m [[32m-h[0m] [[36m--codingamer-id [33mID[0m]
 
 Find a codingamer's quest map.
 
-options:
-  -h, --help            show this help message and exit
-  --codingamer-id, -g ID
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
                         Codingamer whose quest map to fetch. Defaults to the logged-in
                         codingamer's ID.
 ```
@@ -44,13 +44,13 @@ options:
 ## `cg api quest count-lootable-quests`
 
 ```text
-usage: cg api quest count-lootable-quests [-h] [--codingamer-id ID]
+[1;34musage: [0m[1;35mcg api quest count-lootable-quests[0m [[32m-h[0m] [[36m--codingamer-id [33mID[0m]
 
 Count a codingamer's completed-but-unclaimed (lootable) quests.
 
-options:
-  -h, --help            show this help message and exit
-  --codingamer-id, -g ID
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
                         Codingamer to count lootable quests for. Defaults to the logged-in
                         codingamer's ID.
 ```

@@ -12,36 +12,36 @@ The `vote` service endpoint. See [`cg api`](index.md) for how these relate to th
 ## `cg api vote`
 
 ```text
-usage: cg api vote [-h] COMMAND ...
+[1;34musage: [0m[1;35mcg api vote[0m [[32m-h[0m] [32mCOMMAND ...[0m
 
 Vote service commands.
 
-positional arguments:
-  COMMAND
-    find-votable-values-by-id
+[1;34mpositional arguments:[0m
+  [1;32mCOMMAND[0m
+    [1;32mfind-votable-values-by-id[0m
                         Find a votable's current up/down-vote tally (e.g. a contribution's
                         CgContribution.votable_id)--CodinGame's generic community vote, distinct
                         from the moderator approve/reject gate (no known API for that yet).
 
-options:
-  -h, --help            show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
 ```
 
 ## `cg api vote find-votable-values-by-id`
 
 ```text
-usage: cg api vote find-votable-values-by-id [-h] [--codingamer-id ID] VOTABLE-ID
+[1;34musage: [0m[1;35mcg api vote find-votable-values-by-id[0m [[32m-h[0m] [[36m--codingamer-id [33mID[0m] [32mVOTABLE-ID[0m
 
 Find a votable's current up/down-vote tally (e.g. a contribution's
 CgContribution.votable_id)--CodinGame's generic community vote, distinct from the moderator
 approve/reject gate (no known API for that yet).
 
-positional arguments:
-  VOTABLE-ID            The votable entity's ID, e.g. a contribution's votableId.
+[1;34mpositional arguments:[0m
+  [1;32mVOTABLE-ID[0m            The votable entity's ID, e.g. a contribution's votableId.
 
-options:
-  -h, --help            show this help message and exit
-  --codingamer-id, -g ID
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
                         Codingamer whose own vote to report. Defaults to the logged-in
                         codingamer's ID.
 ```

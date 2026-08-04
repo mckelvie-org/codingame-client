@@ -12,28 +12,28 @@ The `clash-of-code-description` service endpoint. See [`cg api`](index.md) for h
 ## `cg api clash-of-code-description`
 
 ```text
-usage: cg api clash-of-code-description [-h] COMMAND ...
+[1;34musage: [0m[1;35mcg api clash-of-code-description[0m [[32m-h[0m] [32mCOMMAND ...[0m
 
 ClashOfCodeDescription service commands.
 
-positional arguments:
-  COMMAND
-    get-clash-description
+[1;34mpositional arguments:[0m
+  [1;32mCOMMAND[0m
+    [1;32mget-clash-description[0m
                         Get localized help/explainer content for Clash of Code.
 
-options:
-  -h, --help            show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
 ```
 
 ## `cg api clash-of-code-description get-clash-description`
 
 ```text
-usage: cg api clash-of-code-description get-clash-description [-h]
+[1;34musage: [0m[1;35mcg api clash-of-code-description get-clash-description[0m [[32m-h[0m]
 
 Get localized help/explainer content for Clash of Code.
 
-options:
-  -h, --help  show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
 ```
 
 ---

@@ -7,41 +7,41 @@ Thin wrappers over CodinGame's own service endpoints, one subcommand per API met
 ## `cg api`
 
 ```text
-usage: cg api [-h] COMMAND ...
+[1;34musage: [0m[1;35mcg api[0m [[32m-h[0m] [32mCOMMAND ...[0m
 
 Low-level API commands.
 
-positional arguments:
-  COMMAND
-    file-servlet        Download a file by server object ID (the fileservlet servlet).
-    file-upload         Upload a file from stdin (the fileupload servlet).
-    notification        Notification service commands.
-    contribution        Contribution service commands.
-    clash-of-code       ClashOfCode service commands.
-    clash-of-code-description
+[1;34mpositional arguments:[0m
+  [1;32mCOMMAND[0m
+    [1;32mfile-servlet[0m        Download a file by server object ID (the fileservlet servlet).
+    [1;32mfile-upload[0m         Upload a file from stdin (the fileupload servlet).
+    [1;32mnotification[0m        Notification service commands.
+    [1;32mcontribution[0m        Contribution service commands.
+    [1;32mclash-of-code[0m       ClashOfCode service commands.
+    [1;32mclash-of-code-description[0m
                         ClashOfCodeDescription service commands.
-    featured-event      FeaturedEvent service commands.
-    codingamer-puzzle-topic
+    [1;32mfeatured-event[0m      FeaturedEvent service commands.
+    [1;32mcodingamer-puzzle-topic[0m
                         CodingamerPuzzleTopic service commands.
-    puzzle              Puzzle service commands.
-    last-activities     LastActivities service commands.
-    quest               Quest service commands.
-    intercom            Intercom service commands.
-    survey              Survey service commands.
-    achievement         Achievement service commands.
-    user                User service commands.
-    test-session        TestSession service commands.
-    report              Report service commands.
-    test-session-question-submission
+    [1;32mpuzzle[0m              Puzzle service commands.
+    [1;32mlast-activities[0m     LastActivities service commands.
+    [1;32mquest[0m               Quest service commands.
+    [1;32mintercom[0m            Intercom service commands.
+    [1;32msurvey[0m              Survey service commands.
+    [1;32machievement[0m         Achievement service commands.
+    [1;32muser[0m                User service commands.
+    [1;32mtest-session[0m        TestSession service commands.
+    [1;32mreport[0m              Report service commands.
+    [1;32mtest-session-question-submission[0m
                         TestSessionQuestionSubmission service commands.
-    codingamer          CodinGamer service commands.
-    search              Search service commands.
-    programming-language
+    [1;32mcodingamer[0m          CodinGamer service commands.
+    [1;32msearch[0m              Search service commands.
+    [1;32mprogramming-language[0m
                         ProgrammingLanguage service commands.
-    vote                Vote service commands.
+    [1;32mvote[0m                Vote service commands.
 
-options:
-  -h, --help            show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
 ```
 
 ---

@@ -18,68 +18,68 @@ The `codingamer` service endpoint. See [`cg api`](index.md) for how these relate
 ## `cg api codingamer`
 
 ```text
-usage: cg api codingamer [-h] COMMAND ...
+[1;34musage: [0m[1;35mcg api codingamer[0m [[32m-h[0m] [32mCOMMAND ...[0m
 
 CodinGamer service commands.
 
-positional arguments:
-  COMMAND
-    find-codingame-points-stats-by-handle
+[1;34mpositional arguments:[0m
+  [1;32mCOMMAND[0m
+    [1;32mfind-codingame-points-stats-by-handle[0m
                         Find a codingamer's points/ranking stats by their opaque public handle.
-    find-codingamer-public-informations
+    [1;32mfind-codingamer-public-informations[0m
                         Find a codingamer's public profile information by their numeric ID.
-    find-followers      Find the followers of a codingamer.
-    find-following      Find the codingamers that a codingamer is following.
-    find-codingamer-follow-card
+    [1;32mfind-followers[0m      Find the followers of a codingamer.
+    [1;32mfind-following[0m      Find the codingamers that a codingamer is following.
+    [1;32mfind-codingamer-follow-card[0m
                         Find a codingamer's follow-card summary (profile plus follow-relationship
                         flags).
-    find-follower-ids   Find the numeric IDs of a codingamer's followers.
-    find-following-ids  Find the numeric IDs of the codingamers that a codingamer is following.
+    [1;32mfind-follower-ids[0m   Find the numeric IDs of a codingamer's followers.
+    [1;32mfind-following-ids[0m  Find the numeric IDs of the codingamers that a codingamer is following.
 
-options:
-  -h, --help            show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
 ```
 
 ## `cg api codingamer find-codingame-points-stats-by-handle`
 
 ```text
-usage: cg api codingamer find-codingame-points-stats-by-handle [-h] HANDLE
+[1;34musage: [0m[1;35mcg api codingamer find-codingame-points-stats-by-handle[0m [[32m-h[0m] [32mHANDLE[0m
 
 Find a codingamer's points/ranking stats by their opaque public handle.
 
-positional arguments:
-  HANDLE      Opaque codingamer public handle string (not the numeric codingamer ID).
+[1;34mpositional arguments:[0m
+  [1;32mHANDLE[0m      Opaque codingamer public handle string (not the numeric codingamer ID).
 
-options:
-  -h, --help  show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
 ```
 
 ## `cg api codingamer find-codingamer-public-informations`
 
 ```text
-usage: cg api codingamer find-codingamer-public-informations [-h] [--codingamer-id ID]
+[1;34musage: [0m[1;35mcg api codingamer find-codingamer-public-informations[0m [[32m-h[0m] [[36m--codingamer-id [33mID[0m]
 
 Find a codingamer's public profile information by their numeric ID.
 
-options:
-  -h, --help            show this help message and exit
-  --codingamer-id, -g ID
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
                         Codingamer numeric ID. Defaults to the logged-in codingamer's ID.
 ```
 
 ## `cg api codingamer find-followers`
 
 ```text
-usage: cg api codingamer find-followers [-h] [--codingamer-id ID] [--current-codingamer-id ID]
+[1;34musage: [0m[1;35mcg api codingamer find-followers[0m [[32m-h[0m] [[36m--codingamer-id [33mID[0m] [[36m--current-codingamer-id [33mID[0m]
 
 Find the followers of a codingamer.
 
-options:
-  -h, --help            show this help message and exit
-  --codingamer-id, -g ID
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
                         Codingamer whose followers to list. Defaults to the logged-in codingamer's
                         ID.
-  --current-codingamer-id, -c ID
+  [1;36m--current-codingamer-id[0m, [1;32m-c[0m [1;33mID[0m
                         Must equal the logged-in codingamer's ID (server-enforced). Defaults to
                         the logged-in codingamer's ID.
 ```
@@ -87,16 +87,16 @@ options:
 ## `cg api codingamer find-following`
 
 ```text
-usage: cg api codingamer find-following [-h] [--codingamer-id ID] [--current-codingamer-id ID]
+[1;34musage: [0m[1;35mcg api codingamer find-following[0m [[32m-h[0m] [[36m--codingamer-id [33mID[0m] [[36m--current-codingamer-id [33mID[0m]
 
 Find the codingamers that a codingamer is following.
 
-options:
-  -h, --help            show this help message and exit
-  --codingamer-id, -g ID
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
                         Codingamer whose followees to list. Defaults to the logged-in codingamer's
                         ID.
-  --current-codingamer-id, -c ID
+  [1;36m--current-codingamer-id[0m, [1;32m-c[0m [1;33mID[0m
                         Must equal the logged-in codingamer's ID (server-enforced). Defaults to
                         the logged-in codingamer's ID.
 ```
@@ -104,17 +104,17 @@ options:
 ## `cg api codingamer find-codingamer-follow-card`
 
 ```text
-usage: cg api codingamer find-codingamer-follow-card [-h] [--codingamer-id ID]
-                                                     [--current-codingamer-id ID]
+[1;34musage: [0m[1;35mcg api codingamer find-codingamer-follow-card[0m [[32m-h[0m] [[36m--codingamer-id [33mID[0m]
+                                                     [[36m--current-codingamer-id [33mID[0m]
 
 Find a codingamer's follow-card summary (profile plus follow-relationship flags).
 
-options:
-  -h, --help            show this help message and exit
-  --codingamer-id, -g ID
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
                         Codingamer whose follow card to fetch. Defaults to the logged-in
                         codingamer's ID.
-  --current-codingamer-id, -c ID
+  [1;36m--current-codingamer-id[0m, [1;32m-c[0m [1;33mID[0m
                         Must equal the logged-in codingamer's ID (server-enforced). Defaults to
                         the logged-in codingamer's ID.
 ```
@@ -122,13 +122,13 @@ options:
 ## `cg api codingamer find-follower-ids`
 
 ```text
-usage: cg api codingamer find-follower-ids [-h] [--codingamer-id ID]
+[1;34musage: [0m[1;35mcg api codingamer find-follower-ids[0m [[32m-h[0m] [[36m--codingamer-id [33mID[0m]
 
 Find the numeric IDs of a codingamer's followers.
 
-options:
-  -h, --help            show this help message and exit
-  --codingamer-id, -g ID
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
                         Codingamer whose follower IDs to list. Defaults to the logged-in
                         codingamer's ID.
 ```
@@ -136,13 +136,13 @@ options:
 ## `cg api codingamer find-following-ids`
 
 ```text
-usage: cg api codingamer find-following-ids [-h] [--codingamer-id ID]
+[1;34musage: [0m[1;35mcg api codingamer find-following-ids[0m [[32m-h[0m] [[36m--codingamer-id [33mID[0m]
 
 Find the numeric IDs of the codingamers that a codingamer is following.
 
-options:
-  -h, --help            show this help message and exit
-  --codingamer-id, -g ID
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
                         Codingamer whose followee IDs to list. Defaults to the logged-in
                         codingamer's ID.
 ```

@@ -16,36 +16,36 @@ The `featured-event` service endpoint. See [`cg api`](index.md) for how these re
 ## `cg api featured-event`
 
 ```text
-usage: cg api featured-event [-h] COMMAND ...
+[1;34musage: [0m[1;35mcg api featured-event[0m [[32m-h[0m] [32mCOMMAND ...[0m
 
 FeaturedEvent service commands.
 
-positional arguments:
-  COMMAND
-    find-upcoming-and-ongoing-featured-events
+[1;34mpositional arguments:[0m
+  [1;32mCOMMAND[0m
+    [1;32mfind-upcoming-and-ongoing-featured-events[0m
                         Find upcoming and ongoing site-wide featured events.
-    is-codingamer-auto-registered
+    [1;32mis-codingamer-auto-registered[0m
                         Check whether a codingamer is auto-registered for featured events.
-    find-new-featured-event-count
+    [1;32mfind-new-featured-event-count[0m
                         Count featured events published since a given point in time.
-    find-clash-slots    Find the individual scheduled Clash of Code slots belonging to a featured
+    [1;32mfind-clash-slots[0m    Find the individual scheduled Clash of Code slots belonging to a featured
                         event.
-    find-by-handle      Find a featured event by its opaque handle.
+    [1;32mfind-by-handle[0m      Find a featured event by its opaque handle.
 
-options:
-  -h, --help            show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
 ```
 
 ## `cg api featured-event find-upcoming-and-ongoing-featured-events`
 
 ```text
-usage: cg api featured-event find-upcoming-and-ongoing-featured-events [-h] [--codingamer-id ID]
+[1;34musage: [0m[1;35mcg api featured-event find-upcoming-and-ongoing-featured-events[0m [[32m-h[0m] [[36m--codingamer-id [33mID[0m]
 
 Find upcoming and ongoing site-wide featured events.
 
-options:
-  -h, --help            show this help message and exit
-  --codingamer-id, -g ID
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
                         Codingamer to check registration status for. Defaults to the logged-in
                         codingamer's ID.
 ```
@@ -53,13 +53,13 @@ options:
 ## `cg api featured-event is-codingamer-auto-registered`
 
 ```text
-usage: cg api featured-event is-codingamer-auto-registered [-h] [--codingamer-id ID]
+[1;34musage: [0m[1;35mcg api featured-event is-codingamer-auto-registered[0m [[32m-h[0m] [[36m--codingamer-id [33mID[0m]
 
 Check whether a codingamer is auto-registered for featured events.
 
-options:
-  -h, --help            show this help message and exit
-  --codingamer-id, -g ID
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
                         Codingamer to check. Must be the logged-in codingamer's own ID (server-
                         enforced). Defaults to the logged-in codingamer's ID.
 ```
@@ -67,13 +67,13 @@ options:
 ## `cg api featured-event find-new-featured-event-count`
 
 ```text
-usage: cg api featured-event find-new-featured-event-count [-h] [--since TIMESTAMP]
+[1;34musage: [0m[1;35mcg api featured-event find-new-featured-event-count[0m [[32m-h[0m] [[36m--since [33mTIMESTAMP[0m]
 
 Count featured events published since a given point in time.
 
-options:
-  -h, --help         show this help message and exit
-  --since TIMESTAMP  Count featured events published after this point in time. Can be milliseconds
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m         show this help message and exit
+  [1;36m--since[0m [1;33mTIMESTAMP[0m  Count featured events published after this point in time. Can be milliseconds
                      since epoch (e.g., '1680000000000'), a duration string (e.g., '1h30m'), a
                      relative duration from now (e.g., '-1h30m'), or an ISO 8601 datetime string.
                      Defaults to now.
@@ -82,29 +82,29 @@ options:
 ## `cg api featured-event find-clash-slots`
 
 ```text
-usage: cg api featured-event find-clash-slots [-h] FEATURED-EVENT-ID
+[1;34musage: [0m[1;35mcg api featured-event find-clash-slots[0m [[32m-h[0m] [32mFEATURED-EVENT-ID[0m
 
 Find the individual scheduled Clash of Code slots belonging to a featured event.
 
-positional arguments:
-  FEATURED-EVENT-ID  The numeric 'id' of a CLASH_OF_CODE-type featured event (not its 'handle').
+[1;34mpositional arguments:[0m
+  [1;32mFEATURED-EVENT-ID[0m  The numeric 'id' of a CLASH_OF_CODE-type featured event (not its 'handle').
 
-options:
-  -h, --help         show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m         show this help message and exit
 ```
 
 ## `cg api featured-event find-by-handle`
 
 ```text
-usage: cg api featured-event find-by-handle [-h] HANDLE
+[1;34musage: [0m[1;35mcg api featured-event find-by-handle[0m [[32m-h[0m] [32mHANDLE[0m
 
 Find a featured event by its opaque handle.
 
-positional arguments:
-  HANDLE      Opaque featured event handle string.
+[1;34mpositional arguments:[0m
+  [1;32mHANDLE[0m      Opaque featured event handle string.
 
-options:
-  -h, --help  show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
 ```
 
 ---

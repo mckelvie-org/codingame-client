@@ -17,33 +17,33 @@
 ## `cg`
 
 ```text
-usage: cg [-h] [--trace-http] [--profile PROFILE] [--json] [--config PATH]
-          [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}] [--tb] [--input-file INPUT_FILE]
-          [--output-file OUTPUT_FILE]
-          COMMAND ...
+[1;34musage: [0m[1;35mcg[0m [[32m-h[0m] [[36m--trace-http[0m] [[36m--profile [33mPROFILE[0m] [[36m--json[0m] [[36m--config [33mPATH[0m]
+          [[36m--log-level [33m{DEBUG,INFO,WARNING,ERROR,CRITICAL}[0m] [[36m--tb[0m] [[36m--input-file [33mINPUT_FILE[0m]
+          [[36m--output-file [33mOUTPUT_FILE[0m]
+          [32mCOMMAND ...[0m
 
 Codingame client command-line interface.
 
-positional arguments:
-  COMMAND
-    content-hash        Compute a content hash from stdin content.
-    login               Log in and save the credentials. By default, opens a browser window for
+[1;34mpositional arguments:[0m
+  [1;32mCOMMAND[0m
+    [1;32mcontent-hash[0m        Compute a content hash from stdin content.
+    [1;32mlogin[0m               Log in and save the credentials. By default, opens a browser window for
                         the user to log in interactively.
-    logout              Log out of a given profile's session.
-    whoami              Show the current logged-in user and other session info for the given
+    [1;32mlogout[0m              Log out of a given profile's session.
+    [1;32mwhoami[0m              Show the current logged-in user and other session info for the given
                         profile.
-    status              Summarize the current session: login status, profile details, and
+    [1;32mstatus[0m              Summarize the current session: login status, profile details, and
                         points/rank stats for the logged-in codingamer. Always hits the network--
                         there's no cached/local mode, unlike `cg contribution status`/`cg puzzle
                         status` (that's the whole point of this command). "Gamer stats" are
                         informational, not a breakdown of one another--see
                         CgCodingamePointsRankingDto's docstring for why. With --json (top-level
                         option), renders as JSON instead of text.
-    raw-api             Raw (unstructured JSON) API commands.
-    api                 Low-level API commands.
-    api-helper          Higher-level helper commands, layered on top of the plain API wrappers
+    [1;32mraw-api[0m             Raw (unstructured JSON) API commands.
+    [1;32mapi[0m                 Low-level API commands.
+    [1;32mapi-helper[0m          Higher-level helper commands, layered on top of the plain API wrappers
                         (retries, polling, data normalization).
-    contributions       List server-side contributions, one line per contribution (handle, id,
+    [1;32mcontributions[0m       List server-side contributions, one line per contribution (handle, id,
                         status, puzzle type, title). By default lists all pending (community-
                         review-queue) contributions from every author
                         (`Contribution/getAllPendingContributions`); --personal lists only the
@@ -52,41 +52,41 @@ positional arguments:
                         prints the raw list instead--shape depends on which endpoint was used
                         (CgPendingContribution vs CgPersonalContribution--no unified schema
                         between the two yet).
-    contribution        Contribution working directory commands--manage a local, possibly-
+    [1;32mcontribution[0m        Contribution working directory commands--manage a local, possibly-
                         uncommitted working view of a single contribution, backed by a real git
                         repo (see codingame_tools.contribution_manager.manager for the
                         main/server/version-data branch design). See `cg api contribution`/`cg
                         api-helper contribution` for the raw, stateless API this is built on.
-    puzzle              Puzzle working directory commands--solve an existing CodinGame puzzle
+    [1;32mpuzzle[0m              Puzzle working directory commands--solve an existing CodinGame puzzle
                         locally. Much simpler than `cg contribution`: exactly one file
                         (data/solution.src) is ever editable, so there's no git repo involved--see
                         codingame_tools.puzzle_manager.manager's module docstring. Currently only
                         classic PUZZLE_INOUT puzzles are supported.
-    docker              Manage the Docker containers and images cg builds for compiled languages
+    [1;32mdocker[0m              Manage the Docker containers and images cg builds for compiled languages
                         (currently C++). Nothing here holds anything you authored--see `cg docker
                         clean`.
-    config              Configuration commands.
-    settings            Settings commands (app-managed persistent state in settings.json, as
+    [1;32mconfig[0m              Configuration commands.
+    [1;32msettings[0m            Settings commands (app-managed persistent state in settings.json, as
                         opposed to the user-edited config.yaml--see `cg config`).
 
-options:
-  -h, --help            show this help message and exit
-  --trace-http          Log detailed HTTP info (method, URL, headers, cookies) at DEBUG level.
-  --profile, -p PROFILE
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--trace-http[0m          Log detailed HTTP info (method, URL, headers, cookies) at DEBUG level.
+  [1;36m--profile[0m, [1;32m-p[0m [1;33mPROFILE[0m
                         Profile name to store credentials and browser session state under.
                         Defaults to the client's default profile.
-  --json, -j            Where supported, output information in JSON format.
-  --config, -c PATH     Explicit config.yaml file, or a directory containing config/config.yaml.
+  [1;36m--json[0m, [1;32m-j[0m            Where supported, output information in JSON format.
+  [1;36m--config[0m, [1;32m-c[0m [1;33mPATH[0m     Explicit config.yaml file, or a directory containing config/config.yaml.
                         Overrides the normal discovery search (see `cg config where`). Same as the
                         CG_CONFIG environment variable; this flag takes precedence if both are
                         set.
-  --log-level, -l {DEBUG,INFO,WARNING,ERROR,CRITICAL}
+  [1;36m--log-level[0m, [1;32m-l[0m [1;33m{DEBUG,INFO,WARNING,ERROR,CRITICAL}[0m
                         Logging level (default: WARNING).
-  --tb                  Display full traceback on error.
-  --input-file, -i INPUT_FILE
+  [1;36m--tb[0m                  Display full traceback on error.
+  [1;36m--input-file[0m, [1;32m-i[0m [1;33mINPUT_FILE[0m
                         Read from the given file instead of stdin. Reopens sys.stdin for the
                         duration of the command.
-  --output-file, -o OUTPUT_FILE
+  [1;36m--output-file[0m, [1;32m-o[0m [1;33mOUTPUT_FILE[0m
                         Write to the given file instead of stdout. Reopens sys.stdout for the
                         duration of the command.
 ```
@@ -94,53 +94,53 @@ options:
 ## `cg content-hash`
 
 ```text
-usage: cg content-hash [-h]
+[1;34musage: [0m[1;35mcg content-hash[0m [[32m-h[0m]
 
 Compute a content hash from stdin content.
 
-options:
-  -h, --help  show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
 ```
 
 ## `cg login`
 
 ```text
-usage: cg login [-h] [--force] [--no-validate] [--manual] [--remember-me REMEMBER_ME]
-                [--cg-session CG_SESSION] [--clean] [--timeout SECONDS]
+[1;34musage: [0m[1;35mcg login[0m [[32m-h[0m] [[36m--force[0m] [[36m--no-validate[0m] [[36m--manual[0m] [[36m--remember-me [33mREMEMBER_ME[0m]
+                [[36m--cg-session [33mCG_SESSION[0m] [[36m--clean[0m] [[36m--timeout [33mSECONDS[0m]
 
 Log in and save the credentials. By default, opens a browser window for the user to log in
 interactively.
 
-options:
-  -h, --help            show this help message and exit
-  --force, -f           Force a login even if persistent credentials already exist. By default,
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--force[0m, [1;32m-f[0m           Force a login even if persistent credentials already exist. By default,
                         login is skipped if credentials already exist for the profile. Note that
                         freshness of credentials is not checked in any case; if they are expired,
                         the client will fail to use them.
-  --no-validate, -q     Skip validation of the credentials after login.
-  --manual, -m          Perform manual login instead of browser login. Implied by presence of
+  [1;36m--no-validate[0m, [1;32m-q[0m     Skip validation of the credentials after login.
+  [1;36m--manual[0m, [1;32m-m[0m          Perform manual login instead of browser login. Implied by presence of
                         --remember-me or --cg-session.
-  --remember-me, -r REMEMBER_ME
+  [1;36m--remember-me[0m, [1;32m-r[0m [1;33mREMEMBER_ME[0m
                         Remember me cookie value, for manual (non-browser) login.
-  --cg-session, -s CG_SESSION
+  [1;36m--cg-session[0m, [1;32m-s[0m [1;33mCG_SESSION[0m
                         cgSession cookie value, for manual (non-browser) login.
-  --clean, -c           If a browser is created, force a clean browser profile and a fresh login
+  [1;36m--clean[0m, [1;32m-c[0m           If a browser is created, force a clean browser profile and a fresh login
                         flow. By default, the existing browser session state is used if it exists,
                         so that repeated logins for the same profile are generally automatic.
-  --timeout, -t SECONDS
+  [1;36m--timeout[0m, [1;32m-t[0m [1;33mSECONDS[0m
                         Maximum seconds to wait for browser login completion (default: 300).
 ```
 
 ## `cg logout`
 
 ```text
-usage: cg logout [-h] [--keep-browser-session]
+[1;34musage: [0m[1;35mcg logout[0m [[32m-h[0m] [[36m--keep-browser-session[0m]
 
 Log out of a given profile's session.
 
-options:
-  -h, --help            show this help message and exit
-  --keep-browser-session, -k
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--keep-browser-session[0m, [1;32m-k[0m
                         Keep the existing browser session even when logging out of the profile. If
                         the browser session is logged in, it will remain logged in and will auto-
                         login without user authentication at the next profile login. By default,
@@ -151,18 +151,18 @@ options:
 ## `cg whoami`
 
 ```text
-usage: cg whoami [-h]
+[1;34musage: [0m[1;35mcg whoami[0m [[32m-h[0m]
 
 Show the current logged-in user and other session info for the given profile.
 
-options:
-  -h, --help  show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
 ```
 
 ## `cg status`
 
 ```text
-usage: cg status [-h]
+[1;34musage: [0m[1;35mcg status[0m [[32m-h[0m]
 
 Summarize the current session: login status, profile details, and points/rank stats for the
 logged-in codingamer. Always hits the network--there's no cached/local mode, unlike `cg
@@ -170,14 +170,14 @@ contribution status`/`cg puzzle status` (that's the whole point of this command)
 are informational, not a breakdown of one another--see CgCodingamePointsRankingDto's docstring for
 why. With --json (top-level option), renders as JSON instead of text.
 
-options:
-  -h, --help  show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
 ```
 
 ## `cg contributions`
 
 ```text
-usage: cg contributions [-h] [--personal]
+[1;34musage: [0m[1;35mcg contributions[0m [[32m-h[0m] [[36m--personal[0m]
 
 List server-side contributions, one line per contribution (handle, id, status, puzzle type,
 title). By default lists all pending (community-review-queue) contributions from every author
@@ -186,9 +186,9 @@ contributions, any status (`Contribution/getPersonalContributions`). With --json
 option), prints the raw list instead--shape depends on which endpoint was used
 (CgPendingContribution vs CgPersonalContribution--no unified schema between the two yet).
 
-options:
-  -h, --help  show this help message and exit
-  --personal  List only the logged-in codingamer's own contributions (any status), instead of all
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+  [1;36m--personal[0m  List only the logged-in codingamer's own contributions (any status), instead of all
               pending contributions from every author.
 ```
 

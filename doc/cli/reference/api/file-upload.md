@@ -7,20 +7,20 @@ The `file-upload` service endpoint. See [`cg api`](index.md) for how these relat
 ## `cg api file-upload`
 
 ```text
-usage: cg api file-upload [-h] [--filename FILENAME] [--content-type CONTENT_TYPE]
-                          [--prev-id PREV_ID] [--prev-content-hash PREV_CONTENT_HASH]
+[1;34musage: [0m[1;35mcg api file-upload[0m [[32m-h[0m] [[36m--filename [33mFILENAME[0m] [[36m--content-type [33mCONTENT_TYPE[0m]
+                          [[36m--prev-id [33mPREV_ID[0m] [[36m--prev-content-hash [33mPREV_CONTENT_HASH[0m]
 
 Upload a file from stdin (the fileupload servlet).
 
-options:
-  -h, --help            show this help message and exit
-  --filename FILENAME   Optional filename provided to the server for the uploaded file; e.g.,
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--filename[0m [1;33mFILENAME[0m   Optional filename provided to the server for the uploaded file; e.g.,
                         'cover.png'.
-  --content-type CONTENT_TYPE
+  [1;36m--content-type[0m [1;33mCONTENT_TYPE[0m
                         Optional content type for the uploaded file; e.g., 'application/octet-
                         stream'.
-  --prev-id PREV_ID     Optional previous file ID for the uploaded file; e.g., 12345.
-  --prev-content-hash PREV_CONTENT_HASH
+  [1;36m--prev-id[0m [1;33mPREV_ID[0m     Optional previous file ID for the uploaded file; e.g., 12345.
+  [1;36m--prev-content-hash[0m [1;33mPREV_CONTENT_HASH[0m
                         Optional previous content hash for the uploaded file.
 ```
 

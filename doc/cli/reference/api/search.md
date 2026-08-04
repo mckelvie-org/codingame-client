@@ -12,32 +12,32 @@ The `search` service endpoint. See [`cg api`](index.md) for how these relate to 
 ## `cg api search`
 
 ```text
-usage: cg api search [-h] COMMAND ...
+[1;34musage: [0m[1;35mcg api search[0m [[32m-h[0m] [32mCOMMAND ...[0m
 
 Search service commands.
 
-positional arguments:
-  COMMAND
-    search    Search for codingamers, puzzles, and other objects by name.
+[1;34mpositional arguments:[0m
+  [1;32mCOMMAND[0m
+    [1;32msearch[0m    Search for codingamers, puzzles, and other objects by name.
 
-options:
-  -h, --help  show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
 ```
 
 ## `cg api search search`
 
 ```text
-usage: cg api search search [-h] [--locale LOCALE] [--type TYPE] QUERY
+[1;34musage: [0m[1;35mcg api search search[0m [[32m-h[0m] [[36m--locale [33mLOCALE[0m] [[36m--type [33mTYPE[0m] [32mQUERY[0m
 
 Search for codingamers, puzzles, and other objects by name.
 
-positional arguments:
-  QUERY                Search query text, e.g. a codingamer's pseudo or part of a puzzle title.
+[1;34mpositional arguments:[0m
+  [1;32mQUERY[0m                Search query text, e.g. a codingamer's pseudo or part of a puzzle title.
 
-options:
-  -h, --help           show this help message and exit
-  --locale, -l LOCALE  Locale code for localized result names, e.g. 'en', 'fr'. Defaults to 'en'.
-  --type, -t TYPE      Restrict results to a single result type, e.g. 'USER', 'PUZZLE'. Defaults
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m           show this help message and exit
+  [1;36m--locale[0m, [1;32m-l[0m [1;33mLOCALE[0m  Locale code for localized result names, e.g. 'en', 'fr'. Defaults to 'en'.
+  [1;36m--type[0m, [1;32m-t[0m [1;33mTYPE[0m      Restrict results to a single result type, e.g. 'USER', 'PUZZLE'. Defaults
                        to no filter (all types).
 ```
 

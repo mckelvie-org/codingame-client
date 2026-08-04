@@ -12,31 +12,31 @@ The `report` service endpoint. See [`cg api`](index.md) for how these relate to 
 ## `cg api report`
 
 ```text
-usage: cg api report [-h] COMMAND ...
+[1;34musage: [0m[1;35mcg api report[0m [[32m-h[0m] [32mCOMMAND ...[0m
 
 Report service commands.
 
-positional arguments:
-  COMMAND
-    find-report-by-submission
+[1;34mpositional arguments:[0m
+  [1;32mCOMMAND[0m
+    [1;32mfind-report-by-submission[0m
                         Find the results report for a single puzzle submission.
 
-options:
-  -h, --help            show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
 ```
 
 ## `cg api report find-report-by-submission`
 
 ```text
-usage: cg api report find-report-by-submission [-h] SUBMISSION-ID
+[1;34musage: [0m[1;35mcg api report find-report-by-submission[0m [[32m-h[0m] [32mSUBMISSION-ID[0m
 
 Find the results report for a single puzzle submission.
 
-positional arguments:
-  SUBMISSION-ID  Numeric ID of the submission.
+[1;34mpositional arguments:[0m
+  [1;32mSUBMISSION-ID[0m  Numeric ID of the submission.
 
-options:
-  -h, --help     show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m     show this help message and exit
 ```
 
 ---

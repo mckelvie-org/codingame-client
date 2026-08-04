@@ -13,48 +13,48 @@ The `clash-of-code` service endpoint. See [`cg api`](index.md) for how these rel
 ## `cg api clash-of-code`
 
 ```text
-usage: cg api clash-of-code [-h] COMMAND ...
+[1;34musage: [0m[1;35mcg api clash-of-code[0m [[32m-h[0m] [32mCOMMAND ...[0m
 
 ClashOfCode service commands.
 
-positional arguments:
-  COMMAND
-    get-clash-rank-by-codingamer-id
+[1;34mpositional arguments:[0m
+  [1;32mCOMMAND[0m
+    [1;32mget-clash-rank-by-codingamer-id[0m
                         Get a codingamer's global Clash of Code ranking.
-    find-clash-by-handle
+    [1;32mfind-clash-by-handle[0m
                         Find a Clash of Code session by its handle.
 
-options:
-  -h, --help            show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
 ```
 
 ## `cg api clash-of-code get-clash-rank-by-codingamer-id`
 
 ```text
-usage: cg api clash-of-code get-clash-rank-by-codingamer-id [-h] [--codingamer-id ID]
+[1;34musage: [0m[1;35mcg api clash-of-code get-clash-rank-by-codingamer-id[0m [[32m-h[0m] [[36m--codingamer-id [33mID[0m]
 
 Get a codingamer's global Clash of Code ranking.
 
-options:
-  -h, --help            show this help message and exit
-  --codingamer-id, -g ID
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
                         Codingamer numeric ID. Defaults to the logged-in codingamer's ID.
 ```
 
 ## `cg api clash-of-code find-clash-by-handle`
 
 ```text
-usage: cg api clash-of-code find-clash-by-handle [-h] HANDLE
+[1;34musage: [0m[1;35mcg api clash-of-code find-clash-by-handle[0m [[32m-h[0m] [32mHANDLE[0m
 
 Find a Clash of Code session by its handle.
 
-positional arguments:
-  HANDLE      Opaque clash-instance handle string (a per-slot handle from 'api featured-event
+[1;34mpositional arguments:[0m
+  [1;32mHANDLE[0m      Opaque clash-instance handle string (a per-slot handle from 'api featured-event
               find-clash-slots'; not a codingamer handle or the parent featured event's own handle
               --both are rejected by the server).
 
-options:
-  -h, --help  show this help message and exit
+[1;34moptions:[0m
+  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
 ```
 
 ---
