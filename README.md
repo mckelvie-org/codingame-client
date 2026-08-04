@@ -1,7 +1,7 @@
 # codingame-tools
 
 [![CI](https://img.shields.io/badge/CI-passing-brightgreen.svg)](https://github.com/mckelvie-org/codingame-tools/actions/workflows/ci.yml)
-[![PyPI version](https://img.shields.io/badge/pypi-v1.0.0rc2-blue.svg)](https://test.pypi.org/project/codingame-tools/1.0.0rc2/)
+[![PyPI version](https://img.shields.io/badge/pypi-v1.0.0-blue.svg)](https://pypi.org/project/codingame-tools/1.0.0/)
 [![Python versions](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12%20|%203.13%20|%203.14-blue.svg)](https://pypi.org/project/codingame-tools/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
