@@ -2,6 +2,10 @@
 
 ## {{UNRELEASED}}
 
+- _Add release notes here._
+
+## 1.0.0 (2026-08-04)
+
 - **Removed the git-URL dependency on a private dataclass-wizard fork; the package is publishable
   again.** PyPI rejects any distribution whose metadata contains a direct URL dependency, so the
   `git+https://` pin could never be released — and publishing the fork under its own name would have
