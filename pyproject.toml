@@ -120,7 +120,7 @@ includes = ["codingame_tools"]
 [tool.pdm.scripts]
 test = "pytest"
 gen-docs = "python scripts/gen_cli_docs.py"
-gen-cover = "python scripts/gen_cover_placeholder.py"
+gen-default-cover-image = "python scripts/gen_cover_placeholder.py"
 test-live-unauthenticated = "pytest -m live_unauthenticated"
 test-live = "pytest -m live"
 lint = "ruff check ."

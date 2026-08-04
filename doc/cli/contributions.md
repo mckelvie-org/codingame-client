@@ -36,7 +36,7 @@ the meantime.
 
 The image is shipped as package data rather than rendered on demand — it's identical for every
 contribution, so generating it at runtime would mean every user of this library carrying a 15 MB
-imaging dependency to produce a constant. Regenerate it with `pdm run gen-cover`.
+imaging dependency to produce a constant. Regenerate it with `bin/gen-default-cover-image`.
 
 Both take the **directory first**, matching `cg puzzle import`, and both make it the
 [active contribution](../concepts/profiles.md#active-working-directories) — so subsequent commands

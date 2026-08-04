@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Usage: gen-default-cover-image [OUTPUT_PATH]
+#
+# Regenerate the "under construction" cover placeholder that `cg contribution create` seeds into
+# data/cover.png. Writes codingame_tools/contribution_manager/assets/cover-placeholder.png unless
+# OUTPUT_PATH is given.
+#
+# Unlike the CLI reference, this one is treated as source: edit scripts/gen_cover_placeholder.py,
+# run this, and commit both together. Needs Pillow, which is a dev-only dependency and never reaches
+# users -- the image is baked into the wheel rather than rendered at runtime.
+#
+# Named in full rather than `gen-cover` because a developer of this package is also a *user* of
+# it -- both live in the same working tree. `cg contribution create` seeds a cover for a user's
+# own contribution, so "generate a cover" is a plausible thing for them to want; a command that
+# rebuilds the shipped *default* placeholder has to say so in its name.
+#
+# Thin wrapper around `pdm run gen-default-cover-image`, which is the same thing. It exists so
+# that `ls bin/` shows the actions available in this project without having to remember which
+# are pdm scripts.
+set -euo pipefail
+
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd "$SCRIPT_DIR/.."
+
+exec pdm run gen-default-cover-image "$@"

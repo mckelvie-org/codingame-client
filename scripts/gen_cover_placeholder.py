@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Regenerate the "under construction" cover placeholder that `cg contribution create` seeds.
 
-    pdm run gen-cover
+    bin/gen-default-cover-image
 
 The result is committed as package data
 (`codingame_tools/contribution_manager/assets/cover-placeholder.png`) and shipped in the wheel, so

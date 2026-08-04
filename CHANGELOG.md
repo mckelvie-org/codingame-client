@@ -16,7 +16,7 @@
   image (traffic cones, hard hat, hazard stripes) — it's the one seeded placeholder that becomes
   *visible*, since `push` uploads whatever is there, and a tasteful title card would go unnoticed
   and get published. Shipped as package data rather than rendered at runtime, so no imaging
-  dependency reaches users; `pdm run gen-cover` regenerates it and owns the only Pillow use, as a
+  dependency reaches users; `bin/gen-default-cover-image` regenerates it and owns the only Pillow use, as a
   dev dependency.
 
   The seeded content is deliberately self-consistent: statement, descriptions, constraints, stub

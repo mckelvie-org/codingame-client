@@ -564,7 +564,7 @@ def _cover_placeholder_bytes() -> bytes:
        unnoticed and end up published; this can't. New contributions are private drafts, so nobody
        else sees it in the meantime.
 
-       Regenerate with `pdm run gen-cover`--see `scripts/gen_cover_placeholder.py`."""
+       Regenerate with `bin/gen-default-cover-image`--see `scripts/gen_cover_placeholder.py`."""
     # One component per joinpath() call: Traversable.joinpath is single-argument in the typeshed
     # signature, and multi-argument support only arrived in 3.11.
     return (files("codingame_tools.contribution_manager")

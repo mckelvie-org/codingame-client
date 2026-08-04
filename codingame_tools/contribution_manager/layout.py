@@ -56,7 +56,7 @@ COVER_PLACEHOLDER_ASSET_NAME = "cover-placeholder.png"
 
    Baked rather than rendered at runtime: it's identical for every contribution, so generating it
    on demand would make every consumer of this library carry a 15 MB compiled imaging dependency to
-   produce a constant. Regenerate with `pdm run gen-cover` (see `scripts/gen_cover_placeholder.py`,
+   produce a constant. Regenerate with `bin/gen-default-cover-image` (see `scripts/gen_cover_placeholder.py`,
    which owns the only Pillow dependency and explains why the image is deliberately ugly)."""
 
 COVER_IMAGE_FILE_NAME = "cover.png"
