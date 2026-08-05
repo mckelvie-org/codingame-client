@@ -2,7 +2,32 @@
 
 ## {{UNRELEASED}}
 
-- _Add release notes here._
+- **PyPI now has a `Documentation` link, and `Changelog` points somewhere that exists.** `Changelog`
+  previously pointed at GitHub Releases, which is empty because this project doesn't publish
+  releases; both now point at the release's own files, so the sidebar links on a given version's
+  PyPI page describe *that* version.
+
+  `bin/cut-rc` and `bin/cut-prod` pin them at release time, the way they already pinned `Source`.
+  Pinning requires two conditions, so project-scoped links are never version-stamped: the key must
+  be one PyPI treats as version-scoped (`Documentation`/`Changelog`), **and** the value must look
+  like a GitHub `blob`/`tree` URL. `Homepage` and `Bug Tracker` are left alone even when they point
+  at a `blob/main` URL, and a `Documentation` pointing at Read the Docs matches nothing and stays
+  unpinned.
+
+  Not switched to real GitHub Releases: a version's PyPI page wants *that version's* notes, and the
+  `/releases` index isn't version-aware, so a pinned `CHANGELOG.md` is a better answer to the click.
+  Creating releases is also a step that runs after the PyPI upload has already succeeded, so its
+  failure mode is a half-published release. If they're added later, repoint `Changelog` at
+  `/releases/tag/vX.Y.Z`, which beats both.
+
+- **`bin/cut-rc` refuses to cut a release candidate with no release notes**, since `cut-prod`
+  promotes the rc snapshot verbatim and never consults `main` — notes written afterwards can never
+  reach the release. Checked before anything is pushed or tagged, so a doomed run doesn't first burn
+  an rc number and a TestPyPI publish. `--no-changelog` asserts there genuinely are none and records
+  "No notable changes." rather than shipping the placeholder as the permanent record.
+
+  `cut-prod`'s matching check now says the notes were needed before the *release candidate*, and
+  that reaching it at all means `cut-rc`'s gate was bypassed.
 
 ## 1.0.3 (2026-08-05)
 

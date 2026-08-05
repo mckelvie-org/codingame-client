@@ -193,6 +193,21 @@ updated = re.sub(r'^(version\s*=\s*")[^"]*(")', rf'\g<1>{new}\2', text, flags=re
 assert updated != text, "version= line not found in pyproject.toml"
 source_url = f"https://github.com/{github_repo}/tree/v{new}"
 updated = re.sub(r'^(Source\s*=\s*")[^"]*(")', rf'\g<1>{source_url}\2', updated, flags=re.MULTILINE)
+
+# Pin the version-scoped project URLs to this release's tag, so PyPI's sidebar links for a given
+# version point at that version's files.
+#
+# Two conditions, both required, so that project-scoped links are never stamped with a version:
+#   1. the key is one PyPI treats as version-scoped (Documentation/Changelog; Source is handled
+#      above). Homepage and Bug Tracker describe the project, not a release, and are left alone
+#      even if they happen to point at a blob/tree URL.
+#   2. the value actually looks like a GitHub blob/tree URL. A project pointing Documentation at
+#      Read the Docs, or at a deliberately-unpinned /latest/ URL, matches nothing and is untouched.
+for _key in ("Documentation", "Changelog"):
+    updated = re.sub(
+        rf'^("?{_key}"?\s*=\s*"https://github\.com/[^"]*?/(?:blob|tree)/)(?:main|v[0-9][^/"]*)(/[^"]*")',
+        rf'\g<1>v{new}\g<2>', updated, flags=re.MULTILINE)
+
 with open(toml_path, "w") as f:
     f.write(updated)
 
