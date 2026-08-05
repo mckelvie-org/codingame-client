@@ -24,6 +24,17 @@
   failure mode is a half-published release. If they're added later, repoint `Changelog` at
   `/releases/tag/vX.Y.Z`, which beats both.
 
+- **`bin/cut-prod` no longer requires a clean working tree, a particular branch, or a checkout of
+  the rc.** Promotion is built entirely from the rc tag in a throwaway worktree — it never reads
+  your working tree, your current branch, or `main` — so those gates blocked releases for reasons
+  that cannot affect what ships. They existed only to protect the optional post-publish rebase of
+  local `main`, which is now best-effort: it skips with a note if the tree is dirty or the rebase
+  won't apply, and can never fail a release that has already been published.
+
+  `CONTRIBUTING.md` updated to match: the "check out the rc tag first" flow is gone (`cut-prod`
+  promotes `rc-latest` by default), as is the stale claim that `cut-rc` merely *warns* about an
+  unfilled changelog, and `cut-rc`'s `--no-changelog` flag is now documented alongside `--force`.
+
 - **`bin/cut-rc` refuses to cut a release candidate with no release notes**, since `cut-prod`
   promotes the rc snapshot verbatim and never consults `main` — notes written afterwards can never
   reach the release. Checked before anything is pushed or tagged, so a doomed run doesn't first burn

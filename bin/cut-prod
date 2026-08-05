@@ -8,11 +8,11 @@
 # release (i.e. cut-rc succeeded end to end) -- not just a local rc-looking
 # version string.
 #
-# After a successful prod tag push, waits for the triggered Publish workflow
-# and, on success, syncs local main with origin/main (which that workflow may
-# have just bumped) -- rebasing if main is your current branch, or
-# fast-forwarding the local main ref otherwise, without disturbing whatever
-# you're currently checked out on (normally a detached rc/prod commit).
+# After a successful prod tag push, waits for the triggered Publish workflow and then, as a
+# convenience only, tries to sync local main with origin/main (which that workflow may have
+# just bumped). Best-effort: it never fails the release, and it leaves your working tree
+# alone. Nothing about promotion reads your working tree or your current branch -- the
+# release is built entirely from the rc tag -- so no clean-tree gate is imposed.
 #
 # Usage: cut-prod [--force] [RC_REF]
 #   --force  overwrite an existing tag (allows retrying a failed publish)
@@ -33,28 +33,15 @@ if [[ "${1:-}" == "--force" ]]; then
     shift
 fi
 
-if ! git diff --quiet || ! git diff --cached --quiet; then
-    echo "error: working tree has uncommitted changes — commit or stash first" >&2
-    exit 1
-fi
-
 git fetch --force --tags origin
 
-# If on a named branch, it must be fully in sync with its upstream before
-# proceeding. A detached checkout (the normal case: sitting on an rc tag) has
-# nothing to sync -- the commit is already reachable from origin via its tag.
-CURRENT_BRANCH=$(git branch --show-current)
-if [[ -n "$CURRENT_BRANCH" ]]; then
-    UPSTREAM="origin/$CURRENT_BRANCH"
-    if git rev-parse --verify -q "$UPSTREAM" >/dev/null; then
-        LOCAL_SHA=$(git rev-parse HEAD)
-        UPSTREAM_SHA=$(git rev-parse "$UPSTREAM")
-        if [[ "$LOCAL_SHA" != "$UPSTREAM_SHA" ]]; then
-            echo "error: local $CURRENT_BRANCH ($LOCAL_SHA) is not in sync with $UPSTREAM ($UPSTREAM_SHA) — pull/rebase (and push, if you have local commits) first" >&2
-            exit 1
-        fi
-    fi
-fi
+# Deliberately no clean-tree or branch-in-sync gate here. Promotion is built entirely from the rc
+# tag, in a throwaway worktree -- it never reads your working tree, your current branch, or main.
+# Requiring a clean tree would block a release for reasons that cannot affect its content.
+#
+# Those conditions do matter for the *optional* convenience sync at the very end (rebasing local
+# main onto whatever the publish workflow bumped), so they're checked there instead, where a failure
+# can be skipped with a message rather than refusing to release.
 
 # Resolve the RC ref to promote.
 if [[ $# -gt 0 ]]; then
@@ -306,14 +293,25 @@ fi
 
 echo "Watching run $RUN_ID..." >&2
 if gh run watch "$RUN_ID" --exit-status; then
-    echo "Publish succeeded. Syncing local main..." >&2
+    echo "Publish succeeded." >&2
+    # Convenience only, and strictly best-effort: the release is already out, so nothing here may
+    # fail the command. Anyone who'd rather sync by hand can ignore all of it.
     if [[ "$(git branch --show-current)" == "main" ]]; then
-        git fetch origin main
-        git rebase origin/main
+        if git diff --quiet && git diff --cached --quiet; then
+            git fetch origin main && git rebase origin/main \
+                && echo "Local main rebased onto origin/main." >&2 \
+                || echo "note: could not rebase local main -- sync it yourself when convenient." >&2
+        else
+            echo "note: working tree has uncommitted changes, so local main was not rebased." >&2
+            echo "      Run 'git pull --rebase' when you're ready." >&2
+        fi
     else
-        git fetch origin main:main
+        # Not on main, so this only moves the ref -- safe with a dirty tree. Fails harmlessly if
+        # local main has diverged, which is the user's business, not this script's.
+        git fetch origin main:main 2>/dev/null \
+            && echo "Local main fast-forwarded to origin/main." >&2 \
+            || echo "note: local main was not fast-forwarded (diverged?) -- sync it yourself." >&2
     fi
-    echo "main is now in sync with origin/main." >&2
 else
     echo "error: Publish workflow failed — see the run above for details" >&2
     exit 1

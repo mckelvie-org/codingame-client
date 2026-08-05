@@ -45,8 +45,10 @@ Once the above is in place:
 
 1. (optional) `bin/bump-dev [patch|minor|major]` — for a deliberate semantic version bump on `main`
 2. `bin/cut-rc` — pushes a `v*-rc.*` tag → triggers `publish-test.yml` → TestPyPI, then waits for that workflow and reports its outcome
-3. `git checkout v<x.y.z>-rc.<n>` — check out the rc that TestPyPI just accepted
-4. `bin/cut-prod` — pushes a `v*.*.*` tag → triggers `publish.yml` → PyPI + syncs `main` (changelog + version bump), then waits for that workflow and syncs your local `main`
+3. `bin/cut-prod` — promotes the most recent published rc (`rc-latest`) → pushes a `v*.*.*` tag → triggers `publish.yml` → PyPI, then waits for that workflow
+
+Run both from wherever you like: `cut-prod` builds entirely from the rc tag and never reads `main`
+or your working tree, so there's no branch to check out first and no need for a clean tree.
 
 ---
 
@@ -172,10 +174,19 @@ release actually happens, so there's no version string here that can ever drift 
   leaves a fresh, empty `## {{UNRELEASED}}` heading in place on `main`, ready for the next round of
   notes, so you never have to remember to re-add it yourself.
 
-If you never replace `cut-rc`'s placeholder (`- _Add release notes here._`) with real notes,
-`cut-rc` warns but still lets the rc through (it's disposable and only reaches TestPyPI), while
-`cut-prod` **refuses to promote** -- that text should never end up in the permanent, published
-`CHANGELOG.md`.
+**`cut-rc` refuses to cut an rc whose `## {{UNRELEASED}}` entry is missing or still the
+placeholder.** The notes have to exist *before* the rc, because `cut-prod` promotes the rc snapshot
+verbatim and never consults `main` -- anything written afterwards can never reach the release. The
+check runs before anything is pushed or tagged, so a refused run doesn't first burn an rc number and
+a TestPyPI publish discovering it.
+
+If there genuinely is nothing to report, `bin/cut-rc --no-changelog` says so explicitly and records
+`- No notable changes.`, rather than shipping the placeholder as the permanent record. It commits
+that to `main` too, so `main` and the rc agree.
+
+`cut-prod` keeps the same check as a backstop. Reaching it means `cut-rc`'s gate was bypassed (or
+the rc predates it), and by then it can only refuse -- there is no `main` for it to pick notes up
+from.
 
 You're free to revise the entry and cut additional rc's as many times as you like -- each `cut-rc`
 re-snapshots whatever `main` currently looks like -- just make sure the changelog reflects what you
@@ -189,8 +200,12 @@ promoting, never live `main`.
 Run from `main`:
 
 ```bash
-bin/cut-rc [--force]
+bin/cut-rc [--force] [--no-changelog]
 ```
+
+- `--force` — overwrite an existing rc tag (for retrying a failed publish).
+- `--no-changelog` — assert there are no reportable changes for this release; see the changelog
+  section above. Without it, `cut-rc` refuses when the unreleased entry is missing or unfilled.
 
 `cut-rc` first requires a clean working tree and local `main` to be exactly in sync with
 `origin/main` (any mismatch -- ahead, behind, or diverged -- is an error; pull/rebase and/or push
@@ -208,25 +223,23 @@ Use `--force` to overwrite an existing tag and retry a failed publish.
 ### Cut a production release
 
 `cut-prod` promotes an rc that has *already been published to TestPyPI* -- it isn't just working
-from a version string, it verifies the rc is really there. The recommended flow is to check out
-the rc tag first, so you're never sitting on `main` (and therefore never at risk of doing new work
-on `main`) while a release is in flight:
+from a version string, it verifies the rc is really there. Normally you just run it:
 
 ```bash
-git checkout v<x.y.z>-rc.<n>
 bin/cut-prod [--force]
 ```
 
+No checkout, no clean working tree, no particular branch. The release is built entirely from the rc
+tag in a throwaway worktree, so **nothing about your local state can affect what ships** -- and
+requiring a clean tree would block a release for reasons that cannot influence its content. `main`
+is neither read nor modified; the publish workflow updates it afterwards.
+
 `RC_REF` (`bin/cut-prod [--force] [RC_REF]`) is optional. Resolution order:
 1. Explicit argument (tag, sha, or bare version like `1.0.5-rc.1`).
-2. `HEAD`, if it is itself tagged with a `v<x.y.z>-rc.<n>` tag (the normal case after `git checkout` above).
-3. The `rc-latest` tag (the most recently published rc), if HEAD isn't tagged.
+2. `HEAD`, if it is itself tagged with a `v<x.y.z>-rc.<n>` tag (i.e. you deliberately checked one out).
+3. The `rc-latest` tag -- the most recently *successfully published* rc, and the normal case.
 
-`cut-prod` requires:
-- A clean working tree.
-- If you're on a named branch (rather than detached at an rc tag), that branch must be exactly in
-  sync with its upstream -- no local-only commits. A detached rc checkout has nothing to sync,
-  since the commit is already reachable from origin via its tag.
+`cut-prod` requires exactly one thing:
 - The resolved rc version must actually exist on TestPyPI (checked directly against
   `test.pypi.org`, with a short retry to ride out any residual index-propagation lag) --
   promoting an rc that never successfully published is refused.
@@ -248,10 +261,13 @@ needed, rather than trusting a stale snapshot, and retries a few times if its pu
 (the winner's sync may already satisfy the requirement, in which case there's nothing left to do).
 
 After pushing the prod tag, `cut-prod` waits for the triggered `Publish` workflow to finish and
-shows its live status. On success, it syncs your local `main` with `origin/main` (which the
-workflow may have just bumped) -- rebasing in place if `main` is your current branch, or otherwise
-just fast-forwarding the local `main` ref without touching your current (normally still-detached)
-checkout. On failure, it reports the error and exits non-zero; `main` is left alone.
+shows its live status. On failure it reports the error and exits non-zero.
+
+On success it *tries* to sync your local `main` with `origin/main` (which the workflow may have just
+bumped), as a pure convenience -- rebasing in place if `main` is your current branch and your tree
+is clean, otherwise just fast-forwarding the local `main` ref. Every part of that is best-effort and
+prints a note if it's skipped: the release is already published by then, so nothing here is allowed
+to fail the command or touch your working tree. Sync by hand whenever you prefer.
 
 Use `--force` to overwrite an existing tag and retry a failed publish.
 
