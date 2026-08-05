@@ -101,6 +101,7 @@ from .layout import (
     MAIN_BRANCH_NAME,
     META_SUBDIR_NAME,
     OUTPUT_DESCRIPTION_FILE_NAME,
+    SELECTED_TEST_FILE_NAME,
     SERVER_BRANCH_NAME,
     SERVER_TAG_PREFIX,
     SOLUTION_FILE_NAME,
@@ -119,6 +120,7 @@ from .schema import (
     CONTRIBUTION_IDENTITY_FILE_NAME,
     CONTRIBUTION_SCHEMA_VERSION,
     CgContributionIdentity,
+    CgContributionSelectedTest,
     CgContributionSolutionSnapshot,
     CgContributionStatusCache,
     CgContributionView,
@@ -1984,6 +1986,58 @@ class CgContributionManager:
     def solution_snapshot_file(self) -> Path:
         """Path to `.meta/solution-snapshot.json`--see `CgContributionSolutionSnapshot`."""
         return self.meta_dir / SOLUTION_SNAPSHOT_FILE_NAME
+
+    @property
+    def selected_test_file(self) -> Path:
+        """Path to `.meta/selected-test.json`--see `CgContributionSelectedTest`."""
+        return self.meta_dir / SELECTED_TEST_FILE_NAME
+
+    def load_selected_test(self) -> CgContributionSelectedTest | None:
+        """The explicitly selected test case, or None if none has been chosen."""
+        if not self.selected_test_file.is_file():
+            return None
+        return CgContributionSelectedTest.load(self.selected_test_file)
+
+    def select_test(self, ordinal: str, side: str) -> None:
+        """Choose which test case the debugger runs against.
+
+        Raises:
+            CgContributionManagerError: if no test case matches, so a typo surfaces now rather than
+                                         when a debug session fails to start.
+        """
+        matching = self.list_local_tests(
+                [ordinal], local=side == "local", validator=side == "validator")
+        if not matching:
+            available = ", ".join(f"{tc.ordinal}/{tc.side}" for tc in self.list_local_tests()) or "(none)"
+            raise CgContributionManagerError(
+                    f"No {side} test case with ordinal {ordinal!r}. Available: {available}.")
+        self.meta_dir.mkdir(parents=True, exist_ok=True)
+        CgContributionSelectedTest(ordinal=matching[0].ordinal, side=side).save(self.selected_test_file)
+
+    def clear_selected_test(self) -> None:
+        """Forget the explicit selection, falling back to the default (the first local test)."""
+        self.selected_test_file.unlink(missing_ok=True)
+
+    def resolve_debug_test(self) -> CgContributionLocalTestCase:
+        """Which single test a debug session should use: the selection, else the first *local* test.
+
+           Local rather than merely first: validators are the hidden, scoring cases, and landing in
+           a debugger on one by default would be surprising. Falls back to the first test of any
+           side only if there are no local ones at all.
+
+        Raises:
+            CgContributionManagerError: if `tests/` holds no test cases.
+        """
+        all_tests = self.list_local_tests()
+        if not all_tests:
+            raise CgContributionManagerError(f"No test cases in {self.tests_dir}.")
+        selected = self.load_selected_test()
+        if selected is not None:
+            for test_case in all_tests:
+                if test_case.ordinal == selected.ordinal and test_case.side == selected.side:
+                    return test_case
+        locals_first = [tc for tc in all_tests if tc.side == "local"]
+        return (locals_first or all_tests)[0]
 
     def load_solution_snapshot(self) -> CgContributionSolutionSnapshot | None:
         """The starter stub this client last generated into `data/solution.src`, or `None` if there

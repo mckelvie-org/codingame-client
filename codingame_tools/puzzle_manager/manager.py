@@ -101,6 +101,7 @@ from .schema import (
     PUZZLE_SCHEMA_VERSION,
     CgPuzzleData,
     CgPuzzleIdentity,
+    CgPuzzleSelectedTest,
     CgPuzzleServerData,
     CgPuzzleSolutionSnapshot,
 )
@@ -137,6 +138,7 @@ _DEFAULT_IMPORT_LANGUAGE: CgSolutionLanguage = "Python3"
 _PUZZLE_DATA_FILE_NAME = "puzzle-data.json"
 _PUZZLE_SERVER_DATA_FILE_NAME = "puzzle-server-data.json"
 _SOLUTION_SNAPSHOT_FILE_NAME = "solution-snapshot.json"
+_SELECTED_TEST_FILE_NAME = "selected-test.json"
 
 
 class CgPuzzleManagerError(Exception):
@@ -418,6 +420,54 @@ class CgPuzzleManager:
     def solution_snapshot_file(self) -> Path:
         """Path to `.meta/solution-snapshot.json`--see `CgPuzzleSolutionSnapshot`."""
         return self.meta_dir / _SOLUTION_SNAPSHOT_FILE_NAME
+
+    @property
+    def selected_test_file(self) -> Path:
+        """Path to `.meta/selected-test.json`--see `CgPuzzleSelectedTest`."""
+        return self.meta_dir / _SELECTED_TEST_FILE_NAME
+
+    def load_selected_test(self) -> CgPuzzleSelectedTest | None:
+        """The explicitly selected test case, or None if none has been chosen."""
+        if not self.selected_test_file.is_file():
+            return None
+        return CgPuzzleSelectedTest.load(self.selected_test_file)
+
+    def select_test(self, test_index: int) -> None:
+        """Choose which test case the debugger runs against.
+
+        Raises:
+            CgPuzzleManagerError: if no downloaded test case has that index--catching a typo now
+                                   rather than at the moment a debug session fails to start.
+        """
+        available = [tc.index for tc in list_downloaded_test_cases(self.tests_dir)]
+        if test_index not in available:
+            raise CgPuzzleManagerError(
+                    f"No downloaded test case with index {test_index}. "
+                    f"Available: {', '.join(str(i) for i in available) or '(none--run `cg puzzle repair`)'}.")
+        self.meta_dir.mkdir(parents=True, exist_ok=True)
+        CgPuzzleSelectedTest(test_index=test_index).save(self.selected_test_file)
+
+    def clear_selected_test(self) -> None:
+        """Forget the explicit selection, falling back to the default (the first test case)."""
+        self.selected_test_file.unlink(missing_ok=True)
+
+    def resolve_debug_test_index(self) -> int:
+        """Which single test a debug session should use: the selection, else the first test case.
+
+           Defaulting rather than refusing is deliberate--debugging works immediately after an
+           import, with no selection step, which is the common case.
+
+        Raises:
+            CgPuzzleManagerError: if there are no downloaded test cases at all.
+        """
+        downloaded = list_downloaded_test_cases(self.tests_dir)
+        if not downloaded:
+            raise CgPuzzleManagerError(
+                    f"No downloaded test cases in {self.tests_dir}--run `cg puzzle repair` first.")
+        selected = self.load_selected_test()
+        if selected is not None and any(tc.index == selected.test_index for tc in downloaded):
+            return selected.test_index
+        return downloaded[0].index
 
     @property
     def puzzle_data_file(self) -> Path:

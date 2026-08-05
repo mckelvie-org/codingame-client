@@ -114,6 +114,30 @@ class CgPuzzleServerData(JSONWizardX):
 
 
 @dataclass
+class CgPuzzleSelectedTest(JSONWizardX):
+    """`.meta/selected-test.json`: which single test case the debugger should run against.
+
+       Debugging needs exactly one test, because a debug session gets one stdin. This used to be a
+       `pickString` dropdown baked into `launch.json`, which meant `launch.json` had to be
+       regenerated for every working directory and every re-import--the list of options *is*
+       per-directory state. Recording the choice here instead makes the launch configuration static:
+       one per language, workspace-wide.
+
+       Absent means "no explicit choice", and callers fall back to the first downloaded test rather
+       than failing--so debugging works immediately after an import, with no selection step.
+
+       Gitignored and disposable like the rest of `.meta/`: "which test am I focused on right now"
+       is exactly the sort of thing that shouldn't survive a fresh clone. `repair()` leaves it
+       alone (it only ever rewrites specific files and wipes `.meta/tests/`), so a repair doesn't
+       silently reset your focus."""
+
+    test_index: int
+    """1-based index of the selected test case, matching `CgPuzzleDownloadedTestCase.index`."""
+
+    extra_data: CatchAll = field(default_factory=dict)
+
+
+@dataclass
 class CgPuzzleSolutionSnapshot(JSONWizardX):
     """`.meta/solution-snapshot.json`: exactly what this client last wrote into
        `data/solution.src`, and in which language.

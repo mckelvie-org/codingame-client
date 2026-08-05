@@ -20,6 +20,7 @@ __all__ = [
     "META_SUBDIR_NAME",
     "GIT_METADATA_SUBDIR_NAME",
     "CONTRIBUTION_STATUS_CACHE_FILE_NAME",
+    "SELECTED_TEST_FILE_NAME",
     "SOLUTION_SNAPSHOT_FILE_NAME",
     "GITIGNORE_FILE_NAME",
     "MAIN_BRANCH_NAME",
@@ -80,6 +81,9 @@ GIT_METADATA_SUBDIR_NAME = ".contribution-git"
 """Name of the actual git-dir directory (objects/refs/HEAD/index/config) under `META_SUBDIR_NAME`.
    Deliberately not named `.git`--see `manager`'s module docstring for why nothing inside `data/`
    may ever carry a literal `.git` marker."""
+
+SELECTED_TEST_FILE_NAME = "selected-test.json"
+"""Name of `.meta/`'s selected-test file--see `CgContributionSelectedTest`."""
 
 CONTRIBUTION_STATUS_CACHE_FILE_NAME = "contribution-status.json"
 

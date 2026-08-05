@@ -56,6 +56,27 @@ CONTRIBUTION_SCHEMA_VERSION = 1
 
 
 @dataclass
+class CgContributionSelectedTest(JSONWizardX):
+    """`.meta/selected-test.json`: which single test case the debugger should run against.
+
+       See `codingame_tools.puzzle_manager.schema.CgPuzzleSelectedTest` for why this lives in
+       `.meta/` rather than as a `pickString` in `launch.json`. A contribution needs a side as well
+       as an ordinal, since the same ordinal can hold both a local and a validator test.
+
+       Absent means "no explicit choice", and callers fall back to the first *local* test--the one
+       an author is normally iterating on. Validators are the hidden, scoring ones; defaulting to a
+       validator would be a surprising thing to land in a debugger."""
+
+    ordinal: str
+    """The ordinal directory name, e.g. `"01"`. A sort key, not necessarily a clean integer."""
+
+    side: str
+    """`"local"` or `"validator"`."""
+
+    extra_data: CatchAll = field(default_factory=dict)
+
+
+@dataclass
 class CgContributionIdentity(JSONWizardX):
     """The `contribution.json` manifest: global identity for a contribution working directory,
        constant for its lifetime (never changes across `import_`/`push`/`merge`/etc.--unlike

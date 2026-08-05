@@ -430,3 +430,39 @@ async def test_debug_session_is_fed_the_value_not_the_file(
     # ...and that really is one byte fewer than the file holds.
     on_disk = manager.list_local_tests()[0].input_file.read_text()
     assert on_disk == stored_input + "\n"
+
+
+# --- debug test selection ------------------------------------------------------------------------
+
+
+def test_debug_selection_defaults_to_the_first_local_test(tmp_path: Path) -> None:
+    """Not merely the first test: validators are the hidden, scoring cases, and landing in a
+       debugger on one by default would be a surprising place to start."""
+    manager = _setup(tmp_path, [
+            _tc("V", "9", "9", is_test=False, is_validator=True),
+            _tc("L", "1", "1", is_test=True, is_validator=False),
+        ])
+
+    chosen = manager.resolve_debug_test()
+
+    assert chosen.side == "local"
+
+
+def test_debug_selection_is_explicit_when_set(tmp_path: Path) -> None:
+    manager = _setup(tmp_path, [
+            _tc("A", "1", "1", is_test=True, is_validator=False),
+            _tc("B", "2", "2", is_test=True, is_validator=False),
+        ])
+
+    manager.select_test("02", "local")
+    assert manager.resolve_debug_test().ordinal == "02"
+
+    manager.clear_selected_test()
+    assert manager.resolve_debug_test().ordinal == "01"
+
+
+def test_selecting_a_missing_test_is_refused(tmp_path: Path) -> None:
+    manager = _setup(tmp_path, [_tc("A", "1", "1", is_test=True, is_validator=False)])
+
+    with pytest.raises(CgContributionManagerError, match="No validator test case with ordinal"):
+        manager.select_test("01", "validator")
