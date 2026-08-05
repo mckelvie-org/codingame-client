@@ -2,6 +2,10 @@
 
 ## {{UNRELEASED}}
 
+- _Add release notes here._
+
+## 1.0.5 (2026-08-05)
+
 - **PyPI now has a `Documentation` link, and `Changelog` points somewhere that exists.** `Changelog`
   previously pointed at GitHub Releases, which is empty because this project doesn't publish
   releases; both now point at the release's own files, so the sidebar links on a given version's

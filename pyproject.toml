@@ -4,7 +4,7 @@ build-backend = "pdm.backend"
 
 [project]
 name = "codingame-tools"
-version = "1.0.5-dev.1"
+version = "1.0.6-dev.1"
 description = "Python package codingame-tools"
 readme = "README.md"
 license = { file = "LICENSE" }
