@@ -2,6 +2,10 @@
 
 ## {{UNRELEASED}}
 
+- _Add release notes here._
+
+## 1.0.3 (2026-08-05)
+
 - No notable changes.
 
 ## 1.0.0 (2026-08-04)
