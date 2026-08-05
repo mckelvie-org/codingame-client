@@ -235,6 +235,27 @@ echo "Watching run $RUN_ID..." >&2
 if gh run watch "$RUN_ID" --exit-status; then
     echo "Publish TestPyPI succeeded for v$RC_VERSION." >&2
 else
-    echo "error: Publish TestPyPI workflow failed — see the run above for details" >&2
+    cat >&2 <<EOF
+
+========================================================================
+  RELEASE CANDIDATE FAILED TO PUBLISH
+========================================================================
+  The tag v$RC_VERSION was created and pushed, but the Publish TestPyPI
+  workflow failed. Nothing was published.
+
+  Consequence worth knowing: the workflow updates the 'rc-latest' tag
+  only on success, so 'rc-latest' still points at the PREVIOUS release
+  candidate. 'cut-prod' with no argument resolves through 'rc-latest',
+  so it would silently try to promote that older rc -- which is almost
+  certainly not what you want.
+
+  To recover, either:
+    - fix the failure, then cut a new rc (the usual path); or
+    - name the rc explicitly:  bin/cut-prod v$RC_VERSION
+
+  Run: $(gh run view "$RUN_ID" --json url --jq .url 2>/dev/null || echo "see GitHub Actions")
+========================================================================
+
+EOF
     exit 1
 fi

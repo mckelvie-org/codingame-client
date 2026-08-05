@@ -129,14 +129,24 @@ def test_already_pinned_links_are_not_repointed() -> None:
 
 
 def test_the_readme_offers_pinned_and_unpinned_documentation_links() -> None:
-    """All three doc links, and each pointing where it should after a release rewrite.
+    """All three doc links, each pointing where it should: one pinned to a version, two tracking.
 
-       They're easy to conflate and the difference only shows up on a published page: "this version"
-       must be pinned to the release tag, while "latest release" and "in development" must keep
-       tracking `prod-latest` and `main` for a reader who landed on an old version's page."""
+       They're easy to conflate, and the difference only shows up on a published page -- "this
+       version" must be pinned to the release tag, while "latest release" and "in development" keep
+       tracking `prod-latest` and `main` for a reader who landed on an old version's page.
+
+       **Must pass from a release commit as well as from `main`,** which is the subtlety that
+       matters here: CI checks out the *tag*, and `bin/cut-rc` has already rewritten that README, so
+       its links are absolute and pinned to the real release. Rewriting them again is correctly a
+       no-op (the rewriter leaves absolute URLs alone), so asserting on this test's own fake `REF`
+       holds only on `main`. An earlier version of this test did exactly that and failed every
+       release candidate's publish -- after tagging and pushing, which is the expensive place to
+       find out. Hence matching any version tag rather than one specific ref."""
     rewritten = _rewrite((REPO_ROOT / "README.md").read_text(encoding="utf-8"))
+    prefix = re.escape(f"https://github.com/{REPO}/blob")
 
-    assert f"https://github.com/{REPO}/blob/{REF}/doc/index.md" in rewritten
+    assert re.search(rf"{prefix}/v[0-9][^/]*/doc/index\.md", rewritten), \
+        "no version-pinned documentation link"
     assert f"https://github.com/{REPO}/blob/prod-latest/doc/index.md" in rewritten
     assert f"https://github.com/{REPO}/blob/main/doc/index.md" in rewritten
 
