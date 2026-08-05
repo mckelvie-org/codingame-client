@@ -204,8 +204,9 @@ PY
 
 # Finalize the CHANGELOG entry for this version: fill in the version and date where the
 # version-independent "{{UNRELEASED}}" sentinel was. Refuses to promote if the entry still has
-# cut-rc's own placeholder text -- that would mean no one ever wrote real release notes, and
-# unlike a TestPyPI-only rc, this is the permanent, published record.
+# cut-rc's own placeholder text. cut-prod promotes the rc snapshot verbatim and never reads
+# main, so notes not present in the rc cannot appear here -- which is why cut-rc gates on
+# this too, and why reaching this point means that gate was bypassed.
 pdm run python - "$PROD_VERSION" "$TMP/CHANGELOG.md" <<'PY'
 import datetime, re, sys
 version, path = sys.argv[1], sys.argv[2]
@@ -219,8 +220,12 @@ with open(path) as f:
 m = re.search(r"^## \{\{UNRELEASED\}\}\n(.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
 if m and m.group(1).strip() == "- _Add release notes here._":
     sys.exit(
-        "error: CHANGELOG.md's unreleased entry is still just cut-rc's placeholder -- "
-        "write real release notes before cutting a production release."
+        "error: this rc's CHANGELOG.md still has cut-rc's placeholder as its unreleased entry.\n"
+        "       Release notes must be written before cutting the RELEASE CANDIDATE: cut-prod\n"
+        "       promotes the rc snapshot verbatim and never consults main, so there is nothing\n"
+        "       for it to pick up now.\n"
+        "       Reaching this point means cut-rc's own gate was bypassed (or predates it). Cut a\n"
+        "       new rc with real notes, or with --no-changelog if there genuinely are none."
     )
 
 date = datetime.date.today().isoformat()

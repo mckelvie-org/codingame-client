@@ -6,8 +6,15 @@
 # Uses a git worktree so the dev's working directory is never modified.
 # Finally waits for that workflow to finish and reports its outcome.
 #
-# Usage: cut-rc [--force]
-#   --force  overwrite an existing tag (allows retrying a failed publish)
+# Usage: cut-rc [--force] [--no-changelog]
+#   --force         overwrite an existing tag (allows retrying a failed publish)
+#   --no-changelog  proceed even though CHANGELOG.md has no release notes for this release,
+#                   asserting there are none. Records "No notable changes." rather than leaving
+#                   the placeholder, and commits that to main.
+#
+# Refuses to cut an rc whose CHANGELOG.md unreleased entry is missing or still the placeholder:
+# cut-prod promotes the rc snapshot verbatim and never consults main, so notes written after this
+# point can never reach the release.
 set -euo pipefail
 
 if ! command -v gh >/dev/null 2>&1; then
@@ -16,9 +23,15 @@ if ! command -v gh >/dev/null 2>&1; then
 fi
 
 FORCE=0
-if [[ "${1:-}" == "--force" ]]; then
-    FORCE=1
-fi
+NO_CHANGELOG=0
+while [[ "${1:-}" == --* ]]; do
+    case "$1" in
+        --force)         FORCE=1 ;;
+        --no-changelog)  NO_CHANGELOG=1 ;;
+        *) echo "error: unknown option: $1" >&2; exit 1 ;;
+    esac
+    shift
+done
 
 # Everything the release is cut from must already be on origin/main: a tag pointing at a commit
 # nobody else has is worse than no tag. Checked twice -- once now, and again after bin/cut-rc-prep
@@ -46,6 +59,57 @@ verify_clean_and_synced() {
         exit 1
     fi
 }
+
+# Release notes must exist BEFORE the rc is cut, because cut-prod promotes the rc snapshot
+# verbatim and never consults main -- notes written afterwards can never reach the release. Checked
+# here, first, so a run that is going to be refused doesn't first push a docs commit and burn an rc
+# number and a TestPyPI publish discovering it.
+pdm run python - "$NO_CHANGELOG" <<'PY'
+import re, sys
+
+no_changelog = sys.argv[1] == "1"
+PLACEHOLDER = "- _Add release notes here._"
+
+with open("CHANGELOG.md") as f:
+    text = f.read()
+
+# The unreleased section's own body specifically, not a substring search over the file--prose
+# elsewhere (including this project's own docs about the placeholder) may quote it verbatim.
+m = re.search(r"^## \{\{UNRELEASED\}\}\n(.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
+body = m.group(1).strip() if m else ""
+
+if body and body != PLACEHOLDER:
+    sys.exit(0)
+
+if not no_changelog:
+    what = "is still cut-rc's placeholder" if m else "does not exist"
+    sys.exit(
+        f"error: CHANGELOG.md's '## {{{{UNRELEASED}}}}' entry {what}.\n"
+        "       Write the release notes now: cut-prod promotes this rc's snapshot verbatim and\n"
+        "       never reads main, so notes added later cannot reach the release.\n"
+        "       If there genuinely are none, re-run with --no-changelog."
+    )
+
+# --no-changelog: record that as a fact rather than shipping the placeholder as the permanent
+# record. Written to the working tree so main and the rc agree; committed by the caller below.
+NO_NOTES = "- No notable changes."
+if m:
+    # group(1) spans the blank lines around the body too, so put them back explicitly.
+    text = text[:m.start(1)] + f"\n{NO_NOTES}\n\n" + text[m.end(1):]
+else:
+    text = re.sub(r"^(# CHANGELOG\n+)", rf"\g<1>## {{{{UNRELEASED}}}}\n\n{NO_NOTES}\n\n", text)
+with open("CHANGELOG.md", "w") as f:
+    f.write(text)
+print("--no-changelog: recorded 'No notable changes.' in CHANGELOG.md", file=sys.stderr)
+PY
+
+# --no-changelog edits the working tree, so commit it before the clean-tree check below.
+if [[ "$NO_CHANGELOG" -eq 1 ]] && ! git diff --quiet -- CHANGELOG.md; then
+    git add CHANGELOG.md
+    git commit -q -m "chore: record no notable changes for this release"
+    git push -q origin main
+    echo "Committed and pushed the 'no notable changes' CHANGELOG entry to main." >&2
+fi
 
 verify_clean_and_synced "before preparing the release"
 
