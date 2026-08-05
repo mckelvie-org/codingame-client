@@ -13,32 +13,32 @@ The `codingamer-puzzle-topic` service endpoint. See [`cg api`](index.md) for how
 ## `cg api codingamer-puzzle-topic`
 
 ```text
-[1;34musage: [0m[1;35mcg api codingamer-puzzle-topic[0m [[32m-h[0m] [32mCOMMAND ...[0m
+usage: cg api codingamer-puzzle-topic [-h] COMMAND ...
 
 CodingamerPuzzleTopic service commands.
 
-[1;34mpositional arguments:[0m
-  [1;32mCOMMAND[0m
-    [1;32mfind-topics-by-codingamer-id[0m
+positional arguments:
+  COMMAND
+    find-topics-by-codingamer-id
                         Find the puzzle topics a codingamer has made progress on.
-    [1;32mselect-topics-by-codingamer-id-and-puzzle-id[0m
+    select-topics-by-codingamer-id-and-puzzle-id
                         Find the topic tree for a single puzzle, personalized with the
                         codingamer's per-topic learned status.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+options:
+  -h, --help            show this help message and exit
 ```
 
 ## `cg api codingamer-puzzle-topic find-topics-by-codingamer-id`
 
 ```text
-[1;34musage: [0m[1;35mcg api codingamer-puzzle-topic find-topics-by-codingamer-id[0m [[32m-h[0m] [[36m--codingamer-id [33mID[0m]
+usage: cg api codingamer-puzzle-topic find-topics-by-codingamer-id [-h] [--codingamer-id ID]
 
 Find the puzzle topics a codingamer has made progress on.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
+options:
+  -h, --help            show this help message and exit
+  --codingamer-id, -g ID
                         Codingamer whose puzzle topic progress to list. Defaults to the logged-in
                         codingamer's ID.
 ```
@@ -46,18 +46,18 @@ Find the puzzle topics a codingamer has made progress on.
 ## `cg api codingamer-puzzle-topic select-topics-by-codingamer-id-and-puzzle-id`
 
 ```text
-[1;34musage: [0m[1;35mcg api codingamer-puzzle-topic select-topics-by-codingamer-id-and-puzzle-id[0m
-       [[32m-h[0m] [[36m--codingamer-id [33mID[0m] [32mPUZZLE-ID[0m
+usage: cg api codingamer-puzzle-topic select-topics-by-codingamer-id-and-puzzle-id
+       [-h] [--codingamer-id ID] PUZZLE-ID
 
 Find the topic tree for a single puzzle, personalized with the codingamer's per-topic learned
 status.
 
-[1;34mpositional arguments:[0m
-  [1;32mPUZZLE-ID[0m             Numeric ID of the puzzle.
+positional arguments:
+  PUZZLE-ID             Numeric ID of the puzzle.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
+options:
+  -h, --help            show this help message and exit
+  --codingamer-id, -g ID
                         Codingamer whose topic mastery to check. Defaults to the logged-in
                         codingamer's ID.
 ```

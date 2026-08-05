@@ -16,80 +16,80 @@ The `test-session` service endpoint. See [`cg api`](index.md) for how these rela
 ## `cg api test-session`
 
 ```text
-[1;34musage: [0m[1;35mcg api test-session[0m [[32m-h[0m] [32mCOMMAND ...[0m
+usage: cg api test-session [-h] COMMAND ...
 
 TestSession service commands.
 
-[1;34mpositional arguments:[0m
-  [1;32mCOMMAND[0m
-    [1;32mstart-test-session[0m  Start (or resume) an interactive IDE test session for a puzzle.
-    [1;32mplay[0m                Run a codingamer's code against a single test case within a test session.
+positional arguments:
+  COMMAND
+    start-test-session  Start (or resume) an interactive IDE test session for a puzzle.
+    play                Run a codingamer's code against a single test case within a test session.
                         Code is read from stdin.
-    [1;32mgenerate-lsp-token[0m  Generate a Language Server Protocol (LSP) auth token for a test session.
-    [1;32mget-previous-code-by-language-id[0m
+    generate-lsp-token  Generate a Language Server Protocol (LSP) auth token for a test session.
+    get-previous-code-by-language-id
                         Fetch the codingamer's most recently saved code for one language in a test
                         session. CodinGame keeps your latest source per language, not just one;
                         this reaches the ones the session isn't currently on. Prints JSON null if
                         you've never attempted the puzzle in that language. This is a pure read--
                         it does NOT make that language the session's current one (only running a
                         test or submitting does that).
-    [1;32msubmit[0m              Submit a final solution to a puzzle for credit. Code is read from stdin.
+    submit              Submit a final solution to a puzzle for credit. Code is read from stdin.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+options:
+  -h, --help            show this help message and exit
 ```
 
 ## `cg api test-session start-test-session`
 
 ```text
-[1;34musage: [0m[1;35mcg api test-session start-test-session[0m [[32m-h[0m] [32mTEST-SESSION-HANDLE[0m
+usage: cg api test-session start-test-session [-h] TEST-SESSION-HANDLE
 
 Start (or resume) an interactive IDE test session for a puzzle.
 
-[1;34mpositional arguments:[0m
-  [1;32mTEST-SESSION-HANDLE[0m  The puzzle's test session handle (e.g.
+positional arguments:
+  TEST-SESSION-HANDLE  The puzzle's test session handle (e.g.
                        CgLastActivityPuzzle.test_session_handle).
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m           show this help message and exit
+options:
+  -h, --help           show this help message and exit
 ```
 
 ## `cg api test-session play`
 
 ```text
-[1;34musage: [0m[1;35mcg api test-session play[0m [[32m-h[0m] [36m--language [33mLANGUAGE-ID[0m [[36m--test-index [33mN[0m] [32mTEST-SESSION-HANDLE[0m
+usage: cg api test-session play [-h] --language LANGUAGE-ID [--test-index N] TEST-SESSION-HANDLE
 
 Run a codingamer's code against a single test case within a test session. Code is read from stdin.
 
-[1;34mpositional arguments:[0m
-  [1;32mTEST-SESSION-HANDLE[0m   The puzzle's test session handle.
+positional arguments:
+  TEST-SESSION-HANDLE   The puzzle's test session handle.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--language[0m, [1;32m-l[0m [1;33mLANGUAGE-ID[0m
+options:
+  -h, --help            show this help message and exit
+  --language, -l LANGUAGE-ID
                         Programming language ID the code is written in, e.g. 'Python3'.
-  [1;36m--test-index[0m, [1;32m-t[0m [1;33mN[0m    1-based test case index to run against, for MULTIPLE_LANGUAGES-type
+  --test-index, -t N    1-based test case index to run against, for MULTIPLE_LANGUAGES-type
                         puzzles.
 ```
 
 ## `cg api test-session generate-lsp-token`
 
 ```text
-[1;34musage: [0m[1;35mcg api test-session generate-lsp-token[0m [[32m-h[0m] [32mTEST-SESSION-ID[0m
+usage: cg api test-session generate-lsp-token [-h] TEST-SESSION-ID
 
 Generate a Language Server Protocol (LSP) auth token for a test session.
 
-[1;34mpositional arguments:[0m
-  [1;32mTEST-SESSION-ID[0m  The test session's numeric ID (CgTestSession.test_session_id).
+positional arguments:
+  TEST-SESSION-ID  The test session's numeric ID (CgTestSession.test_session_id).
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m       show this help message and exit
+options:
+  -h, --help       show this help message and exit
 ```
 
 ## `cg api test-session get-previous-code-by-language-id`
 
 ```text
-[1;34musage: [0m[1;35mcg api test-session get-previous-code-by-language-id[0m [[32m-h[0m] [32mTEST-SESSION-HANDLE[0m [32mLANGUAGE-ID[0m
+usage: cg api test-session get-previous-code-by-language-id [-h] TEST-SESSION-HANDLE LANGUAGE-ID
 
 Fetch the codingamer's most recently saved code for one language in a test session. CodinGame
 keeps your latest source per language, not just one; this reaches the ones the session isn't
@@ -97,27 +97,27 @@ currently on. Prints JSON null if you've never attempted the puzzle in that lang
 pure read--it does NOT make that language the session's current one (only running a test or
 submitting does that).
 
-[1;34mpositional arguments:[0m
-  [1;32mTEST-SESSION-HANDLE[0m  The puzzle's test session handle.
-  [1;32mLANGUAGE-ID[0m          CodinGame language ID, e.g. 'Python3', 'C++'.
+positional arguments:
+  TEST-SESSION-HANDLE  The puzzle's test session handle.
+  LANGUAGE-ID          CodinGame language ID, e.g. 'Python3', 'C++'.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m           show this help message and exit
+options:
+  -h, --help           show this help message and exit
 ```
 
 ## `cg api test-session submit`
 
 ```text
-[1;34musage: [0m[1;35mcg api test-session submit[0m [[32m-h[0m] [36m--language [33mLANGUAGE-ID[0m [32mTEST-SESSION-HANDLE[0m
+usage: cg api test-session submit [-h] --language LANGUAGE-ID TEST-SESSION-HANDLE
 
 Submit a final solution to a puzzle for credit. Code is read from stdin.
 
-[1;34mpositional arguments:[0m
-  [1;32mTEST-SESSION-HANDLE[0m   The puzzle's test session handle.
+positional arguments:
+  TEST-SESSION-HANDLE   The puzzle's test session handle.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--language[0m, [1;32m-l[0m [1;33mLANGUAGE-ID[0m
+options:
+  -h, --help            show this help message and exit
+  --language, -l LANGUAGE-ID
                         Programming language ID the code is written in, e.g. 'Python3'.
 ```
 

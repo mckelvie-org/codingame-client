@@ -12,28 +12,28 @@ The `programming-language` service endpoint. See [`cg api`](index.md) for how th
 ## `cg api programming-language`
 
 ```text
-[1;34musage: [0m[1;35mcg api programming-language[0m [[32m-h[0m] [32mCOMMAND ...[0m
+usage: cg api programming-language [-h] COMMAND ...
 
 ProgrammingLanguage service commands.
 
-[1;34mpositional arguments:[0m
-  [1;32mCOMMAND[0m
-    [1;32mfind-all-ids[0m  Find the IDs of all programming languages supported for contribution reference
+positional arguments:
+  COMMAND
+    find-all-ids  Find the IDs of all programming languages supported for contribution reference
                   solutions.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m      show this help message and exit
+options:
+  -h, --help      show this help message and exit
 ```
 
 ## `cg api programming-language find-all-ids`
 
 ```text
-[1;34musage: [0m[1;35mcg api programming-language find-all-ids[0m [[32m-h[0m]
+usage: cg api programming-language find-all-ids [-h]
 
 Find the IDs of all programming languages supported for contribution reference solutions.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ---

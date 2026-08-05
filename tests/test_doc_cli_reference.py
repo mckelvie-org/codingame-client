@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -32,6 +34,35 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from gen_cli_docs import REFERENCE_SUBDIR  # noqa: E402  (needs the path fix above)
+
+
+def test_generated_pages_contain_no_terminal_escapes(tmp_path: Path) -> None:
+    """Generated pages must be plain text, whatever terminal the generator was run from.
+
+       Python 3.14's argparse colourises help when `sys.stdout` is a terminal, which is right for a
+       human running `cg --help` and wrong when `format_help()` is being captured into files.
+       Generating from an interactive shell wrote raw ANSI escapes into every page; generating
+       through a pipe produced clean text. The same source, different files, decided by how the
+       command happened to be invoked -- and it reached a commit before anyone noticed, because
+       every automated run here is piped.
+
+       Generated under `FORCE_COLOR`, which is the loudest thing a caller's environment can say, so
+       this fails if the generator ever stops pinning colour off."""
+    env = dict(os.environ, FORCE_COLOR="1")
+    env.pop("PYTHON_COLORS", None)
+    env.pop("NO_COLOR", None)
+    subprocess.run(
+            [sys.executable, str(SCRIPTS / "gen_cli_docs.py"), str(tmp_path)],
+            check=True, capture_output=True, env=env, cwd=REPO_ROOT,
+        )
+
+    offenders = [
+        str(page.relative_to(tmp_path))
+        for page in (tmp_path / REFERENCE_SUBDIR).rglob("*.md")
+        if "\x1b" in page.read_text(encoding="utf-8")
+    ]
+    assert not offenders, f"ANSI escapes leaked into generated pages: {offenders[:5]}"
+
 
 # `cg ...` inside a fenced block or inline code. Stops at anything that ends a command: a pipe,
 # redirect, comment, or the end of the line.

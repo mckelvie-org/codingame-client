@@ -12,32 +12,32 @@ The `user` service endpoint. See [`cg api`](index.md) for how these relate to th
 ## `cg api user`
 
 ```text
-[1;34musage: [0m[1;35mcg api user[0m [[32m-h[0m] [32mCOMMAND ...[0m
+usage: cg api user [-h] COMMAND ...
 
 User service commands.
 
-[1;34mpositional arguments:[0m
-  [1;32mCOMMAND[0m
-    [1;32mupdate-user-properties[0m
+positional arguments:
+  COMMAND
+    update-user-properties
                         Update a subset of a codingamer's account properties.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+options:
+  -h, --help            show this help message and exit
 ```
 
 ## `cg api user update-user-properties`
 
 ```text
-[1;34musage: [0m[1;35mcg api user update-user-properties[0m [[32m-h[0m] [[36m--codingamer-id [33mID[0m]
-                                          [[36m--contributions-list-last-visit [33mTIMESTAMP[0m]
+usage: cg api user update-user-properties [-h] [--codingamer-id ID]
+                                          [--contributions-list-last-visit TIMESTAMP]
 
 Update a subset of a codingamer's account properties.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
+options:
+  -h, --help            show this help message and exit
+  --codingamer-id, -g ID
                         Codingamer to update. Defaults to the logged-in codingamer's ID.
-  [1;36m--contributions-list-last-visit[0m [1;33mTIMESTAMP[0m
+  --contributions-list-last-visit TIMESTAMP
                         Set the codingamer's last-visit time for their contributions list. Can be
                         milliseconds since epoch, a duration string (e.g., '1h30m'), a relative
                         duration from now (e.g., '-1h30m'), or an ISO 8601 datetime string.

@@ -12,27 +12,27 @@ The `intercom` service endpoint. See [`cg api`](index.md) for how these relate t
 ## `cg api intercom`
 
 ```text
-[1;34musage: [0m[1;35mcg api intercom[0m [[32m-h[0m] [32mCOMMAND ...[0m
+usage: cg api intercom [-h] COMMAND ...
 
 Intercom service commands.
 
-[1;34mpositional arguments:[0m
-  [1;32mCOMMAND[0m
-    [1;32mgenerate-token[0m  Generate an Intercom identity-verification JWT for the logged-in codingamer.
+positional arguments:
+  COMMAND
+    generate-token  Generate an Intercom identity-verification JWT for the logged-in codingamer.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m        show this help message and exit
+options:
+  -h, --help        show this help message and exit
 ```
 
 ## `cg api intercom generate-token`
 
 ```text
-[1;34musage: [0m[1;35mcg api intercom generate-token[0m [[32m-h[0m]
+usage: cg api intercom generate-token [-h]
 
 Generate an Intercom identity-verification JWT for the logged-in codingamer.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ---

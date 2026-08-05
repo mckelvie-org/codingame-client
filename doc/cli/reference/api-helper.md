@@ -14,66 +14,66 @@ Every `cg api-helper` subcommand.
 ## `cg api-helper`
 
 ```text
-[1;34musage: [0m[1;35mcg api-helper[0m [[32m-h[0m] [32mCOMMAND ...[0m
+usage: cg api-helper [-h] COMMAND ...
 
 Higher-level helper commands, layered on top of the plain API wrappers (retries, polling, data
 normalization).
 
-[1;34mpositional arguments:[0m
-  [1;32mCOMMAND[0m
-    [1;32mcontribution[0m  Contribution service helper commands.
+positional arguments:
+  COMMAND
+    contribution  Contribution service helper commands.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m      show this help message and exit
+options:
+  -h, --help      show this help message and exit
 ```
 
 ## `cg api-helper contribution`
 
 ```text
-[1;34musage: [0m[1;35mcg api-helper contribution[0m [[32m-h[0m] [32mCOMMAND ...[0m
+usage: cg api-helper contribution [-h] COMMAND ...
 
 Contribution service helper commands.
 
-[1;34mpositional arguments:[0m
-  [1;32mCOMMAND[0m
-    [1;32mupdate-contribution[0m
+positional arguments:
+  COMMAND
+    update-contribution
                         Submit a new version of a contribution's content, with 524 retry/polling.
                         A JSON-serialized CgContributionData object is read from stdin.
-    [1;32mcreate-contribution[0m
+    create-contribution
                         Create a brand new contribution (deliberately with no 524 retry--see
                         CgContributionServiceHelper.create_contribution). A JSON-serialized
                         CgContributionData object is read from stdin.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+options:
+  -h, --help            show this help message and exit
 ```
 
 ## `cg api-helper contribution update-contribution`
 
 ```text
-[1;34musage: [0m[1;35mcg api-helper contribution update-contribution[0m [[32m-h[0m] [[36m--draft[0m] [[36m--ready-for-moderation[0m]
-                                                      [[36m--codingamer-id [33mID[0m]
-                                                      [[36m--max-wait-seconds [33mSECONDS[0m]
-                                                      [32mCONTRIBUTION-ID[0m [32mPUZZLE-TYPE[0m [32mPREV-VERSION[0m
+usage: cg api-helper contribution update-contribution [-h] [--draft] [--ready-for-moderation]
+                                                      [--codingamer-id ID]
+                                                      [--max-wait-seconds SECONDS]
+                                                      CONTRIBUTION-ID PUZZLE-TYPE PREV-VERSION
 
 Submit a new version of a contribution's content, with 524 retry/polling. A JSON-serialized
 CgContributionData object is read from stdin.
 
-[1;34mpositional arguments:[0m
-  [1;32mCONTRIBUTION-ID[0m       Opaque contribution ID string.
-  [1;32mPUZZLE-TYPE[0m           The type of the contribution, e.g. 'PUZZLE_INOUT'.
-  [1;32mPREV-VERSION[0m          The contribution's current version number, as last retrieved via find-
+positional arguments:
+  CONTRIBUTION-ID       Opaque contribution ID string.
+  PUZZLE-TYPE           The type of the contribution, e.g. 'PUZZLE_INOUT'.
+  PREV-VERSION          The contribution's current version number, as last retrieved via find-
                         contribution (an idempotency/concurrency check--rejected if stale).
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--draft[0m               Submit as a private, unpublished draft. Defaults to false.
-  [1;36m--ready-for-moderation[0m
+options:
+  -h, --help            show this help message and exit
+  --draft               Submit as a private, unpublished draft. Defaults to false.
+  --ready-for-moderation
                         Formally submit for moderation. Defaults to false.
-  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
+  --codingamer-id, -g ID
                         The authoring codingamer's numeric ID. Defaults to the logged-in
                         codingamer's ID.
-  [1;36m--max-wait-seconds[0m [1;33mSECONDS[0m
+  --max-wait-seconds SECONDS
                         If the server returns HTTP 524 (Cloudflare/origin timeout), how long to
                         keep polling find-contribution for the version to increment before giving
                         up, in seconds. Defaults to 0, meaning wait indefinitely.
@@ -82,23 +82,23 @@ CgContributionData object is read from stdin.
 ## `cg api-helper contribution create-contribution`
 
 ```text
-[1;34musage: [0m[1;35mcg api-helper contribution create-contribution[0m [[32m-h[0m] [[36m--draft[0m] [[36m--ready-for-moderation[0m]
-                                                      [[36m--codingamer-id [33mID[0m]
-                                                      [32mPUZZLE-TYPE[0m
+usage: cg api-helper contribution create-contribution [-h] [--draft] [--ready-for-moderation]
+                                                      [--codingamer-id ID]
+                                                      PUZZLE-TYPE
 
 Create a brand new contribution (deliberately with no 524 retry--see
 CgContributionServiceHelper.create_contribution). A JSON-serialized CgContributionData object is
 read from stdin.
 
-[1;34mpositional arguments:[0m
-  [1;32mPUZZLE-TYPE[0m           The type of the contribution, e.g. 'PUZZLE_INOUT'.
+positional arguments:
+  PUZZLE-TYPE           The type of the contribution, e.g. 'PUZZLE_INOUT'.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--draft[0m               Create as a private, unpublished draft. Defaults to false.
-  [1;36m--ready-for-moderation[0m
+options:
+  -h, --help            show this help message and exit
+  --draft               Create as a private, unpublished draft. Defaults to false.
+  --ready-for-moderation
                         Formally submit for moderation. Defaults to false.
-  [1;36m--codingamer-id[0m, [1;32m-g[0m [1;33mID[0m
+  --codingamer-id, -g ID
                         The authoring codingamer's numeric ID. Defaults to the logged-in
                         codingamer's ID.
 ```

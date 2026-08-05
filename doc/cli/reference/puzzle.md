@@ -30,16 +30,16 @@ Every `cg puzzle` subcommand.
 ## `cg puzzle`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle[0m [[32m-h[0m] [[36m--puzzle-dir [33mDIR[0m] [32mCOMMAND ...[0m
+usage: cg puzzle [-h] [--puzzle-dir DIR] COMMAND ...
 
 Puzzle working directory commands--solve an existing CodinGame puzzle locally. Much simpler than
 `cg contribution`: exactly one file (data/solution.src) is ever editable, so there's no git repo
 involved--see codingame_tools.puzzle_manager.manager's module docstring. Currently only classic
 PUZZLE_INOUT puzzles are supported.
 
-[1;34mpositional arguments:[0m
-  [1;32mCOMMAND[0m
-    [1;32mimport[0m              Build a fresh puzzle working directory: resolve PUZZLE to a real puzzle
+positional arguments:
+  COMMAND
+    import              Build a fresh puzzle working directory: resolve PUZZLE to a real puzzle
                         (in order of preference: a numeric puzzle ID; an exact pretty ID, e.g.
                         'literary-alfabet-soupe'; an exact-matching title; a case-insensitive-
                         matching title), then resolve this codingamer's test session for it
@@ -51,17 +51,17 @@ PUZZLE_INOUT puzzles are supported.
                         fallback) rather than requiring an explicit new-directory argument--puzzle
                         working directories are expected to be reused across different puzzles
                         over time, one at a time.
-    [1;32mrepair[0m              Reconstruct .meta/ (gitignored server-derived cache: the test session
+    repair              Reconstruct .meta/ (gitignored server-derived cache: the test session
                         handle, plus read-only statement.html/stub_generator.cgstub reference
                         copies) from puzzle.json's stable puzzle_id--for recovering after a fresh
                         clone into a different repo (.meta/ is gitignored on purpose) or manual
                         deletion/corruption of .meta/. Never touches data/.
-    [1;32msubmit[0m              Submit the current local solution.src to the server for credit
+    submit              Submit the current local solution.src to the server for credit
                         (TestSession/submit)--a real, permanent graded submission, unlike `cg
                         puzzle play-server`. Note `cg puzzle play-server` also durably updates the
                         server's copy of the code as a side effect of running a test case--this
                         command is the one that actually grades it.
-    [1;32mplay-server[0m         Run the current local solution.src against one or more of the puzzle's
+    play-server         Run the current local solution.src against one or more of the puzzle's
                         test cases via the server (TestSession/play--the IDE's "Test" button, not
                         a real submission; see `cg puzzle play` for the entirely-local, no-network
                         equivalent). With no TEST-INDEX arguments, runs every downloaded test case
@@ -69,7 +69,7 @@ PUZZLE_INOUT puzzles are supported.
                         1 if any run errored or didn't match the expected output. Output matches
                         `cg puzzle play`'s format. Captured stdout is only printed for a failing
                         test, unless --show-stdout is given.
-    [1;32mplay[0m                Run the current local solution.src against the downloaded .meta/tests/
+    play                Run the current local solution.src against the downloaded .meta/tests/
                         test cases entirely locally (no network access at all)--by shelling out to
                         the appropriate interpreter as a subprocess, comparing captured stdout to
                         each test's expected output (see `cg puzzle play-server` for the real,
@@ -78,65 +78,65 @@ PUZZLE_INOUT puzzles are supported.
                         more 1-based indices to run just those. Exits non-zero if any test case
                         fails. Captured stdout is only printed for a failing test (as part of its
                         diff), unless --show-stdout is given.
-    [1;32mdescription[0m         Display the puzzle's problem statement, rendered from the cached
+    description         Display the puzzle's problem statement, rendered from the cached
                         .meta/statement.html (no network access--run `cg puzzle import`/`repair`
                         first if missing). Section headers and the Example's input/output text are
                         color-highlighted when writing to a real terminal. With --json (top-level
                         option), prints the parsed [{kind, text}, ...] blocks instead.
-    [1;32mdiff[0m                Show a unified diff between the local solution.src and the server's
+    diff                Show a unified diff between the local solution.src and the server's
                         current last-submitted answer for this puzzle.
-    [1;32mstatus[0m              Human-friendly summary of this puzzle: title, language, and local-edit
+    status              Human-friendly summary of this puzzle: title, language, and local-edit
                         status. By default entirely local (no network access); pass --refresh to
                         also check for local edits against the server's last-submitted answer and
                         fetch live progress/score (two live calls--there is no local cache for
                         puzzles, unlike `cg contribution status`, so this is always genuinely
                         live, every time). With --json (top-level option), renders as JSON instead
                         of text.
-    [1;32mdiscard-local[0m       Discard local edits: overwrite solution.src with the server's current
+    discard-local       Discard local edits: overwrite solution.src with the server's current
                         last-submitted answer for this puzzle. Purely local--no network side
                         effect beyond the read.
-    [1;32mdebug[0m               Debug-session plumbing for languages whose debugger attaches to a running
+    debug               Debug-session plumbing for languages whose debugger attaches to a running
                         target (C++, via gdbserver in its container). Normally invoked for you by
                         the VS Code tasks `cg puzzle vscode` generates, not typed by hand.
                         Languages whose debugger launches the program itself--Python3--don't use
                         these at all.
-    [1;32mbuild[0m               Compile data/solution.src, if its language needs compiling (a no-op for
+    build               Compile data/solution.src, if its language needs compiling (a no-op for
                         interpreted languages like Python3). Normally you don't need this--`cg
                         puzzle play` builds first automatically--but it's useful to compile
                         without running, or to warm a cold container image up front. Near-instant
                         when the source hasn't changed since the last successful build. Compiler
                         diagnostics go to stderr.
-    [1;32mvscode[0m              Generate VS Code run/debug configuration for this puzzle working
+    vscode              Generate VS Code run/debug configuration for this puzzle working
                         directory. The test-case dropdown is built from the test cases actually on
                         disk, so re-run this after `cg puzzle import`/`repair` to refresh it.
                         Writes into the workspace root's .vscode/ (VS Code only reads launch.json
                         from the workspace root, never from a subdirectory), merging with what's
                         already there and replacing only this working directory's own entries.
-    [1;32mset-language[0m        Switch this puzzle to a different language, restoring your own most recent
+    set-language        Switch this puzzle to a different language, restoring your own most recent
                         code for it. CodinGame keeps your latest source per language, so anything
                         you'd previously written in the target language comes back; a language
                         you've never used gets a placeholder. Refuses if data/solution.src holds
                         work the server doesn't have (submit it first, or pass --force to discard
                         it). Changes local state only--the server's current language follows once
                         you run a server-side test or submit in the new one.
-    [1;32mactivate[0m            Make DIRECTORY the active puzzle working directory, so subsequent `cg
+    activate            Make DIRECTORY the active puzzle working directory, so subsequent `cg
                         puzzle` commands use it without needing --puzzle-dir. Set automatically by
                         `cg puzzle import`, so this is for switching between working directories
                         you already have. Outranks the configured default (`cg settings set
                         puzzle-dir`); `cg puzzle deactivate` clears it.
-    [1;32mdeactivate[0m          Clear the active puzzle working directory, so `cg puzzle` commands fall
+    deactivate          Clear the active puzzle working directory, so `cg puzzle` commands fall
                         back to the configured default and the usual directory discovery. Does not
                         touch any files--only the selection.
-    [1;32mwhere[0m               Show which puzzle working directory would be used.
-    [1;32mdelete[0m              Delete this puzzle working directory. Purely local--there is no server-
+    where               Show which puzzle working directory would be used.
+    delete              Delete this puzzle working directory. Purely local--there is no server-
                         side counterpart to delete (a puzzle already exists on the server before
                         you can solve it, and isn't yours to remove); this only ever removes your
                         own local files. Destructive--prompts for confirmation unless --force is
                         given; requires --force outright if stdin/stdout aren't a terminal.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--puzzle-dir[0m, [1;32m-d[0m [1;33mDIR[0m  Working directory to operate on. Defaults to CG_PUZZLE_DIR, then the
+options:
+  -h, --help            show this help message and exit
+  --puzzle-dir, -d DIR  Working directory to operate on. Defaults to CG_PUZZLE_DIR, then the
                         configured default (`cg settings set puzzle-dir`), then the current
                         directory or "./puzzle" if it contains puzzle.json.
 ```
@@ -144,7 +144,7 @@ PUZZLE_INOUT puzzles are supported.
 ## `cg puzzle import`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle import[0m [[32m-h[0m] [[36m--language [33mLANGUAGE[0m] [32mDIRECTORY[0m [32mPUZZLE[0m
+usage: cg puzzle import [-h] [--language LANGUAGE] DIRECTORY PUZZLE
 
 Build a fresh puzzle working directory: resolve PUZZLE to a real puzzle (in order of preference: a
 numeric puzzle ID; an exact pretty ID, e.g. 'literary-alfabet-soupe'; an exact-matching title; a
@@ -156,18 +156,18 @@ Unlike `cg contribution import`, uses the normal --puzzle-dir resolution (with a
 fallback) rather than requiring an explicit new-directory argument--puzzle working directories are
 expected to be reused across different puzzles over time, one at a time.
 
-[1;34mpositional arguments:[0m
-  [1;32mDIRECTORY[0m             Directory to build the working directory in. Required and always first,
+positional arguments:
+  DIRECTORY             Directory to build the working directory in. Required and always first,
                         matching `cg contribution import`/`create`. Becomes the active puzzle
                         directory (see `cg puzzle activate`).
-  [1;32mPUZZLE[0m                A puzzle reference: numeric puzzle ID, pretty ID (displayed title,
+  PUZZLE                A puzzle reference: numeric puzzle ID, pretty ID (displayed title,
                         lowercased with spaces replaced by hyphens, e.g. 'literary-alfabet-
                         soupe'), exact title, or case-insensitive title--tried in that order until
                         one resolves to a real puzzle.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--language[0m, [1;32m-l[0m [1;33mLANGUAGE[0m
+options:
+  -h, --help            show this help message and exit
+  --language, -l LANGUAGE
                         Language to start in, e.g. 'C++'. Restores your most recent saved code for
                         that language, or writes a placeholder if you've never used it here. Omit
                         to use whichever language you last used for this puzzle (or Python3 if
@@ -177,35 +177,35 @@ expected to be reused across different puzzles over time, one at a time.
 ## `cg puzzle repair`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle repair[0m [[32m-h[0m]
+usage: cg puzzle repair [-h]
 
 Reconstruct .meta/ (gitignored server-derived cache: the test session handle, plus read-only
 statement.html/stub_generator.cgstub reference copies) from puzzle.json's stable puzzle_id--for
 recovering after a fresh clone into a different repo (.meta/ is gitignored on purpose) or manual
 deletion/corruption of .meta/. Never touches data/.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg puzzle submit`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle submit[0m [[32m-h[0m]
+usage: cg puzzle submit [-h]
 
 Submit the current local solution.src to the server for credit (TestSession/submit)--a real,
 permanent graded submission, unlike `cg puzzle play-server`. Note `cg puzzle play-server` also
 durably updates the server's copy of the code as a side effect of running a test case--this
 command is the one that actually grades it.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg puzzle play-server`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle play-server[0m [[32m-h[0m] [[36m--show-stdout[0m] [32m[TEST-INDEX ...][0m
+usage: cg puzzle play-server [-h] [--show-stdout] [TEST-INDEX ...]
 
 Run the current local solution.src against one or more of the puzzle's test cases via the server
 (TestSession/play--the IDE's "Test" button, not a real submission; see `cg puzzle play` for the
@@ -214,21 +214,21 @@ case (.meta/tests/); give one or more 1-based indices to run just those. Exits 1
 errored or didn't match the expected output. Output matches `cg puzzle play`'s format. Captured
 stdout is only printed for a failing test, unless --show-stdout is given.
 
-[1;34mpositional arguments:[0m
-  [1;32mTEST-INDEX[0m     1-based test case index/indices to run against (see CgTestSessionTestCase.index).
+positional arguments:
+  TEST-INDEX     1-based test case index/indices to run against (see CgTestSessionTestCase.index).
                  With none given, runs every downloaded test case (.meta/tests/).
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m     show this help message and exit
-  [1;36m--show-stdout[0m  Print captured stdout even for a passing test. Always printed for a
+options:
+  -h, --help     show this help message and exit
+  --show-stdout  Print captured stdout even for a passing test. Always printed for a
                  failing/errored test regardless.
 ```
 
 ## `cg puzzle play`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle play[0m [[32m-h[0m] [[36m--show-stdout[0m] [[36m--timeout [33mSECONDS[0m] [[36m--build-timeout [33mSECONDS[0m]
-                      [32m[TEST-INDEX ...][0m
+usage: cg puzzle play [-h] [--show-stdout] [--timeout SECONDS] [--build-timeout SECONDS]
+                      [TEST-INDEX ...]
 
 Run the current local solution.src against the downloaded .meta/tests/ test cases entirely locally
 (no network access at all)--by shelling out to the appropriate interpreter as a subprocess,
@@ -238,16 +238,16 @@ arguments, runs every downloaded test case; give one or more 1-based indices to 
 Exits non-zero if any test case fails. Captured stdout is only printed for a failing test (as part
 of its diff), unless --show-stdout is given.
 
-[1;34mpositional arguments:[0m
-  [1;32mTEST-INDEX[0m            1-based downloaded test case index/indices to run (see
+positional arguments:
+  TEST-INDEX            1-based downloaded test case index/indices to run (see
                         .meta/tests/<index>/). With none given, runs every downloaded test case.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--show-stdout[0m         Print captured stdout even for a passing test. Always shown for a failing
+options:
+  -h, --help            show this help message and exit
+  --show-stdout         Print captured stdout even for a passing test. Always shown for a failing
                         test (as part of its diff) regardless.
-  [1;36m--timeout[0m [1;33mSECONDS[0m     Per-test-case wall-clock timeout. Default 10.0.
-  [1;36m--build-timeout[0m [1;33mSECONDS[0m
+  --timeout SECONDS     Per-test-case wall-clock timeout. Default 10.0.
+  --build-timeout SECONDS
                         Wall-clock timeout for the one-time build step that runs before any test
                         case. Separate from --timeout, and far more generous, because a cold build
                         can pull/build a container image and compile from scratch. Default 120.0.
@@ -257,33 +257,33 @@ of its diff), unless --show-stdout is given.
 ## `cg puzzle description`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle description[0m [[32m-h[0m]
+usage: cg puzzle description [-h]
 
 Display the puzzle's problem statement, rendered from the cached .meta/statement.html (no network
 access--run `cg puzzle import`/`repair` first if missing). Section headers and the Example's
 input/output text are color-highlighted when writing to a real terminal. With --json (top-level
 option), prints the parsed [{kind, text}, ...] blocks instead.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg puzzle diff`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle diff[0m [[32m-h[0m]
+usage: cg puzzle diff [-h]
 
 Show a unified diff between the local solution.src and the server's current last-submitted answer
 for this puzzle.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg puzzle status`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle status[0m [[32m-h[0m] [[36m--refresh[0m]
+usage: cg puzzle status [-h] [--refresh]
 
 Human-friendly summary of this puzzle: title, language, and local-edit status. By default entirely
 local (no network access); pass --refresh to also check for local edits against the server's last-
@@ -291,92 +291,92 @@ submitted answer and fetch live progress/score (two live calls--there is no loca
 puzzles, unlike `cg contribution status`, so this is always genuinely live, every time). With
 --json (top-level option), renders as JSON instead of text.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
-  [1;36m--refresh[0m   Also check for local edits against the server's last-submitted answer and fetch live
+options:
+  -h, --help  show this help message and exit
+  --refresh   Also check for local edits against the server's last-submitted answer and fetch live
               progress/score (two live calls).
 ```
 
 ## `cg puzzle discard-local`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle discard-local[0m [[32m-h[0m]
+usage: cg puzzle discard-local [-h]
 
 Discard local edits: overwrite solution.src with the server's current last-submitted answer for
 this puzzle. Purely local--no network side effect beyond the read.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg puzzle debug`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle debug[0m [[32m-h[0m] [32mCOMMAND ...[0m
+usage: cg puzzle debug [-h] COMMAND ...
 
 Debug-session plumbing for languages whose debugger attaches to a running target (C++, via
 gdbserver in its container). Normally invoked for you by the VS Code tasks `cg puzzle vscode`
 generates, not typed by hand. Languages whose debugger launches the program itself--Python3--don't
 use these at all.
 
-[1;34mpositional arguments:[0m
-  [1;32mCOMMAND[0m
-    [1;32mstart[0m     Build the debug profile and start a stopped debug target fed by TEST-INDEX's input,
+positional arguments:
+  COMMAND
+    start     Build the debug profile and start a stopped debug target fed by TEST-INDEX's input,
               ready for a debugger to attach. Prints the connection details.
-    [1;32mstop[0m      Stop a debug target started by `cg puzzle debug start`. Always succeeds, including
+    stop      Stop a debug target started by `cg puzzle debug start`. Always succeeds, including
               when nothing is running--it's wired to a postDebugTask, which fires even for a
               session that never really began.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg puzzle debug start`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle debug start[0m [[32m-h[0m] [[36m--build-timeout [33mSECONDS[0m] [32mTEST-INDEX[0m
+usage: cg puzzle debug start [-h] [--build-timeout SECONDS] TEST-INDEX
 
 Build the debug profile and start a stopped debug target fed by TEST-INDEX's input, ready for a
 debugger to attach. Prints the connection details.
 
-[1;34mpositional arguments:[0m
-  [1;32mTEST-INDEX[0m            Downloaded test case index whose input.txt feeds the debugged run.
+positional arguments:
+  TEST-INDEX            Downloaded test case index whose input.txt feeds the debugged run.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--build-timeout[0m [1;33mSECONDS[0m
+options:
+  -h, --help            show this help message and exit
+  --build-timeout SECONDS
                         Wall-clock timeout for the debug build.
 ```
 
 ## `cg puzzle debug stop`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle debug stop[0m [[32m-h[0m]
+usage: cg puzzle debug stop [-h]
 
 Stop a debug target started by `cg puzzle debug start`. Always succeeds, including when nothing is
 running--it's wired to a postDebugTask, which fires even for a session that never really began.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg puzzle build`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle build[0m [[32m-h[0m] [[36m--profile [33m{run,debug}[0m] [[36m--build-timeout [33mSECONDS[0m]
+usage: cg puzzle build [-h] [--profile {run,debug}] [--build-timeout SECONDS]
 
 Compile data/solution.src, if its language needs compiling (a no-op for interpreted languages like
 Python3). Normally you don't need this--`cg puzzle play` builds first automatically--but it's
 useful to compile without running, or to warm a cold container image up front. Near-instant when
 the source hasn't changed since the last successful build. Compiler diagnostics go to stderr.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--profile[0m [1;33m{run,debug}[0m
+options:
+  -h, --help            show this help message and exit
+  --profile {run,debug}
                         Which build to produce. "debug" is built for debuggability rather than
                         speed (no optimization, full symbols) and is what a debug session uses.
                         Ignored by languages that need no build. Default: run.
-  [1;36m--build-timeout[0m [1;33mSECONDS[0m
+  --build-timeout SECONDS
                         Wall-clock timeout. Generous by default, because a cold build can pull and
                         build a container image. Default 120.0.
 ```
@@ -384,7 +384,7 @@ the source hasn't changed since the last successful build. Compiler diagnostics 
 ## `cg puzzle vscode`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle vscode[0m [[32m-h[0m] [[36m--workspace-dir [33mDIR[0m] [[36m--force[0m]
+usage: cg puzzle vscode [-h] [--workspace-dir DIR] [--force]
 
 Generate VS Code run/debug configuration for this puzzle working directory. The test-case dropdown
 is built from the test cases actually on disk, so re-run this after `cg puzzle import`/`repair` to
@@ -392,12 +392,12 @@ refresh it. Writes into the workspace root's .vscode/ (VS Code only reads launch
 workspace root, never from a subdirectory), merging with what's already there and replacing only
 this working directory's own entries.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m           show this help message and exit
-  [1;36m--workspace-dir[0m [1;33mDIR[0m  Workspace root to write .vscode/ into. Defaults to the nearest enclosing
+options:
+  -h, --help           show this help message and exit
+  --workspace-dir DIR  Workspace root to write .vscode/ into. Defaults to the nearest enclosing
                        directory that already has a .vscode/, then the nearest one under version
                        control, then the working directory itself.
-  [1;36m--force[0m              Overwrite an existing .vscode/ config file that isn't strict JSON (VS Code
+  --force              Overwrite an existing .vscode/ config file that isn't strict JSON (VS Code
                        allows comments there, which can't be merged into safely). Without this,
                        such a file is left untouched and an error is reported.
 ```
@@ -405,7 +405,7 @@ this working directory's own entries.
 ## `cg puzzle set-language`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle set-language[0m [[32m-h[0m] [[36m--force[0m] [32mLANGUAGE[0m
+usage: cg puzzle set-language [-h] [--force] LANGUAGE
 
 Switch this puzzle to a different language, restoring your own most recent code for it. CodinGame
 keeps your latest source per language, so anything you'd previously written in the target language
@@ -414,69 +414,69 @@ work the server doesn't have (submit it first, or pass --force to discard it). C
 only--the server's current language follows once you run a server-side test or submit in the new
 one.
 
-[1;34mpositional arguments:[0m
-  [1;32mLANGUAGE[0m     CodinGame language ID to switch to, e.g. 'C++', 'Python3'.
+positional arguments:
+  LANGUAGE     CodinGame language ID to switch to, e.g. 'C++', 'Python3'.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m   show this help message and exit
-  [1;36m--force[0m, [1;32m-f[0m  Switch even if data/solution.src has changes the server doesn't have, discarding
+options:
+  -h, --help   show this help message and exit
+  --force, -f  Switch even if data/solution.src has changes the server doesn't have, discarding
                them.
 ```
 
 ## `cg puzzle activate`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle activate[0m [[32m-h[0m] [32m[DIRECTORY][0m
+usage: cg puzzle activate [-h] [DIRECTORY]
 
 Make DIRECTORY the active puzzle working directory, so subsequent `cg puzzle` commands use it
 without needing --puzzle-dir. Set automatically by `cg puzzle import`, so this is for switching
 between working directories you already have. Outranks the configured default (`cg settings set
 puzzle-dir`); `cg puzzle deactivate` clears it.
 
-[1;34mpositional arguments:[0m
-  [1;32mDIRECTORY[0m   The puzzle working directory to activate. Defaults to the current directory, so `cd`
+positional arguments:
+  DIRECTORY   The puzzle working directory to activate. Defaults to the current directory, so `cd`
               into one and run this with no arguments.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg puzzle deactivate`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle deactivate[0m [[32m-h[0m]
+usage: cg puzzle deactivate [-h]
 
 Clear the active puzzle working directory, so `cg puzzle` commands fall back to the configured
 default and the usual directory discovery. Does not touch any files--only the selection.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg puzzle where`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle where[0m [[32m-h[0m]
+usage: cg puzzle where [-h]
 
 Show which puzzle working directory would be used.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg puzzle delete`
 
 ```text
-[1;34musage: [0m[1;35mcg puzzle delete[0m [[32m-h[0m] [[36m--force[0m]
+usage: cg puzzle delete [-h] [--force]
 
 Delete this puzzle working directory. Purely local--there is no server-side counterpart to delete
 (a puzzle already exists on the server before you can solve it, and isn't yours to remove); this
 only ever removes your own local files. Destructive--prompts for confirmation unless --force is
 given; requires --force outright if stdin/stdout aren't a terminal.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m   show this help message and exit
-  [1;36m--force[0m, [1;32m-f[0m  Skip the interactive confirmation prompt. Required if stdin/stdout aren't a
+options:
+  -h, --help   show this help message and exit
+  --force, -f  Skip the interactive confirmation prompt. Required if stdin/stdout aren't a
                terminal.
 ```
 

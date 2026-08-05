@@ -12,35 +12,35 @@ Every `cg docker` subcommand.
 ## `cg docker`
 
 ```text
-[1;34musage: [0m[1;35mcg docker[0m [[32m-h[0m] [32mCOMMAND ...[0m
+usage: cg docker [-h] COMMAND ...
 
 Manage the Docker containers and images cg builds for compiled languages (currently C++). Nothing
 here holds anything you authored--see `cg docker clean`.
 
-[1;34mpositional arguments:[0m
-  [1;32mCOMMAND[0m
-    [1;32mclean[0m     Remove every container and image cg created, across all working directories. Always
+positional arguments:
+  COMMAND
+    clean     Remove every container and image cg created, across all working directories. Always
               safe and never prompts: a container holds only build artifacts and an image is
               rebuilt from Dockerfiles on disk, so nothing you authored lives in either--the next
               build recreates whatever is needed. Useful to reclaim disk space, or to force a
               clean rebuild after editing a toolchain Dockerfile.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg docker clean`
 
 ```text
-[1;34musage: [0m[1;35mcg docker clean[0m [[32m-h[0m]
+usage: cg docker clean [-h]
 
 Remove every container and image cg created, across all working directories. Always safe and never
 prompts: a container holds only build artifacts and an image is rebuilt from Dockerfiles on disk,
 so nothing you authored lives in either--the next build recreates whatever is needed. Useful to
 reclaim disk space, or to force a clean rebuild after editing a toolchain Dockerfile.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ---

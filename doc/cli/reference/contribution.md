@@ -41,21 +41,21 @@ Every `cg contribution` subcommand.
 ## `cg contribution`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution[0m [[32m-h[0m] [[36m--contribution-dir [33mDIR[0m] [32mCOMMAND ...[0m
+usage: cg contribution [-h] [--contribution-dir DIR] COMMAND ...
 
 Contribution working directory commands--manage a local, possibly-uncommitted working view of a
 single contribution, backed by a real git repo (see codingame_tools.contribution_manager.manager
 for the main/server/version-data branch design). See `cg api contribution`/`cg api-helper
 contribution` for the raw, stateless API this is built on.
 
-[1;34mpositional arguments:[0m
-  [1;32mCOMMAND[0m
-    [1;32mimport[0m              Build a fresh contribution working directory from an existing server-side
+positional arguments:
+  COMMAND
+    import              Build a fresh contribution working directory from an existing server-side
                         contribution: findContribution, plus downloading the cover image if one is
                         set, then initialize its git repo (main/server/version-data branches--see
                         codingame_tools.contribution_manager.manager). DIRECTORY must not already
                         exist. Ignores --contribution-dir.
-    [1;32mrepair[0m              Reconstruct this working directory's git-dir from scratch, without
+    repair              Reconstruct this working directory's git-dir from scratch, without
                         disturbing data/'s already-on-disk content--for recovering from a missing
                         or corrupted .meta/ (e.g. an outer project clone that deliberately didn't
                         bring the git-dir along--see
@@ -66,7 +66,7 @@ contribution` for the raw, stateless API this is built on.
                         shortcut); if not (this working directory was `cg contribution create`d
                         but never successfully pushed), purely local, no network access at all.
                         See CgContributionManager.repair's docstring for the full story.
-    [1;32mcreate[0m              Initialize a brand new, *purely local* contribution working directory--no
+    create              Initialize a brand new, *purely local* contribution working directory--no
                         network access, no server-side contribution created yet (unlike `cg
                         contribution import`, which always starts from one that already exists).
                         Seeds minimal placeholder statement/difficulty/test-case content (the
@@ -81,7 +81,7 @@ contribution` for the raw, stateless API this is built on.
                         --help`/CgContributionManager.push's docstring for why. Every push after
                         that is a normal update. DIRECTORY must not already exist. Ignores
                         --contribution-dir.
-    [1;32mpush[0m                Push this working directory's content to the server (with 524
+    push                Push this working directory's content to the server (with 524
                         retry/polling and test-case data normalization), then update
                         `server`/`version-data` to reflect the result and fast-forward `main` to
                         match. If this working directory has never been pushed before (created via
@@ -97,24 +97,24 @@ contribution` for the raw, stateless API this is built on.
                         CgContributionManager.push's docstring for the full story. Pass --direct-
                         create to skip this and call createContribution once, directly, with the
                         real content.
-    [1;32mdebug[0m               Debug-session plumbing for languages whose debugger attaches to a running
+    debug               Debug-session plumbing for languages whose debugger attaches to a running
                         target (C++, via gdbserver in its container). Normally invoked for you by
                         the VS Code tasks `cg contribution vscode` generates, not typed by hand.
                         Languages whose debugger launches the program itself--Python3--don't use
                         these at all.
-    [1;32mbuild[0m               Compile data/solution.src, if its language needs compiling (a no-op for
+    build               Compile data/solution.src, if its language needs compiling (a no-op for
                         interpreted languages like Python3). Normally you don't need this--`cg
                         contribution play` builds first automatically--but it's useful to compile
                         without running, or to warm a cold container image up front. Near-instant
                         when the source hasn't changed since the last successful build. Compiler
                         diagnostics go to stderr.
-    [1;32mvscode[0m              Generate VS Code run/debug configuration for this contribution working
+    vscode              Generate VS Code run/debug configuration for this contribution working
                         directory. The test-case dropdown is built from the test cases actually on
                         disk, so re-run this after tests/ changes to refresh it. Writes into the
                         workspace root's .vscode/ (VS Code only reads launch.json from the
                         workspace root, never from a subdirectory), merging with what's already
                         there and replacing only this working directory's own entries.
-    [1;32mset-language[0m        Switch this contribution's reference-solution language, writing a fresh
+    set-language        Switch this contribution's reference-solution language, writing a fresh
                         starter stub. DESTRUCTIVE: unlike a puzzle, a contribution stores only ONE
                         solution with no per-language history, so there is nothing to restore and
                         nothing to switch back to--the existing solution is replaced by a stub,
@@ -123,26 +123,26 @@ contribution` for the raw, stateless API this is built on.
                         note that matching what the server currently has does NOT make it safe,
                         since that copy is what the next push destroys. Purely local--no network
                         call.
-    [1;32mactivate[0m            Make DIRECTORY the active contribution working directory, so subsequent
+    activate            Make DIRECTORY the active contribution working directory, so subsequent
                         `cg contribution` commands use it without needing --contribution-dir. Set
                         automatically by `cg contribution import`/`cg contribution create`, so
                         this is for switching between working directories you already have.
                         Outranks the configured default (`cg settings set contribution-dir`); `cg
                         contribution deactivate` clears it.
-    [1;32mdeactivate[0m          Clear the active contribution working directory, so `cg contribution`
+    deactivate          Clear the active contribution working directory, so `cg contribution`
                         commands fall back to the configured default and the usual directory
                         discovery. Does not touch any files--only the selection.
-    [1;32mwhere[0m               Show which contribution working directory would be used.
-    [1;32mstatus[0m              Human-friendly summary of this contribution: submission/review status,
+    where               Show which contribution working directory would be used.
+    status              Human-friendly summary of this contribution: submission/review status,
                         sync status against the server, votes/comments/views, the moderator
                         approve/reject gate, and any in-progress validation. By default reports
                         whatever .meta/contribution-status.json last cached (no network access);
                         pass --refresh to fetch fresh first (updates that cache for next time
                         too). With --json (top-level option), renders as JSON instead of text.
-    [1;32mdiscard-local[0m       Discard local edits: reset this working directory's content to match
+    discard-local       Discard local edits: reset this working directory's content to match
                         server's current tip exactly. Purely local--no network access, unlike `cg
                         contribution merge discard-local`, which re-fetches from the server first.
-    [1;32mdelete[0m              Delete this contribution from the server (unrecoverable) and, by default,
+    delete              Delete this contribution from the server (unrecoverable) and, by default,
                         remove this entire working directory too. Pass --keep-local to instead
                         detach: drop the server/version-data git branches and reset
                         contribution.json so the *same* local content is ready to become a brand
@@ -152,10 +152,10 @@ contribution` for the raw, stateless API this is built on.
                         local working directory. Destructive--prompts for confirmation unless
                         --force is given; requires --force outright if stdin/stdout aren't a
                         terminal.
-    [1;32mrenormalize-tests[0m   Renumber tests/'s ordinal directories to a clean, sequential, zero-padded
+    renormalize-tests   Renumber tests/'s ordinal directories to a clean, sequential, zero-padded
                         sort key, preserving relative order (see the tests/ directory layout in
                         codingame_tools.contribution_manager.test_cases_dir).
-    [1;32mplay[0m                Run the current local solution.src against tests/ test cases entirely
+    play                Run the current local solution.src against tests/ test cases entirely
                         locally (no network access at all)--by shelling out to the appropriate
                         interpreter as a subprocess, comparing captured stdout to each test's
                         expected output. Runs both local and validator sides by default;
@@ -166,30 +166,30 @@ contribution` for the raw, stateless API this is built on.
                         ordinal/side/title in place of an index/label). Captured stdout is only
                         printed for a failing test (or with --update-expected), unless --show-
                         stdout is given.
-    [1;32mrebase[0m              Detect drift between the server and this working directory, resolving it
+    rebase              Detect drift between the server and this working directory, resolving it
                         automatically when unambiguous: a no-op if the server hasn't advanced
                         since main last synced (regardless of local edits), a true fast-forward if
                         only the server changed (main's ref just moves, no new commit), or a
                         reported conflict--left entirely alone--if both sides changed (see `cg
                         contribution diff`/`merge`).
-    [1;32mmerge[0m               Resolve drift between the server and this working directory--parent for
+    merge               Resolve drift between the server and this working directory--parent for
                         the merge state machine (start/continue/abort/interactive) and the instant
                         discard-local/discard-server resolutions. Bare `cg contribution merge` is
                         an alias for `merge start`.
-    [1;32mdiff[0m                Show what's changed: working tree vs server's cached state (no network
+    diff                Show what's changed: working tree vs server's cached state (no network
                         access by default). If a merge is in progress, shows the merge's own
                         conflict state instead (same as `cg contribution merge diff`)--`--remote`
                         is refused then, since fetching mid-merge isn't allowed anyway. Pass
                         --remote to fetch fresh first. Pass --interactive to launch `git
                         mergetool` instead of printing text (same as `cg contribution merge
                         interactive`).
-    [1;32mfetch[0m               Refresh server/version-data via a fresh findContribution. Leaves them
+    fetch               Refresh server/version-data via a fresh findContribution. Leaves them
                         untouched if the version hasn't changed, and avoids re-downloading the
                         cover image if its binary ID hasn't changed either (reused straight from
                         the object database). `rebase` and `merge start` do this automatically;
                         use this to refresh the cache for `diff`/`diff --interactive` without
                         either of those. Refuses while a merge is in progress.
-    [1;32mgit[0m                 Run a raw git command directly against this contribution's repo--e.g. `cg
+    git                 Run a raw git command directly against this contribution's repo--e.g. `cg
                         contribution git log --oneline --all --decorate`, `cg contribution git
                         show server:solution.src`, `cg contribution git config merge.tool meld`.
                         Resolves --git-dir/--work-tree from contribution.json automatically (plain
@@ -198,9 +198,9 @@ contribution` for the raw, stateless API this is built on.
                         data/ deliberately carries no .git marker of its own). No `--` needed, and
                         nothing you pass is ever misread as one of cg's own options.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--contribution-dir[0m, [1;32m-d[0m [1;33mDIR[0m
+options:
+  -h, --help            show this help message and exit
+  --contribution-dir, -d DIR
                         Working directory to operate on. Defaults to CG_CONTRIBUTION_DIR, then the
                         configured default (`cg settings set contribution-dir`), then the current
                         directory or "./contribution" if it contains contribution.json. Ignored by
@@ -211,29 +211,29 @@ contribution` for the raw, stateless API this is built on.
 ## `cg contribution import`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution import[0m [[32m-h[0m] [32mDIRECTORY[0m [32mCONTRIBUTION-ID[0m
+usage: cg contribution import [-h] DIRECTORY CONTRIBUTION-ID
 
 Build a fresh contribution working directory from an existing server-side contribution:
 findContribution, plus downloading the cover image if one is set, then initialize its git repo
 (main/server/version-data branches--see codingame_tools.contribution_manager.manager). DIRECTORY
 must not already exist. Ignores --contribution-dir.
 
-[1;34mpositional arguments:[0m
-  [1;32mDIRECTORY[0m        New directory to create the working directory in, or an existing one whose
+positional arguments:
+  DIRECTORY        New directory to create the working directory in, or an existing one whose
                    contribution.json already tracks CONTRIBUTION-ID (to repair a missing git-dir--
                    see also `cg contribution repair`). Always first, matching `cg contribution
                    create` and `cg puzzle import`. Becomes the active contribution directory (see
                    `cg contribution activate`).
-  [1;32mCONTRIBUTION-ID[0m  Opaque contribution ID string (see `cg api contribution find-contribution`).
+  CONTRIBUTION-ID  Opaque contribution ID string (see `cg api contribution find-contribution`).
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m       show this help message and exit
+options:
+  -h, --help       show this help message and exit
 ```
 
 ## `cg contribution repair`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution repair[0m [[32m-h[0m]
+usage: cg contribution repair [-h]
 
 Reconstruct this working directory's git-dir from scratch, without disturbing data/'s already-on-
 disk content--for recovering from a missing or corrupted .meta/ (e.g. an outer project clone that
@@ -244,15 +244,15 @@ findContribution, same as `cg contribution import`'s own repair shortcut); if no
 directory was `cg contribution create`d but never successfully pushed), purely local, no network
 access at all. See CgContributionManager.repair's docstring for the full story.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution create`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution create[0m [[32m-h[0m] [[36m--puzzle-type [33mPUZZLE-TYPE[0m] [[36m--language [33mLANGUAGE[0m]
-                              [32mDIRECTORY[0m [32m[TITLE][0m
+usage: cg contribution create [-h] [--puzzle-type PUZZLE-TYPE] [--language LANGUAGE]
+                              DIRECTORY [TITLE]
 
 Initialize a brand new, *purely local* contribution working directory--no network access, no
 server-side contribution created yet (unlike `cg contribution import`, which always starts from
@@ -266,16 +266,16 @@ using whatever draft/readyForModeration are set to at that point)--see `cg contr
 --help`/CgContributionManager.push's docstring for why. Every push after that is a normal update.
 DIRECTORY must not already exist. Ignores --contribution-dir.
 
-[1;34mpositional arguments:[0m
-  [1;32mDIRECTORY[0m             New directory to create the working directory in. Must not already exist.
-  [1;32mTITLE[0m                 Title for the new contribution. Defaults to 'Example puzzle <DIRECTORY's
+positional arguments:
+  DIRECTORY             New directory to create the working directory in. Must not already exist.
+  TITLE                 Title for the new contribution. Defaults to 'Example puzzle <DIRECTORY's
                         last path component>'.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--puzzle-type[0m, [1;32m-t[0m [1;33mPUZZLE-TYPE[0m
+options:
+  -h, --help            show this help message and exit
+  --puzzle-type, -t PUZZLE-TYPE
                         The type of the contribution. Defaults to 'PUZZLE_INOUT'.
-  [1;36m--language[0m, [1;32m-l[0m [1;33mLANGUAGE[0m
+  --language, -l LANGUAGE
                         Reference solution language (see CgSolutionLanguage, e.g. 'Python3',
                         'Java', 'C++'). Defaults to 'Python3'. Always creates the solution.<ext>
                         convenience symlink if the language maps to a known extension, but only
@@ -287,7 +287,7 @@ DIRECTORY must not already exist. Ignores --contribution-dir.
 ## `cg contribution push`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution push[0m [[32m-h[0m] [[36m--direct-create[0m]
+usage: cg contribution push [-h] [--direct-create]
 
 Push this working directory's content to the server (with 524 retry/polling and test-case data
 normalization), then update `server`/`version-data` to reflect the result and fast-forward `main`
@@ -302,9 +302,9 @@ contribution delete --keep-local`'s clone-as-template workflow)--see CgContribut
 docstring for the full story. Pass --direct-create to skip this and call createContribution once,
 directly, with the real content.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m       show this help message and exit
-  [1;36m--direct-create[0m  On a first push, skip the minimal-stub-first safety step and call
+options:
+  -h, --help       show this help message and exit
+  --direct-create  On a first push, skip the minimal-stub-first safety step and call
                    createContribution once, directly, with the real content. Ignored on anything
                    but a first push.
 ```
@@ -312,73 +312,73 @@ directly, with the real content.
 ## `cg contribution debug`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution debug[0m [[32m-h[0m] [32mCOMMAND ...[0m
+usage: cg contribution debug [-h] COMMAND ...
 
 Debug-session plumbing for languages whose debugger attaches to a running target (C++, via
 gdbserver in its container). Normally invoked for you by the VS Code tasks `cg contribution
 vscode` generates, not typed by hand. Languages whose debugger launches the program itself--
 Python3--don't use these at all.
 
-[1;34mpositional arguments:[0m
-  [1;32mCOMMAND[0m
-    [1;32mstart[0m     Build the debug profile and start a stopped debug target fed by the given test
+positional arguments:
+  COMMAND
+    start     Build the debug profile and start a stopped debug target fed by the given test
               case's input, ready for a debugger to attach. Prints the connection details.
-    [1;32mstop[0m      Stop a debug target started by `cg contribution debug start`. Always succeeds,
+    stop      Stop a debug target started by `cg contribution debug start`. Always succeeds,
               including when nothing is running--it's wired to a postDebugTask, which fires even
               for a session that never really began.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution debug start`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution debug start[0m [[32m-h[0m] [[36m--build-timeout [33mSECONDS[0m] [32mORDINAL[0m [32mSIDE[0m
+usage: cg contribution debug start [-h] [--build-timeout SECONDS] ORDINAL SIDE
 
 Build the debug profile and start a stopped debug target fed by the given test case's input, ready
 for a debugger to attach. Prints the connection details.
 
-[1;34mpositional arguments:[0m
-  [1;32mORDINAL[0m               Test case ordinal (tests/'s directory name, e.g. "03" or "3").
-  [1;32mSIDE[0m                  Which side of the test case to feed in: local or validator.
+positional arguments:
+  ORDINAL               Test case ordinal (tests/'s directory name, e.g. "03" or "3").
+  SIDE                  Which side of the test case to feed in: local or validator.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--build-timeout[0m [1;33mSECONDS[0m
+options:
+  -h, --help            show this help message and exit
+  --build-timeout SECONDS
                         Wall-clock timeout for the debug build.
 ```
 
 ## `cg contribution debug stop`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution debug stop[0m [[32m-h[0m]
+usage: cg contribution debug stop [-h]
 
 Stop a debug target started by `cg contribution debug start`. Always succeeds, including when
 nothing is running--it's wired to a postDebugTask, which fires even for a session that never
 really began.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution build`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution build[0m [[32m-h[0m] [[36m--profile [33m{run,debug}[0m] [[36m--build-timeout [33mSECONDS[0m]
+usage: cg contribution build [-h] [--profile {run,debug}] [--build-timeout SECONDS]
 
 Compile data/solution.src, if its language needs compiling (a no-op for interpreted languages like
 Python3). Normally you don't need this--`cg contribution play` builds first automatically--but
 it's useful to compile without running, or to warm a cold container image up front. Near-instant
 when the source hasn't changed since the last successful build. Compiler diagnostics go to stderr.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--profile[0m [1;33m{run,debug}[0m
+options:
+  -h, --help            show this help message and exit
+  --profile {run,debug}
                         Which build to produce. "debug" is built for debuggability rather than
                         speed (no optimization, full symbols) and is what a debug session uses.
                         Ignored by languages that need no build. Default: run.
-  [1;36m--build-timeout[0m [1;33mSECONDS[0m
+  --build-timeout SECONDS
                         Wall-clock timeout. Generous by default, because a cold build can pull and
                         build a container image. Default 120.0.
 ```
@@ -386,7 +386,7 @@ when the source hasn't changed since the last successful build. Compiler diagnos
 ## `cg contribution vscode`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution vscode[0m [[32m-h[0m] [[36m--workspace-dir [33mDIR[0m] [[36m--force[0m]
+usage: cg contribution vscode [-h] [--workspace-dir DIR] [--force]
 
 Generate VS Code run/debug configuration for this contribution working directory. The test-case
 dropdown is built from the test cases actually on disk, so re-run this after tests/ changes to
@@ -394,12 +394,12 @@ refresh it. Writes into the workspace root's .vscode/ (VS Code only reads launch
 workspace root, never from a subdirectory), merging with what's already there and replacing only
 this working directory's own entries.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m           show this help message and exit
-  [1;36m--workspace-dir[0m [1;33mDIR[0m  Workspace root to write .vscode/ into. Defaults to the nearest enclosing
+options:
+  -h, --help           show this help message and exit
+  --workspace-dir DIR  Workspace root to write .vscode/ into. Defaults to the nearest enclosing
                        directory that already has a .vscode/, then the nearest one under version
                        control, then the working directory itself.
-  [1;36m--force[0m              Overwrite an existing .vscode/ config file that isn't strict JSON (VS Code
+  --force              Overwrite an existing .vscode/ config file that isn't strict JSON (VS Code
                        allows comments there, which can't be merged into safely). Without this,
                        such a file is left untouched and an error is reported.
 ```
@@ -407,7 +407,7 @@ this working directory's own entries.
 ## `cg contribution set-language`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution set-language[0m [[32m-h[0m] [[36m--force[0m] [32mLANGUAGE[0m
+usage: cg contribution set-language [-h] [--force] LANGUAGE
 
 Switch this contribution's reference-solution language, writing a fresh starter stub. DESTRUCTIVE:
 unlike a puzzle, a contribution stores only ONE solution with no per-language history, so there is
@@ -416,19 +416,19 @@ the next `cg contribution push` overwrites the last durable copy. Refuses unless
 is still exactly the stub cg generated; note that matching what the server currently has does NOT
 make it safe, since that copy is what the next push destroys. Purely local--no network call.
 
-[1;34mpositional arguments:[0m
-  [1;32mLANGUAGE[0m     CodinGame language ID to switch to, e.g. 'C++', 'Python3'.
+positional arguments:
+  LANGUAGE     CodinGame language ID to switch to, e.g. 'C++', 'Python3'.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m   show this help message and exit
-  [1;36m--force[0m, [1;32m-f[0m  Switch even though a real reference solution would be discarded. There is no way to
+options:
+  -h, --help   show this help message and exit
+  --force, -f  Switch even though a real reference solution would be discarded. There is no way to
                get it back--save a copy outside the working directory first.
 ```
 
 ## `cg contribution activate`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution activate[0m [[32m-h[0m] [32m[DIRECTORY][0m
+usage: cg contribution activate [-h] [DIRECTORY]
 
 Make DIRECTORY the active contribution working directory, so subsequent `cg contribution` commands
 use it without needing --contribution-dir. Set automatically by `cg contribution import`/`cg
@@ -436,42 +436,42 @@ contribution create`, so this is for switching between working directories you a
 Outranks the configured default (`cg settings set contribution-dir`); `cg contribution deactivate`
 clears it.
 
-[1;34mpositional arguments:[0m
-  [1;32mDIRECTORY[0m   The contribution working directory to activate. Defaults to the current directory,
+positional arguments:
+  DIRECTORY   The contribution working directory to activate. Defaults to the current directory,
               so `cd` into one and run this with no arguments.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution deactivate`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution deactivate[0m [[32m-h[0m]
+usage: cg contribution deactivate [-h]
 
 Clear the active contribution working directory, so `cg contribution` commands fall back to the
 configured default and the usual directory discovery. Does not touch any files--only the
 selection.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution where`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution where[0m [[32m-h[0m]
+usage: cg contribution where [-h]
 
 Show which contribution working directory would be used.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution status`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution status[0m [[32m-h[0m] [[36m--refresh[0m]
+usage: cg contribution status [-h] [--refresh]
 
 Human-friendly summary of this contribution: submission/review status, sync status against the
 server, votes/comments/views, the moderator approve/reject gate, and any in-progress validation.
@@ -479,9 +479,9 @@ By default reports whatever .meta/contribution-status.json last cached (no netwo
 --refresh to fetch fresh first (updates that cache for next time too). With --json (top-level
 option), renders as JSON instead of text.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
-  [1;36m--refresh[0m   Fetch fresh from the server first (forces `fetch()`, which also refreshes
+options:
+  -h, --help  show this help message and exit
+  --refresh   Fetch fresh from the server first (forces `fetch()`, which also refreshes
               .meta/contribution-status.json for next time), instead of using whatever's cached
               there already.
 ```
@@ -489,20 +489,20 @@ option), renders as JSON instead of text.
 ## `cg contribution discard-local`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution discard-local[0m [[32m-h[0m]
+usage: cg contribution discard-local [-h]
 
 Discard local edits: reset this working directory's content to match server's current tip exactly.
 Purely local--no network access, unlike `cg contribution merge discard-local`, which re-fetches
 from the server first.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution delete`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution delete[0m [[32m-h[0m] [[36m--keep-local[0m] [[36m--keep-server[0m] [[36m--force[0m]
+usage: cg contribution delete [-h] [--keep-local] [--keep-server] [--force]
 
 Delete this contribution from the server (unrecoverable) and, by default, remove this entire
 working directory too. Pass --keep-local to instead detach: drop the server/version-data git
@@ -512,36 +512,36 @@ for a new one. Pass --keep-server to do the opposite: leave the server-side cont
 and just remove the local working directory. Destructive--prompts for confirmation unless --force
 is given; requires --force outright if stdin/stdout aren't a terminal.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m     show this help message and exit
-  [1;36m--keep-local[0m   Delete server-side only; keep and detach the local working directory (ready to
+options:
+  -h, --help     show this help message and exit
+  --keep-local   Delete server-side only; keep and detach the local working directory (ready to
                  become a new contribution on the next push). Mutually exclusive with --keep-
                  server.
-  [1;36m--keep-server[0m  Remove only the local working directory; leave the server-side contribution
+  --keep-server  Remove only the local working directory; leave the server-side contribution
                  untouched (just stop tracking it locally). Mutually exclusive with --keep-local.
-  [1;36m--force[0m, [1;32m-f[0m    Skip the interactive confirmation prompt. Required if stdin/stdout aren't a
+  --force, -f    Skip the interactive confirmation prompt. Required if stdin/stdout aren't a
                  terminal.
 ```
 
 ## `cg contribution renormalize-tests`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution renormalize-tests[0m [[32m-h[0m]
+usage: cg contribution renormalize-tests [-h]
 
 Renumber tests/'s ordinal directories to a clean, sequential, zero-padded sort key, preserving
 relative order (see the tests/ directory layout in
 codingame_tools.contribution_manager.test_cases_dir).
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution play`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution play[0m [[32m-h[0m] [[36m--local[0m] [[36m--validator[0m] [[36m--update-expected[0m] [[36m--show-stdout[0m]
-                            [[36m--timeout [33mSECONDS[0m] [[36m--build-timeout [33mSECONDS[0m]
-                            [32m[ORDINAL ...][0m
+usage: cg contribution play [-h] [--local] [--validator] [--update-expected] [--show-stdout]
+                            [--timeout SECONDS] [--build-timeout SECONDS]
+                            [ORDINAL ...]
 
 Run the current local solution.src against tests/ test cases entirely locally (no network access
 at all)--by shelling out to the appropriate interpreter as a subprocess, comparing captured stdout
@@ -552,23 +552,23 @@ those. Exits non-zero if any test case fails. Output matches `cg puzzle play`'s 
 ordinal/side/title in place of an index/label). Captured stdout is only printed for a failing test
 (or with --update-expected), unless --show-stdout is given.
 
-[1;34mpositional arguments:[0m
-  [1;32mORDINAL[0m               Only run these ordinals (tests/'s directory names, e.g. "03" or "3").
+positional arguments:
+  ORDINAL               Only run these ordinals (tests/'s directory names, e.g. "03" or "3").
                         Defaults to every ordinal.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
-  [1;36m--local[0m               Only run local-side test cases.
-  [1;36m--validator[0m           Only run validator-side test cases.
-  [1;36m--update-expected[0m     Overwrite each test case's output.txt with its actual output instead of
+options:
+  -h, --help            show this help message and exit
+  --local               Only run local-side test cases.
+  --validator           Only run validator-side test cases.
+  --update-expected     Overwrite each test case's output.txt with its actual output instead of
                         comparing against it--for accepting the solution's current behavior as the
                         new known-good baseline. Only written for runs that complete without
                         crashing/timing out. Implies --show-stdout, since the point is to review
                         the new output.
-  [1;36m--show-stdout[0m         Print captured stdout even for a passing test. Always printed for a
+  --show-stdout         Print captured stdout even for a passing test. Always printed for a
                         failing test, or with --update-expected, regardless.
-  [1;36m--timeout[0m [1;33mSECONDS[0m     Per-test-case wall-clock timeout. Default 10.0.
-  [1;36m--build-timeout[0m [1;33mSECONDS[0m
+  --timeout SECONDS     Per-test-case wall-clock timeout. Default 10.0.
+  --build-timeout SECONDS
                         Wall-clock timeout for the one-time build step that runs before any test
                         case. Separate from --timeout, and far more generous, because a cold build
                         can pull/build a container image and compile from scratch. Default 120.0.
@@ -578,7 +578,7 @@ ordinal/side/title in place of an index/label). Captured stdout is only printed 
 ## `cg contribution rebase`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution rebase[0m [[32m-h[0m]
+usage: cg contribution rebase [-h]
 
 Detect drift between the server and this working directory, resolving it automatically when
 unambiguous: a no-op if the server hasn't advanced since main last synced (regardless of local
@@ -586,58 +586,58 @@ edits), a true fast-forward if only the server changed (main's ref just moves, n
 a reported conflict--left entirely alone--if both sides changed (see `cg contribution
 diff`/`merge`).
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution merge`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution merge[0m [[32m-h[0m] [32mCOMMAND ...[0m
+usage: cg contribution merge [-h] COMMAND ...
 
 Resolve drift between the server and this working directory--parent for the merge state machine
 (start/continue/abort/interactive) and the instant discard-local/discard-server resolutions. Bare
 `cg contribution merge` is an alias for `merge start`.
 
-[1;34mpositional arguments:[0m
-  [1;32mCOMMAND[0m
-    [1;32mstart[0m           Begin a merge: fetch, then a real `git merge server` against the working tree.
+positional arguments:
+  COMMAND
+    start           Begin a merge: fetch, then a real `git merge server` against the working tree.
                     If it completes cleanly (including a trivial fast-forward), it's already done
                     --no `merge continue` needed. If it stops with conflicts, git writes its own
                     conflict markers into the affected files (or, for a binary conflict, just
                     keeps the local version)--resolve them, then `merge continue`. Idempotent--
                     does nothing (and doesn't error) if a merge is already in progress, or if the
                     server's version already matches where main last synced (nothing to merge).
-    [1;32mcontinue[0m        Finish an in-progress merge: stage everything and commit (refusing first if a
+    continue        Finish an in-progress merge: stage everything and commit (refusing first if a
                     still-unresolved path has a leftover conflict marker), then refresh the
                     solution symlink.
-    [1;32mabort[0m           Abort an in-progress merge: restore the working directory to its pre-merge
+    abort           Abort an in-progress merge: restore the working directory to its pre-merge
                     state and discard MERGE_HEAD. `server` is left untouched--nothing about the
                     merge was ever recorded anywhere.
-    [1;32mdiff[0m            Show the current merge conflict state (`git diff`, which during an unresolved
+    diff            Show the current merge conflict state (`git diff`, which during an unresolved
                     merge shows a combined diff against both sides for each conflicted path).
                     Equivalent to bare `cg contribution diff` while a merge is in progress. Fails
                     if no merge is in progress.
-    [1;32minteractive[0m     Start a merge if one isn't already in progress, then launch `git mergetool`
+    interactive     Start a merge if one isn't already in progress, then launch `git mergetool`
                     against the working tree. The merge remains in progress after the tool exits
                     (resolved files are staged, not committed)--run `cg contribution merge
                     continue` (or `abort`) when done.
-    [1;32mdiscard-local[0m   Discard all local edits: fetch, then move main's ref directly onto server's
+    discard-local   Discard all local edits: fetch, then move main's ref directly onto server's
                     new tip (like `git reset --hard server`--no new commit). Unlike `rebase`,
                     doesn't check whether local actually diverged first--always overwrites.
                     Instant--doesn't use the merge state machine.
-    [1;32mdiscard-server[0m  Update server/version-data to match the current server state, without touching
+    discard-server  Update server/version-data to match the current server state, without touching
                     main/the working tree at all. Just `fetch` under a different name--kept for
                     CLI naming continuity. Instant--doesn't use the merge state machine.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m        show this help message and exit
+options:
+  -h, --help        show this help message and exit
 ```
 
 ## `cg contribution merge start`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution merge start[0m [[32m-h[0m]
+usage: cg contribution merge start [-h]
 
 Begin a merge: fetch, then a real `git merge server` against the working tree. If it completes
 cleanly (including a trivial fast-forward), it's already done--no `merge continue` needed. If it
@@ -646,59 +646,59 @@ binary conflict, just keeps the local version)--resolve them, then `merge contin
 does nothing (and doesn't error) if a merge is already in progress, or if the server's version
 already matches where main last synced (nothing to merge).
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution merge continue`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution merge continue[0m [[32m-h[0m]
+usage: cg contribution merge continue [-h]
 
 Finish an in-progress merge: stage everything and commit (refusing first if a still-unresolved
 path has a leftover conflict marker), then refresh the solution symlink.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution merge abort`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution merge abort[0m [[32m-h[0m]
+usage: cg contribution merge abort [-h]
 
 Abort an in-progress merge: restore the working directory to its pre-merge state and discard
 MERGE_HEAD. `server` is left untouched--nothing about the merge was ever recorded anywhere.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution merge diff`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution merge diff[0m [[32m-h[0m]
+usage: cg contribution merge diff [-h]
 
 Show the current merge conflict state (`git diff`, which during an unresolved merge shows a
 combined diff against both sides for each conflicted path). Equivalent to bare `cg contribution
 diff` while a merge is in progress. Fails if no merge is in progress.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution merge interactive`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution merge interactive[0m [[32m-h[0m] [[36m--tool [33mNAME[0m]
+usage: cg contribution merge interactive [-h] [--tool NAME]
 
 Start a merge if one isn't already in progress, then launch `git mergetool` against the working
 tree. The merge remains in progress after the tool exits (resolved files are staged, not
 committed)--run `cg contribution merge continue` (or `abort`) when done.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m   show this help message and exit
-  [1;36m--tool[0m [1;33mNAME[0m  Merge tool to use (see `git help mergetool` for the built-in choices). Defaults to
+options:
+  -h, --help   show this help message and exit
+  --tool NAME  Merge tool to use (see `git help mergetool` for the built-in choices). Defaults to
                `git config merge.tool` if set (configure via `cg contribution git config
                merge.tool <name>`), then git's own default.
 ```
@@ -706,33 +706,33 @@ committed)--run `cg contribution merge continue` (or `abort`) when done.
 ## `cg contribution merge discard-local`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution merge discard-local[0m [[32m-h[0m]
+usage: cg contribution merge discard-local [-h]
 
 Discard all local edits: fetch, then move main's ref directly onto server's new tip (like `git
 reset --hard server`--no new commit). Unlike `rebase`, doesn't check whether local actually
 diverged first--always overwrites. Instant--doesn't use the merge state machine.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution merge discard-server`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution merge discard-server[0m [[32m-h[0m]
+usage: cg contribution merge discard-server [-h]
 
 Update server/version-data to match the current server state, without touching main/the working
 tree at all. Just `fetch` under a different name--kept for CLI naming continuity. Instant--doesn't
 use the merge state machine.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution diff`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution diff[0m [[32m-h[0m] [[36m--remote[0m] [[36m--interactive[0m] [[36m--tool [33mNAME[0m]
+usage: cg contribution diff [-h] [--remote] [--interactive] [--tool NAME]
 
 Show what's changed: working tree vs server's cached state (no network access by default). If a
 merge is in progress, shows the merge's own conflict state instead (same as `cg contribution merge
@@ -740,17 +740,17 @@ diff`)--`--remote` is refused then, since fetching mid-merge isn't allowed anywa
 to fetch fresh first. Pass --interactive to launch `git mergetool` instead of printing text (same
 as `cg contribution merge interactive`).
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m     show this help message and exit
-  [1;36m--remote[0m       Fetch fresh from the server first, instead of using whatever's cached.
-  [1;36m--interactive[0m  Launch git mergetool instead of printing a text diff.
-  [1;36m--tool[0m [1;33mNAME[0m    Merge tool to use with --interactive--see `git help mergetool`.
+options:
+  -h, --help     show this help message and exit
+  --remote       Fetch fresh from the server first, instead of using whatever's cached.
+  --interactive  Launch git mergetool instead of printing a text diff.
+  --tool NAME    Merge tool to use with --interactive--see `git help mergetool`.
 ```
 
 ## `cg contribution fetch`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution fetch[0m [[32m-h[0m]
+usage: cg contribution fetch [-h]
 
 Refresh server/version-data via a fresh findContribution. Leaves them untouched if the version
 hasn't changed, and avoids re-downloading the cover image if its binary ID hasn't changed either
@@ -758,14 +758,14 @@ hasn't changed, and avoids re-downloading the cover image if its binary ID hasn'
 this to refresh the cache for `diff`/`diff --interactive` without either of those. Refuses while a
 merge is in progress.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m  show this help message and exit
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cg contribution git`
 
 ```text
-[1;34musage: [0m[1;35mcg contribution git[0m [32m[git_args ...][0m
+usage: cg contribution git [git_args ...]
 
 Run a raw git command directly against this contribution's repo--e.g. `cg contribution git log
 --oneline --all --decorate`, `cg contribution git show server:solution.src`, `cg contribution git
@@ -775,8 +775,8 @@ codingame_tools.contribution_manager.manager's module docstring for why data/ de
 no .git marker of its own). No `--` needed, and nothing you pass is ever misread as one of cg's
 own options.
 
-[1;34mpositional arguments:[0m
-  [1;32mgit_args[0m
+positional arguments:
+  git_args
 ```
 
 ---

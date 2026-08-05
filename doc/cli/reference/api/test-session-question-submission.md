@@ -12,31 +12,31 @@ The `test-session-question-submission` service endpoint. See [`cg api`](index.md
 ## `cg api test-session-question-submission`
 
 ```text
-[1;34musage: [0m[1;35mcg api test-session-question-submission[0m [[32m-h[0m] [32mCOMMAND ...[0m
+usage: cg api test-session-question-submission [-h] COMMAND ...
 
 TestSessionQuestionSubmission service commands.
 
-[1;34mpositional arguments:[0m
-  [1;32mCOMMAND[0m
-    [1;32mfind-all-submissions[0m
+positional arguments:
+  COMMAND
+    find-all-submissions
                         Find all past submissions for a puzzle, most recent first.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m            show this help message and exit
+options:
+  -h, --help            show this help message and exit
 ```
 
 ## `cg api test-session-question-submission find-all-submissions`
 
 ```text
-[1;34musage: [0m[1;35mcg api test-session-question-submission find-all-submissions[0m [[32m-h[0m] [32mTEST-SESSION-HANDLE[0m
+usage: cg api test-session-question-submission find-all-submissions [-h] TEST-SESSION-HANDLE
 
 Find all past submissions for a puzzle, most recent first.
 
-[1;34mpositional arguments:[0m
-  [1;32mTEST-SESSION-HANDLE[0m  The puzzle's test session handle.
+positional arguments:
+  TEST-SESSION-HANDLE  The puzzle's test session handle.
 
-[1;34moptions:[0m
-  [1;32m-h[0m, [1;36m--help[0m           show this help message and exit
+options:
+  -h, --help           show this help message and exit
 ```
 
 ---
