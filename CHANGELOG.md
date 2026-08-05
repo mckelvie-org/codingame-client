@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## {{UNRELEASED}}
+## 1.0.5 (2026-08-05)
 
 - **PyPI now has a `Documentation` link, and `Changelog` points somewhere that exists.** `Changelog`
   previously pointed at GitHub Releases, which is empty because this project doesn't publish
