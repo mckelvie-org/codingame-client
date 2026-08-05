@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## {{UNRELEASED}}
+## 1.0.3 (2026-08-05)
 
 - No notable changes.
 
