@@ -19,8 +19,31 @@ input/output descriptions, stub generator, cover image, and a `tests/` tree.
 ## `.meta/` is a cache
 
 Nothing in `.meta/` is precious. It holds the test-session handle, downloaded test cases, cached
-statement copies, snapshots, and — for contributions — the git repository used for merges. It is
-gitignored on purpose, so a fresh clone of a repo containing a working directory won't have it.
+statement copies, snapshots, generated editor configuration, and — for contributions — usually the
+git repository used for merges. It is gitignored on purpose, so a fresh clone of a repo containing a
+working directory won't have it.
+
+`.meta/` is always at the working directory root, never inside `data/`. That split is the whole
+point: `data/` is the part worth backing up, and generated state has no business in it.
+
+## What's portable
+
+**`contribution.json` + `data/` are the exportable state.** Copy those two to another machine — by
+hand, through a git repo that tracks them, from a backup — run `repair()`, and you have a working
+directory equivalent to the original.
+
+That's the rule deciding what may live where:
+
+| | travels | holds |
+| --- | --- | --- |
+| `contribution.json`, `data/` | yes | facts true of the contribution *wherever it is* |
+| `.meta/` | no | facts true of *this checkout on this machine* |
+
+Concretely, the two copies can differ in ways that don't matter. A contribution created standalone
+keeps its repository at `data/.git`; export it into a colleague's monorepo and their copy comes up
+with the repository at `.meta/.contribution-git` instead, because an embedded `.git` would confuse
+their project. Same contribution, same content, different local plumbing — and nothing that travelled
+had an opinion about it.
 
 That's what `repair()` is for:
 
@@ -32,9 +55,28 @@ cg contribution repair
 Both rebuild `.meta/` from the identity file without touching `data/`. If something in `.meta/`
 looks wrong, deleting it and repairing is always a valid move.
 
-**Don't treat `.meta/`'s git history as a backup.** For contributions it exists to make merge
-resolution feel familiar, not to preserve anything. The only durable copy of your work is on the
-server, and the server keeps exactly one solution per contribution with no history.
+**Don't treat the git history as a backup.** For contributions it exists to make merge resolution
+feel familiar, not to preserve anything. The only durable copy of your work is on the server, and
+the server keeps exactly one solution per contribution with no history.
+
+### Where a contribution's git repository lives
+
+Two possibilities, decided once when the working directory is created and recorded in
+`contribution.json`:
+
+| Created… | Git repository at | Why |
+| --- | --- | --- |
+| inside an existing git project | `.meta/.contribution-git/`, with `data/` as its work tree | nothing under the working directory carries a `.git` marker, so your project doesn't see a nested repo |
+| standalone | `data/.git` | no outer project to confuse, so `data/` is just an ordinary git working directory |
+
+In the standalone case you can run plain `git` commands in `data/` — `git log`, `git diff`,
+`git stash` — with no extra flags. In the nested case, point git at the repository explicitly:
+
+```bash
+git --git-dir=.meta/.contribution-git --work-tree=data log --oneline main
+```
+
+Either way `.meta/` stays at the root. Only the repository moves.
 
 ## The solution symlink
 
@@ -68,7 +110,7 @@ The same layout, but very different amounts of machinery:
 | | puzzle | contribution |
 | --- | --- | --- |
 | Editable files | one | many |
-| Git repo in `.meta/` | no | yes — for three-way merges against the server |
+| Git repository | no | yes — for three-way merges against the server |
 | Server keeps history? | yes, per language | no — one solution, no history |
 | Conflict handling | `cg puzzle discard-local` | `cg contribution rebase` / `merge` |
 

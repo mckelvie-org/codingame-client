@@ -7,6 +7,8 @@ These are pure/local tests--no network--so they run under the default `pdm run t
 
 from __future__ import annotations
 
+import dataclasses
+import json
 from pathlib import Path
 
 from codingame_tools.client.common.protocol.contribution import (
@@ -21,6 +23,7 @@ from codingame_tools.contribution_manager.contribution_commit_data import (
 from codingame_tools.contribution_manager.schema import (
     CONTRIBUTION_SCHEMA_VERSION,
     CgContributionIdentity,
+    CgContributionMeta,
     CgContributionView,
 )
 
@@ -60,7 +63,7 @@ def _make_contribution(*, public_handle: str = "handle-123", version: int = 3, c
 
 def test_identity_round_trips_through_json(tmp_path: Path) -> None:
     identity = CgContributionIdentity(
-            schema_version=CONTRIBUTION_SCHEMA_VERSION, contribution_handle="the-handle", git_dir_in_data=True,
+            schema_version=CONTRIBUTION_SCHEMA_VERSION, contribution_handle="the-handle",
         )
     path = tmp_path / "contribution.json"
     identity.save(path)
@@ -68,9 +71,12 @@ def test_identity_round_trips_through_json(tmp_path: Path) -> None:
     assert reloaded == identity
 
 
-def test_identity_git_dir_in_data_defaults_to_false() -> None:
-    identity = CgContributionIdentity(schema_version=CONTRIBUTION_SCHEMA_VERSION, contribution_handle="the-handle")
-    assert identity.git_dir_in_data is False
+def test_identity_carries_identity_only() -> None:
+    """`contribution.json` says *which contribution this is*, and nothing else. Where the git-dir
+       lives is chosen and maintained by this client, so it belongs in `.meta/contribution-meta.
+       json` (`CgContributionMeta`) with the rest of the infrastructure state."""
+    fields = {f.name for f in dataclasses.fields(CgContributionIdentity)}
+    assert fields == {"schema_version", "extra_data", "contribution_handle"}
 
 
 def test_identity_contribution_handle_defaults_to_none() -> None:
@@ -81,12 +87,23 @@ def test_identity_contribution_handle_defaults_to_none() -> None:
 
 
 def test_identity_with_none_handle_round_trips_through_json(tmp_path: Path) -> None:
-    identity = CgContributionIdentity(schema_version=CONTRIBUTION_SCHEMA_VERSION, git_dir_in_data=True)
+    identity = CgContributionIdentity(schema_version=CONTRIBUTION_SCHEMA_VERSION)
     path = tmp_path / "contribution.json"
     identity.save(path)
     reloaded = CgContributionIdentity.load(path)
     assert reloaded == identity
     assert reloaded.contribution_handle is None
+
+
+# --- CgContributionMeta ------------------------------------------------------------------------
+
+
+def test_meta_round_trips_through_json(tmp_path: Path) -> None:
+    meta = CgContributionMeta(git_repo="data/.git")
+    path = tmp_path / "contribution-meta.json"
+    meta.save(path)
+    assert json.loads(path.read_text())["gitRepo"] == "data/.git"
+    assert CgContributionMeta.load(path) == meta
 
 
 # --- CgContributionView ----------------------------------------------------------------------

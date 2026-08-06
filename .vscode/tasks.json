@@ -71,9 +71,9 @@
       "problemMatcher": []
     },
     {
-      "label": "CG puzzle: start debug session",
+      "label": "CG C++: Start debug session",
       "type": "shell",
-      "command": "cg puzzle --puzzle-dir /Users/sam/projects/pypi/codingame-tools/puzzle debug start ${input:cg_puzzle_testCase}",
+      "command": "cg debug start --file \"${file}\" --workspace-root \"${workspaceFolder}\"",
       "presentation": {
         "reveal": "silent",
         "panel": "shared"
@@ -81,9 +81,9 @@
       "problemMatcher": []
     },
     {
-      "label": "CG puzzle: stop debug session",
+      "label": "CG C++: Stop debug session",
       "type": "shell",
-      "command": "cg puzzle --puzzle-dir /Users/sam/projects/pypi/codingame-tools/puzzle debug stop",
+      "command": "cg debug stop --file \"${file}\" --workspace-root \"${workspaceFolder}\"",
       "presentation": {
         "reveal": "never",
         "panel": "shared"

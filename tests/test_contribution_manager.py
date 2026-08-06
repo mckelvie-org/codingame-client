@@ -12,7 +12,9 @@ skipped gracefully if genuinely absent, for parity with `requires_diff3` elsewhe
 from __future__ import annotations
 
 import dataclasses
+import json
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -289,12 +291,199 @@ async def test_import_writes_gitignore_for_meta(tmp_path: Path) -> None:
 
     await manager.import_("handle-1")
 
-    # Not inside an existing outer git repo (tmp_path is bare) -> git-dir nested in data/, so the
-    # protective .gitignore lives at data/.gitignore.
-    identity = manager.load_identity()
-    assert identity is not None
-    assert identity.git_dir_in_data is True
-    assert (tmp_path / "data" / ".gitignore").read_text() == ".meta/\n"
+    # Not inside an existing outer git repo (tmp_path is bare) -> embedded layout, git-dir at
+    # data/.git. .meta/ is at the working directory root either way, so the .gitignore protecting it
+    # from a future outer project is written there, and data/ stays free of anything generated.
+    meta = manager.load_meta()
+    assert meta is not None
+    assert meta.git_repo == "data/.git"
+    assert manager.git_dir == tmp_path / "data" / ".git"
+    assert manager.meta_dir == tmp_path / ".meta"
+    assert (tmp_path / ".gitignore").read_text() == ".meta/\n"
+    assert not (tmp_path / "data" / ".gitignore").exists()
+
+
+async def test_meta_is_never_inside_data_in_either_git_dir_layout(tmp_path: Path) -> None:
+    """`data/` holds user state and only user state: it is the git work tree, it is what gets
+       pushed to CodinGame, and it is the only part worth backing up. `git_dir_in_data` moves the
+       git-dir and nothing else--an earlier version dragged `.meta/` along with it, which put
+       generated, disposable state inside the one directory that must not have any."""
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    subprocess.run(["git", "init", "-q", str(outer)], check=True, capture_output=True)
+
+    for root, expected_in_data in ((tmp_path / "standalone", True), (outer / "inside", False)):
+        client, _, _, _ = _make_fake_client(_make_contribution(_make_full_data()))
+        manager = CgContributionManager(root, client)  # type: ignore[arg-type]
+        await manager.import_("handle-1")
+
+        meta = manager.load_meta()
+        assert meta is not None
+        assert meta.git_repo == ("data/.git" if expected_in_data else ".meta/.contribution-git"), root
+
+        assert manager.meta_dir == root / ".meta", root
+        assert manager.status_cache_file.parent == root / ".meta", root
+        assert not (root / "data" / ".meta").exists(), root
+        assert (root / ".gitignore").read_text() == ".meta/\n"
+
+        expected_git_dir = root / "data" / ".git" if expected_in_data else root / ".meta" / ".contribution-git"
+        assert manager.git_dir == expected_git_dir, root
+        assert manager.git_dir.is_dir(), root
+
+        # Nothing generated is committed either. The embedded layout used to need a synthetic
+        # .gitignore in every tree on `server`, to keep `git clean -fd` from deleting the git-dir
+        # out of data/.meta/; git excludes its own data/.git inherently, so that is gone.
+        tracked = subprocess.run(
+                ["git", f"--git-dir={manager.git_dir}", "ls-tree", "--name-only", "-r", "server"],
+                check=True, capture_output=True, text=True).stdout.splitlines()
+        assert ".gitignore" not in tracked, root
+        assert not any(name.startswith(".meta/") for name in tracked), root
+
+
+async def test_losing_meta_does_not_orphan_an_embedded_repository(tmp_path: Path) -> None:
+    """`.meta/` is disposable by design--deleting it and repairing is documented as always valid--so
+       the recorded git-dir location must never be the only copy. A standalone contribution's
+       `data/.git` outlives `.meta/`, and finding it on disk is what stops `repair()` from
+       initializing a second, empty repository beside it and abandoning the real history."""
+    client, _, _, _ = _make_fake_client(_make_contribution(_make_full_data()))
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+    original_head = manager.git_repo.resolve_ref("main")
+
+    shutil.rmtree(manager.meta_dir)
+    assert manager.load_meta() is None
+
+    assert manager.git_dir == tmp_path / "data" / ".git"
+    assert manager.git_repo.resolve_ref("main") == original_head
+
+
+async def test_losing_meta_is_survivable_even_once_an_outer_git_project_appears(tmp_path: Path) -> None:
+    """The hazard that made this fact worth recording at all: deriving the location from "is there
+       an outer repo?" gives a *different* answer than it did at creation time once someone runs
+       `git init` in a parent directory. Finding the existing repository beats re-deriving."""
+    client, _, _, _ = _make_fake_client(_make_contribution(_make_full_data()))
+    manager = CgContributionManager(tmp_path / "wd", client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+    assert manager.git_dir == tmp_path / "wd" / "data" / ".git"
+
+    shutil.rmtree(manager.meta_dir)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True)
+
+    # Re-derivation would now say "inside a git project" -> .meta/.contribution-git, which doesn't
+    # exist, so repair() would build a fresh empty repo there. Instead it finds the real one and
+    # refuses, which is the whole point.
+    assert manager.git_dir == tmp_path / "wd" / "data" / ".git"
+    with pytest.raises(CgContributionManagerError, match="already been imported"):
+        await manager.repair()
+
+
+async def test_repair_rewrites_the_meta_record_it_was_run_to_replace(tmp_path: Path) -> None:
+    """Repair mode exists precisely because `.meta/` went missing, so it has to put the record
+       back--otherwise every later command pays for the on-disk probe."""
+    client, _, _, _ = _make_fake_client(_make_contribution(_make_full_data()))
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+
+    shutil.rmtree(manager.meta_dir)
+    shutil.rmtree(tmp_path / "data" / ".git")
+    await manager.import_("handle-1")  # repair mode: identity + data/ present, git-dir gone
+
+    meta = manager.load_meta()
+    assert meta is not None
+    assert meta.git_repo == "data/.git"
+
+
+async def test_a_stale_git_dir_in_data_is_dropped_from_the_identity_file(tmp_path: Path) -> None:
+    """Through 1.0.x the location lived in `contribution.json`. `CatchAll` would round-trip the key
+       forever, leaving the identity manifest implying it still owns a fact it no longer does."""
+    client, _, _, _ = _make_fake_client(_make_contribution(_make_full_data()))
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+
+    raw = json.loads(manager.identity_file.read_text())
+    raw["gitDirInData"] = True
+    manager.identity_file.write_text(json.dumps(raw))
+    shutil.rmtree(manager.meta_dir)
+    shutil.rmtree(tmp_path / "data" / ".git")
+
+    await manager.import_("handle-1")
+
+    assert "gitDirInData" not in json.loads(manager.identity_file.read_text())
+
+
+async def test_two_repositories_with_no_record_refuses_rather_than_guessing(tmp_path: Path) -> None:
+    """Picking one would silently abandon the other's history, which is the exact failure this
+       whole resolution order exists to avoid."""
+    client, _, _, _ = _make_fake_client(_make_contribution(_make_full_data()))
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+
+    (tmp_path / ".meta" / ".contribution-git").mkdir(parents=True, exist_ok=True)
+    (manager.meta_file).unlink()
+
+    with pytest.raises(CgContributionManagerError, match="Refusing to guess"):
+        _ = manager.git_dir
+
+
+async def test_contribution_json_plus_data_is_a_complete_portable_export(tmp_path: Path) -> None:
+    """The portability contract: `contribution.json` + `data/` are the exportable state. Copy those
+       two anywhere, repair, and you have an equivalent working directory.
+
+       The destination here is *inside a git project* while the source was standalone, so the two
+       copies legitimately end up with different git-dir layouts. That is precisely why the layout
+       may not live in `contribution.json`--it would travel with the export and be wrong on arrival,
+       putting an embedded `.git` inside someone else's project."""
+    source = tmp_path / "source"
+    client, _, _, _ = _make_fake_client(_make_contribution(_make_full_data()))
+    source_manager = CgContributionManager(source, client)  # type: ignore[arg-type]
+    await source_manager.import_("handle-1")
+    assert source_manager.git_dir == source / "data" / ".git"
+
+    # Export: the identity file and data/, and nothing else. data/.git is excluded the same way
+    # syncing through an outer git repo would exclude it--git does not track a nested .git.
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    subprocess.run(["git", "init", "-q", str(outer)], check=True, capture_output=True)
+    destination = outer / "imported"
+    destination.mkdir()
+    shutil.copy2(source_manager.identity_file, destination / "contribution.json")
+    shutil.copytree(source / "data", destination / "data", ignore=shutil.ignore_patterns(".git"))
+
+    client2, _, _, _ = _make_fake_client(_make_contribution(_make_full_data()))
+    destination_manager = CgContributionManager(destination, client2)  # type: ignore[arg-type]
+    await destination_manager.repair()
+
+    # Same contribution, same content--different local plumbing.
+    assert destination_manager.git_dir == destination / ".meta" / ".contribution-git"
+    assert not (destination / "data" / ".git").exists()
+    assert destination_manager.load_identity() == source_manager.load_identity()
+    for name in ("statement.cgmd", "solution.src", "contribution-data.json"):
+        assert (destination / "data" / name).read_bytes() == (source / "data" / name).read_bytes(), name
+
+    status = await destination_manager.status()
+    assert status.sync_status is CgContributionSyncStatus.UP_TO_DATE
+
+
+async def test_the_pre_1_1_meta_in_data_layout_is_rejected_rather_than_silently_reinitialized(
+            tmp_path: Path,
+        ) -> None:
+    """Versions before 1.1 put the git-dir at `data/.meta/.contribution-git/`. Today's path for
+       that layout is `data/.git`, which simply doesn't exist there--so without this guard
+       `repair()` would happily init a second, empty repo and abandon the local history in the
+       first one."""
+    client, _, _, _ = _make_fake_client(_make_contribution(_make_full_data()))
+    manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
+    await manager.import_("handle-1")
+
+    legacy = tmp_path / "data" / ".meta" / ".contribution-git"
+    shutil.move(str(manager.git_dir), str(legacy))
+
+    with pytest.raises(CgContributionManagerError, match="before codingame-tools 1.1"):
+        _ = manager.git_dir
+    with pytest.raises(CgContributionManagerError, match="before codingame-tools 1.1"):
+        await manager.repair()
+    with pytest.raises(CgContributionManagerError, match="before codingame-tools 1.1"):
+        await manager.import_("handle-1")
 
 
 async def test_import_with_no_cover_image_leaves_cover_hash_none(tmp_path: Path) -> None:
@@ -358,7 +547,7 @@ async def test_import_repairs_when_git_dir_missing_but_content_present(tmp_path:
     await manager.import_("handle-1")
     (tmp_path / "data" / "statement.cgmd").write_text("Local edit surviving the clone\n")
 
-    shutil.rmtree(manager.git_dir.parent)  # remove .meta/ (the git-dir container) entirely
+    shutil.rmtree(manager.git_dir)  # remove the git-dir, leaving data/'s content
     assert not manager.git_dir.exists()
 
     view = await manager.import_("handle-1")
@@ -381,7 +570,7 @@ async def test_import_repair_mode_renormalizes_non_canonical_test_case_dirs(tmp_
     await manager.import_("handle-1")
     (manager.tests_dir / "01").rename(manager.tests_dir / "05")  # simulate a non-canonical layout
 
-    shutil.rmtree(manager.git_dir.parent)
+    shutil.rmtree(manager.git_dir)
     await manager.import_("handle-1")
 
     assert not (manager.tests_dir / "05").exists()
@@ -396,7 +585,7 @@ async def test_reimport_with_language_change_regenerates_symlink(tmp_path: Path)
     await manager.import_("handle-1")
     assert (tmp_path / "solution.py").is_symlink()
 
-    shutil.rmtree(manager.git_dir.parent)  # force repair mode (fresh init_repo, per above)
+    shutil.rmtree(manager.git_dir)  # force repair mode (fresh init_repo, per above)
     new_data = _make_full_data(solution_language="Java", solution="class Main {}")
     contribution2 = _make_contribution(new_data, version=4)
     client2, _, _, _ = _make_fake_client(contribution2)
@@ -421,7 +610,7 @@ async def test_repair_with_handle_delegates_to_import(tmp_path: Path) -> None:
     await manager.import_("handle-1")
     (tmp_path / "data" / "statement.cgmd").write_text("Local edit surviving the clone\n")
 
-    shutil.rmtree(manager.git_dir.parent)
+    shutil.rmtree(manager.git_dir)
     assert not manager.git_dir.exists()
 
     view = await manager.repair()
@@ -444,7 +633,7 @@ async def test_repair_without_handle_reconstructs_purely_local(tmp_path: Path) -
     await manager.create(title="My Puzzle")
     (tmp_path / "data" / "statement.cgmd").write_text("Edited before ever pushing\n")
 
-    shutil.rmtree(manager.git_dir.parent)
+    shutil.rmtree(manager.git_dir)
     assert not manager.git_dir.exists()
 
     view = await manager.repair()  # would raise if it ever touched client (a plain object())
@@ -688,7 +877,7 @@ async def test_push_refuses_instead_of_recreating_when_handle_set_but_git_dir_mi
     manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
     await manager.import_("handle-1")
 
-    shutil.rmtree(manager.git_dir.parent)  # simulate a missing/corrupted git-dir
+    shutil.rmtree(manager.git_dir)  # simulate a missing/corrupted git-dir
     assert not manager.git_dir.exists()
     identity = manager.load_identity()
     assert identity is not None
@@ -713,7 +902,7 @@ async def test_delete_uses_contribution_handle_even_if_git_dir_missing(tmp_path:
     manager = CgContributionManager(tmp_path, client)  # type: ignore[arg-type]
     await manager.import_("handle-1")
 
-    shutil.rmtree(manager.git_dir.parent)  # simulate a missing/corrupted git-dir
+    shutil.rmtree(manager.git_dir)  # simulate a missing/corrupted git-dir
 
     await manager.delete()
 

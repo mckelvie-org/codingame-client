@@ -11,7 +11,7 @@ import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
-from typing import cast
+from typing import Any, cast
 
 import aiohttp
 from argparse_wizard import CliBase, CliCommand, CliError, CliExit, OptCmdFunc, cli_command
@@ -67,6 +67,7 @@ from ..language import (
     CgLanguageOperationNotSupportedError,
     CgVsCodeMergeError,
     clean_managed,
+    get_language,
 )
 from ..puzzle_manager import (
     PUZZLE_IDENTITY_FILE_NAME,
@@ -78,6 +79,7 @@ from ..puzzle_manager import (
     resolve_puzzle_dir,
 )
 from ..settings import CgSettings, relativize_settings_dir, resolve_settings
+from ..workdir import CgWorkingDir, find_working_dir, resolve_working_dir, working_dir_kind
 
 logger = logging.getLogger(__name__)
 
@@ -1796,6 +1798,318 @@ class CgCli(CliBase):
                        help="The authoring codingamer's numeric ID. Defaults to the logged-in codingamer's ID.")
         return handler
 
+    @staticmethod
+    def _add_workspace_root_arg(p: Any) -> None:
+        """The `--workspace-root` option every kind-agnostic command takes.
+
+           Only containerized languages care: they bind-mount it so in-container paths match host
+           paths (see `codingame_tools.language._docker`). Generated VS Code tasks pass
+           `${workspaceFolder}` explicitly, because the editor knows the real answer and cg's
+           `find_workspace_root` is only a heuristic."""
+        p.add_argument("--workspace-root", type=Path, default=None, metavar="DIR",
+                       help="The editor workspace root containing the working directory--normally "
+                            "VS Code's ${workspaceFolder}. Only matters for containerized "
+                            "languages, which bind-mount it so in-container paths match host "
+                            "paths; passing it explicitly beats cg's own guess. Defaults to "
+                            "searching upward for a .vscode/ or VCS directory.")
+
+    def _resolve_working_dir_arg(self, target: Path | None) -> CgWorkingDir:
+        """The working directory a `--file` names, or the one containing the current directory.
+
+           Shared by every kind-agnostic command. Without `--file` these stay usable by hand, which
+           is why discovery from the cwd is a fallback rather than an error."""
+        if target is not None:
+            return resolve_working_dir(target)
+        found = find_working_dir(Path.cwd())
+        if found is None:
+            raise CliError(
+                    "No puzzle or contribution working directory found here. Pass --file "
+                    "(a file inside one), or cd into one.")
+        return found
+
+    @cli_command("Run the solution for whatever file you name against its working directory's test "
+                 "cases, whether that's a puzzle or a contribution. Entirely local--no network "
+                 "access at all. Exists so one editor task can serve every working directory in a "
+                 "workspace: `cg play --file ${file}` needs to know neither which kind of working "
+                 "directory it's in nor where that directory is. Exits non-zero if any test fails.")
+    async def cmd_play(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            selected_only: bool = self.args.selected
+            timeout: float = self.args.timeout
+            build_timeout: float = self.args.build_timeout
+            working_dir = self._resolve_working_dir_arg(self.args.file)
+
+            console = Console(stderr=True, highlight=False)
+            # soft_wrap: a long absolute path shouldn't be folded into two lines.
+            console.print(f"[dim]{working_dir.kind} {working_dir.root}[/dim]", soft_wrap=True)
+            failures = 0
+            if working_dir.kind == "puzzle":
+                manager = CgPuzzleManager(
+                        working_dir.root, cast(CgClient, None),
+                        toolchain_dir=self.resolve_toolchain_dir(),
+                        mount_root=self.args.workspace_root)
+                indices = [manager.resolve_debug_test_index()] if selected_only else None
+                for result in await manager.play_local(
+                            indices, timeout=timeout, build_timeout=build_timeout):
+                    failures += not result.passed
+                    mark = "[green]PASS[/green]" if result.passed else "[red]FAIL[/red]"
+                    console.print(f"[{mark}] {result.index} {result.label}")
+                    if not result.passed:
+                        console.print(f"  expected: {result.expected_output!r}")
+                        console.print(f"  actual:   {result.actual_output!r}")
+            else:
+                contribution = CgContributionManager(
+                        working_dir.root, cast(CgClient, None),
+                        toolchain_dir=self.resolve_toolchain_dir(),
+                        mount_root=self.args.workspace_root)
+                language = contribution.load().data.solution_language
+                if language is None:
+                    raise CliError(f"{working_dir.root} has no solution language set.")
+                test_cases = [contribution.resolve_debug_test()] if selected_only \
+                    else contribution.list_local_tests()
+                for outcome in await contribution.run_local_tests(
+                            test_cases, language, timeout=timeout, build_timeout=build_timeout):
+                    failures += not outcome.passed
+                    mark = "[green]PASS[/green]" if outcome.passed else "[red]FAIL[/red]"
+                    console.print(f"[{mark}] {outcome.ordinal} {outcome.side}: {outcome.title}")
+                    if not outcome.passed:
+                        console.print(f"  expected: {outcome.expected_output!r}")
+                        console.print(f"  actual:   {outcome.actual_output!r}")
+            if failures:
+                raise CliError(f"{failures} test case(s) failed.")
+        p = cmd.get_parser()
+        p.add_argument("--file", "-f", type=Path, default=None, metavar="FILE",
+                       help="Any file inside the working directory to run--normally VS Code's "
+                            "${file}. Its kind (puzzle or contribution) and root are both inferred "
+                            "from it. Defaults to discovering a working directory from the current "
+                            "directory.")
+        p.add_argument("--selected", "-s", default=False, action="store_true",
+                       help="Run only the test case selected for debugging (see `cg puzzle "
+                            "select-test`/`cg contribution select-test`) instead of all of them.")
+        p.add_argument("--timeout", type=float, default=DEFAULT_RUN_TIMEOUT_SECONDS, metavar="SECONDS",
+                       help="Per-test-case run timeout in seconds.")
+        p.add_argument("--build-timeout", type=float, default=DEFAULT_BUILD_TIMEOUT_SECONDS,
+                       metavar="SECONDS", help="Build timeout in seconds, for compiled languages.")
+        self._add_workspace_root_arg(p)
+        return handler
+
+    def _report_provisioning(self, changed: list[Path], *, supported: bool, check: bool) -> None:
+        """Shared reporting for `cg vscode install`.
+
+           An empty `changed` is ambiguous--already up to date, or no integration for any of these
+           languages at all--so `supported` is needed to tell the two apart. Under `--check` a
+           non-empty result exits non-zero, so it works in a script or a pre-commit hook."""
+        if not changed:
+            if supported:
+                print("VS Code configuration is up to date.")
+            else:
+                self.eprint("No VS Code integration available for this language yet--nothing written.")
+            return
+        if check:
+            self.eprint("VS Code configuration is out of date; `cg vscode install` would update:")
+            for path in changed:
+                print(path)
+            raise CliExit(1)
+        for path in changed:
+            print(path)
+
+    @cli_command(
+            "Editor integration for VS Code. All-or-nothing opt-in: nothing here is written unless "
+            "you ask for it, and what is written is confined to entries cg names as its own.")
+    async def cmd_vscode(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None
+
+    def _provisioning_targets(self, target: Path | None) -> list[CgWorkingDir]:
+        """Which working directories `cg vscode install` should set up.
+
+           With `--file`, exactly the one that file belongs to. Without it, **every** working
+           directory cg can identify: the one the current directory sits inside, plus the active
+           puzzle and the active contribution (see `cg puzzle activate`).
+
+           A set rather than a single directory because installing is all-or-nothing opt-in, and
+           because there is nothing to arbitrate. What gets written is per *language*, and languages
+           are independent--so setting up two working directories at once is well defined, and two
+           sharing a language simply write the same entries twice, the second a no-op. Picking one
+           and ignoring the other would be the surprising behaviour, and erroring on "both a puzzle
+           and a contribution are active" would reject the most ordinary setup there is."""
+        if target is not None:
+            return [resolve_working_dir(target)]
+
+        found: list[CgWorkingDir] = []
+        seen: set[Path] = set()
+
+        def add(candidate: CgWorkingDir | None) -> None:
+            if candidate is not None and candidate.root not in seen:
+                seen.add(candidate.root)
+                found.append(candidate)
+
+        add(find_working_dir(Path.cwd()))
+        settings = self.resolve_default_settings()
+        for resolve in (resolve_puzzle_dir, resolve_contribution_dir):
+            try:
+                active = Path(resolve(None, settings=settings)).resolve()
+            except Exception:  # noqa: BLE001 -- "not configured" is each resolver's own exception
+                continue
+            # Resolvers take a configured path at face value; it need not exist yet.
+            kind = working_dir_kind(active)
+            if kind is not None:
+                add(CgWorkingDir(root=active, kind=kind))
+
+        if not found:
+            raise CliError(
+                    "No puzzle or contribution working directory found. Pass --file (any file "
+                    "inside one), cd into one, or activate one with `cg puzzle activate` / "
+                    "`cg contribution activate`.")
+        return found
+
+    @cli_command(
+            "Install cg's VS Code run/debug configuration. What it writes is the same for every "
+            "working directory of a given language, so this is run once per language rather than "
+            "once per working directory--and never again after an import, repair, or language "
+            "change. With --file, sets up just that file's working directory; with no arguments, "
+            "every working directory cg can find (the one you are standing in, plus the active "
+            "puzzle and contribution). Writes into the workspace root's .vscode/ (VS Code only "
+            "reads launch.json from the workspace root, never from a subdirectory), merging with "
+            "what is already there: it replaces only the entries it generated, leaves yours alone, "
+            "and does not touch a file whose content would not change.")
+    async def cmd_vscode__install(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            workspace_dir: Path | None = self.args.workspace_dir
+            force: bool = self.args.force
+            check: bool = self.args.check
+            targets = self._provisioning_targets(self.args.file)
+            toolchain_dir = self.resolve_toolchain_dir()
+
+            changed: list[Path] = []
+            supported = False
+            for working_dir in targets:
+                if working_dir.kind == "puzzle":
+                    puzzle = CgPuzzleManager(
+                            working_dir.root, cast(CgClient, None), toolchain_dir=toolchain_dir)
+                    puzzle_data = puzzle.load_puzzle_data()
+                    language = puzzle_data.solution_language if puzzle_data is not None else None
+                    if language is None:
+                        self.eprint(f"{working_dir.root}: no solution language set--skipped.")
+                        continue
+                    coro = puzzle.provision_vscode(
+                            workspace_root=workspace_dir, force=force, check=check)
+                else:
+                    contribution = CgContributionManager(
+                            working_dir.root, cast(CgClient, None), toolchain_dir=toolchain_dir)
+                    language = contribution.load().data.solution_language
+                    if language is None:
+                        self.eprint(f"{working_dir.root}: no solution language set--skipped.")
+                        continue
+                    coro = contribution.provision_vscode(
+                            language, workspace_root=workspace_dir, force=force, check=check)
+                supported = supported or get_language(language).supports_vscode
+                try:
+                    changed.extend(await coro)
+                except CgVsCodeMergeError as e:
+                    raise CliError(str(e)) from e
+            self._report_provisioning(changed, supported=supported, check=check)
+        p = cmd.get_parser()
+        p.add_argument("--file", "-f", type=Path, default=None, metavar="FILE",
+                       help="Set up only the working directory this file belongs to. Defaults to "
+                            "every working directory cg can find.")
+        p.add_argument("--workspace-dir", type=Path, default=None, metavar="DIR",
+                       help="Workspace root to write .vscode/ into. Defaults to the nearest "
+                            "enclosing directory that already has a .vscode/, then the nearest "
+                            "one under version control, then the working directory itself.")
+        p.add_argument("--force", action="store_true",
+                       help="Overwrite an existing .vscode/ config file that isn't strict JSON "
+                            "(VS Code allows comments there, which can't be merged into safely). "
+                            "Without this, such a file is left untouched and an error is reported.")
+        p.add_argument("--check", action="store_true",
+                       help="Report what would change and exit non-zero if anything would, without "
+                            "writing. Use it to find out whether a cg upgrade changed the "
+                            "generated configuration--there is no version stamp to compare, "
+                            "because the generated content is the version.")
+        return handler
+
+    @cli_command("Debug-session commands that work in any working directory, puzzle or "
+                 "contribution. The kind-agnostic counterparts of `cg puzzle debug` / `cg "
+                 "contribution debug`, taking a file instead of a directory and a test selection "
+                 "instead of a test argument--which is what lets one static VS Code launch "
+                 "configuration per language serve a whole workspace.")
+    async def cmd_debug(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None
+
+    @cli_command("Build the debug profile and start a stopped debug target fed by the working "
+                 "directory's selected test case, ready for a debugger to attach. Prints the "
+                 "connection details. Which test is selected comes from `.meta/` (see `cg puzzle "
+                 "select-test` / `cg contribution select-test`), defaulting to the first test "
+                 "case--so this command needs no test argument, and a launch configuration wiring "
+                 "it to a preLaunchTask never has to be regenerated.")
+    async def cmd_debug__start(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            working_dir = self._resolve_working_dir_arg(self.args.file)
+            build_timeout: float = self.args.build_timeout
+            toolchain_dir = self.resolve_toolchain_dir()
+            mount_root: Path | None = self.args.workspace_root
+            try:
+                if working_dir.kind == "puzzle":
+                    puzzle = CgPuzzleManager(
+                            working_dir.root, cast(CgClient, None),
+                            toolchain_dir=toolchain_dir, mount_root=mount_root)
+                    session = await puzzle.start_debug_session(
+                            puzzle.resolve_debug_test_index(), timeout=build_timeout)
+                else:
+                    contribution = CgContributionManager(
+                            working_dir.root, cast(CgClient, None),
+                            toolchain_dir=toolchain_dir, mount_root=mount_root)
+                    language = contribution.load().data.solution_language
+                    if language is None:
+                        raise CliError(f"{working_dir.root} has no solution language set.")
+                    test_case = contribution.resolve_debug_test()
+                    session = await contribution.start_debug_session(
+                            language, test_case.ordinal, test_case.side, timeout=build_timeout)
+            except CgLanguageOperationNotSupportedError as e:
+                raise CliError(str(e)) from e
+            if session.output:
+                self.eprint(session.output.rstrip())
+            if not session.ok:
+                raise CliExit(1)
+            for key, value in session.details.items():
+                print(f"{key}: {value}")
+        p = cmd.get_parser()
+        p.add_argument("--file", "-f", type=Path, default=None, metavar="FILE",
+                       help="Any file inside the working directory to debug--normally VS Code's "
+                            "${file}. Its kind (puzzle or contribution) and root are both inferred "
+                            "from it. Defaults to discovering a working directory from the current "
+                            "directory.")
+        p.add_argument("--build-timeout", type=float, default=DEFAULT_BUILD_TIMEOUT_SECONDS,
+                       metavar="SECONDS", help="Wall-clock timeout for the debug build.")
+        self._add_workspace_root_arg(p)
+        return handler
+
+    @cli_command("Stop a debug target started by `cg debug start`. Always succeeds, including when "
+                 "nothing is running--it's wired to a postDebugTask, which fires even for a "
+                 "session that never really began.")
+    async def cmd_debug__stop(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            working_dir = self._resolve_working_dir_arg(self.args.file)
+            toolchain_dir = self.resolve_toolchain_dir()
+            mount_root: Path | None = self.args.workspace_root
+            if working_dir.kind == "puzzle":
+                await CgPuzzleManager(
+                        working_dir.root, cast(CgClient, None), toolchain_dir=toolchain_dir,
+                        mount_root=mount_root).stop_debug_session()
+                return
+            contribution = CgContributionManager(
+                    working_dir.root, cast(CgClient, None), toolchain_dir=toolchain_dir,
+                    mount_root=mount_root)
+            language = contribution.load().data.solution_language
+            if language is not None:
+                await contribution.stop_debug_session(language)
+        p = cmd.get_parser()
+        p.add_argument("--file", "-f", type=Path, default=None, metavar="FILE",
+                       help="Any file inside the working directory whose debug session to stop--"
+                            "normally VS Code's ${file}. Defaults to discovering a working "
+                            "directory from the current directory.")
+        self._add_workspace_root_arg(p)
+        return handler
+
     @cli_command("List server-side contributions, one line per contribution (handle, id, "
                  "status, puzzle type, title). By default lists all pending "
                  "(community-review-queue) contributions from every author (`Contribution/"
@@ -2101,45 +2415,6 @@ class CgCli(CliBase):
                             f"and build a container image. Default {DEFAULT_BUILD_TIMEOUT_SECONDS}.")
         return handler
 
-    @cli_command("Generate VS Code run/debug configuration for this contribution working directory. "
-                 "The test-case dropdown is built from the test cases actually on disk, so re-run "
-                 "this after tests/ changes to refresh it. Writes into the workspace root's "
-                 ".vscode/ (VS Code only reads launch.json from the workspace root, never from a "
-                 "subdirectory), merging with what's already there and replacing only this working "
-                 "directory's own entries.")
-    async def cmd_contribution__vscode(self, cmd: CliCommand[Self]) -> OptCmdFunc:
-        async def handler() -> None:
-            contribution_dir: Path | None = self.args.contribution_dir
-            workspace_dir: Path | None = self.args.workspace_dir
-            force: bool = self.args.force
-            resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
-            manager = CgContributionManager(
-                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
-            view = manager.load()
-            solution_language = view.data.solution_language
-            if solution_language is None:
-                raise CliError(f"{manager.contribution_data_file} has no solutionLanguage set.")
-            try:
-                written = await manager.provision_vscode(
-                        solution_language, workspace_root=workspace_dir, force=force)
-            except CgVsCodeMergeError as e:
-                raise CliError(str(e)) from e
-            if not written:
-                self.eprint(f"No VS Code integration available for {solution_language} yet--nothing written.")
-                return
-            for path in written:
-                print(path)
-        p = cmd.get_parser()
-        p.add_argument("--workspace-dir", type=Path, default=None, metavar="DIR",
-                       help="Workspace root to write .vscode/ into. Defaults to the nearest "
-                            "enclosing directory that already has a .vscode/, then the nearest "
-                            "one under version control, then the working directory itself.")
-        p.add_argument("--force", action="store_true",
-                       help="Overwrite an existing .vscode/ config file that isn't strict JSON "
-                            "(VS Code allows comments there, which can't be merged into safely). "
-                            "Without this, such a file is left untouched and an error is reported.")
-        return handler
-
     @cli_command("Switch this contribution's reference-solution language, writing a fresh starter "
                  "stub. DESTRUCTIVE: unlike a puzzle, a contribution stores only ONE solution with "
                  "no per-language history, so there is nothing to restore and nothing to switch "
@@ -2204,6 +2479,46 @@ class CgCli(CliBase):
                 self.eprint("No active contribution directory was set; nothing to do.")
             else:
                 self.eprint(f"Active contribution directory cleared (was {previous})")
+        return handler
+
+    @cli_command("Choose which test case  (and ) runs "
+                 "against. Debugging feeds one stdin, so it needs exactly one test. Recorded in "
+                 ".meta/selected-test.json rather than in launch.json, which is what lets one VS "
+                 "Code debug configuration serve every contribution directory instead of being "
+                 "regenerated per directory. With no ORDINAL, shows the current selection.")
+    async def cmd_contribution__select_test(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            contribution_dir: Path | None = self.args.contribution_dir
+            ordinal: str | None = self.args.ordinal
+            side: str = self.args.side
+            resolved_dir = resolve_contribution_dir(
+                    contribution_dir, settings=self.resolve_default_settings())
+            manager = CgContributionManager(resolved_dir, cast(CgClient, None))
+
+            def describe() -> str:
+                chosen = manager.resolve_debug_test()
+                return f"{chosen.ordinal}/{chosen.side}"
+
+            if self.args.clear:
+                manager.clear_selected_test()
+                self.eprint(f"Selection cleared; debugging will use {describe()}.")
+                return
+            if ordinal is None:
+                selected = manager.load_selected_test()
+                self.eprint(f"Debugging will use {describe()}"
+                            f"{'' if selected else ' (default--no explicit selection)'}.")
+                return
+            manager.select_test(ordinal, side)
+            self.eprint(f"Selected {ordinal}/{side}.")
+        p = cmd.get_parser()
+        p.add_argument("ordinal", type=str, nargs="?", default=None, metavar="ORDINAL",
+                       help="Ordinal directory name, e.g. '01'. Omit to show the current "
+                            "selection.")
+        p.add_argument("side", nargs="?", default="local", choices=["local", "validator"],
+                       metavar="SIDE",
+                       help="Which side of that ordinal. Defaults to 'local'.")
+        p.add_argument("--clear", default=False, action="store_true",
+                       help="Forget the explicit selection and fall back to the first local test.")
         return handler
 
     @cli_command("Show which contribution working directory would be used.")
@@ -3358,42 +3673,6 @@ class CgCli(CliBase):
                             f"and build a container image. Default {DEFAULT_BUILD_TIMEOUT_SECONDS}.")
         return handler
 
-    @cli_command("Generate VS Code run/debug configuration for this puzzle working directory. The "
-                 "test-case dropdown is built from the test cases actually on disk, so re-run this "
-                 "after `cg puzzle import`/`repair` to refresh it. Writes into the workspace root's "
-                 ".vscode/ (VS Code only reads launch.json from the workspace root, never from a "
-                 "subdirectory), merging with what's already there and replacing only this working "
-                 "directory's own entries.")
-    async def cmd_puzzle__vscode(self, cmd: CliCommand[Self]) -> OptCmdFunc:
-        async def handler() -> None:
-            puzzle_dir: Path | None = self.args.puzzle_dir
-            workspace_dir: Path | None = self.args.workspace_dir
-            force: bool = self.args.force
-            resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
-            manager = CgPuzzleManager(
-                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
-            try:
-                written = await manager.provision_vscode(workspace_root=workspace_dir, force=force)
-            except CgVsCodeMergeError as e:
-                raise CliError(str(e)) from e
-            if not written:
-                language = manager.load_puzzle_data()
-                name = language.solution_language if language is not None else "this language"
-                self.eprint(f"No VS Code integration available for {name} yet--nothing written.")
-                return
-            for path in written:
-                print(path)
-        p = cmd.get_parser()
-        p.add_argument("--workspace-dir", type=Path, default=None, metavar="DIR",
-                       help="Workspace root to write .vscode/ into. Defaults to the nearest "
-                            "enclosing directory that already has a .vscode/, then the nearest "
-                            "one under version control, then the working directory itself.")
-        p.add_argument("--force", action="store_true",
-                       help="Overwrite an existing .vscode/ config file that isn't strict JSON "
-                            "(VS Code allows comments there, which can't be merged into safely). "
-                            "Without this, such a file is left untouched and an error is reported.")
-        return handler
-
     @cli_command("Manage the Docker containers and images cg builds for compiled languages "
                  "(currently C++). Nothing here holds anything you authored--see `cg docker clean`.")
     async def cmd_docker(self, cmd: CliCommand[Self]) -> OptCmdFunc:
@@ -3482,6 +3761,37 @@ class CgCli(CliBase):
                 self.eprint("No active puzzle directory was set; nothing to do.")
             else:
                 self.eprint(f"Active puzzle directory cleared (was {previous})")
+        return handler
+
+    @cli_command("Choose which test case `cg puzzle debug` (and `cg play --selected`) runs against. "
+                 "Debugging feeds one stdin, so it needs exactly one test. Recorded in "
+                 ".meta/selected-test.json rather than in launch.json, which is what lets one VS "
+                 "Code debug configuration serve every puzzle directory instead of being "
+                 "regenerated per directory. With no INDEX, shows the current selection.")
+    async def cmd_puzzle__select_test(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            puzzle_dir: Path | None = self.args.puzzle_dir
+            index: int | None = self.args.test_index
+            resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
+            manager = CgPuzzleManager(resolved_dir, cast(CgClient, None))
+            if self.args.clear:
+                manager.clear_selected_test()
+                self.eprint(f"Selection cleared; debugging will use test {manager.resolve_debug_test_index()}.")
+                return
+            if index is None:
+                selected = manager.load_selected_test()
+                chosen = manager.resolve_debug_test_index()
+                self.eprint(f"Debugging will use test {chosen}"
+                            f"{'' if selected else ' (default--no explicit selection)'}.")
+                return
+            manager.select_test(index)
+            self.eprint(f"Selected test {index}.")
+        p = cmd.get_parser()
+        p.add_argument("test_index", type=int, nargs="?", default=None, metavar="INDEX",
+                       help="1-based test case index, as shown by `cg puzzle play`. Omit to show "
+                            "the current selection.")
+        p.add_argument("--clear", default=False, action="store_true",
+                       help="Forget the explicit selection and fall back to the first test case.")
         return handler
 
     @cli_command("Show which puzzle working directory would be used.")

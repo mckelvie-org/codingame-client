@@ -29,14 +29,12 @@ import pytest
 
 from codingame_tools.language import (
     CgLanguageContext,
-    CgLaunchTestCase,
     CgVsCodeRequest,
     get_language,
 )
 from codingame_tools.language._docker import (
     BASE_DOCKERFILE_NAME,
     CUSTOM_DOCKERFILE_NAME,
-    SRC_MOUNT_DIR,
     clean_managed,
     compose_dockerfile,
     container_create_argv,
@@ -92,15 +90,15 @@ int main() { int n; std::cin >> n; std::cout << n * 2 << std::endl; }
 def _remove_test_container(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[None]:
     """Remove the container a `docker`-marked test created.
 
-       Containers are named deterministically from the working directory root, and every test gets a
-       fresh `tmp_path`, so without this each run leaves one container per test behind forever.
-       Scoped to `docker`-marked tests only--running `docker rm` after every pure test would add a
-       subprocess to each of them for nothing."""
+       Containers are named deterministically from the mount root, and every test gets a fresh
+       `tmp_path`, so without this each run leaves one container per test behind forever. Scoped to
+       `docker`-marked tests only--running `docker rm` after every pure test would add a subprocess
+       to each of them for nothing."""
     yield
     if request.node.get_closest_marker("docker") is None or not _docker_available():
         return
     subprocess.run(
-            ["docker", "rm", "-f", container_name_for(LANG_SLUG, (tmp_path / "puzzle").resolve())],
+            ["docker", "rm", "-f", container_name_for(LANG_SLUG, tmp_path.resolve())],
             capture_output=True, timeout=60, check=False)
 
 
@@ -114,6 +112,8 @@ def _ctx(tmp_path: Path, source: str) -> CgLanguageContext:
     return CgLanguageContext(
             root=root, solution_file=solution, solution_link=link,
             meta_dir=root / ".meta", toolchain_dir=tmp_path / "toolchain",
+            # The enclosing workspace, not the working directory--see _docker's mount-root comment.
+            mount_root=tmp_path,
         )
 
 
@@ -128,7 +128,9 @@ def test_image_tag_is_content_addressed() -> None:
     assert image_tag_for("cpp", "x").startswith("cg-cpp:")
 
 
-def test_container_name_is_per_root_and_docker_safe(tmp_path: Path) -> None:
+def test_container_name_is_per_mount_root_and_docker_safe(tmp_path: Path) -> None:
+    """Per mount root--i.e. per workspace--so every working directory in a workspace shares one
+       container, which is what lets the generated launch configuration name it and stay static."""
     a = container_name_for("cpp", tmp_path / "one")
     b = container_name_for("cpp", tmp_path / "two")
     assert a != b
@@ -330,12 +332,17 @@ def test_exec_argv_passes_the_script_in_argv_not_stdin() -> None:
 
 def test_cpp_source_path_prefers_the_symlink_only_for_debug(tmp_path: Path) -> None:
     """A debug build compiles the symlink so the path g++ records in the debug info matches the file
-       the user actually has open, which is what makes breakpoints bind."""
+       the user actually has open, which is what makes breakpoints bind.
+
+       Both are plain host paths: the mount root is bind-mounted at its own location, so the
+       in-container path and the host path are the same string and there is nothing to translate.
+       That identity is what lets the launch configuration drop `sourceFileMap`."""
     language = get_language("C++")
     ctx = _ctx(tmp_path, ECHO_DOUBLE)
 
-    assert language.source_path_in_container(ctx, "debug") == "/src/solution.cpp"  # type: ignore[attr-defined]
-    assert language.source_path_in_container(ctx, "run") == "/src/data/solution.src"  # type: ignore[attr-defined]
+    assert language.source_path_in_container(ctx, "debug") == str(ctx.solution_link)  # type: ignore[attr-defined]
+    assert language.source_path_in_container(ctx, "run") == str(ctx.solution_file)  # type: ignore[attr-defined]
+    assert language.source_path_in_container(ctx, "debug").startswith(str(ctx.mount_root))  # type: ignore[attr-defined]
 
 
 # --- integration (real Docker) ------------------------------------------------------------------
@@ -417,7 +424,7 @@ async def test_cpp_run_times_out_without_leaving_the_process_running(tmp_path: P
     # timeout so the outer one wins the race and the user gets a clean `timed_out=True` rather than
     # an opaque exit code 124, which means cleanup lands shortly after rather than instantly. Poll
     # for it instead of asserting immediately.
-    container = container_name_for(LANG_SLUG, ctx.root)
+    container = container_name_for(LANG_SLUG, ctx.mount_root)
     deadline = time.monotonic() + 15.0
     while time.monotonic() < deadline:
         procs = subprocess.run(
@@ -519,10 +526,7 @@ async def test_cpp_vscode_config_attaches_over_docker_exec(tmp_path: Path) -> No
     """gdb runs *inside* the container via pipeTransport, so the host needs only docker--no local
        gdb and no published port (the address is the container's own localhost)."""
     ctx = _ctx(tmp_path, ECHO_DOUBLE)
-    root = ctx.root
-    request = CgVsCodeRequest(
-            ctx=ctx, kind="puzzle",
-            test_cases=(CgLaunchTestCase(id="1", label="Doubles"),), workspace_root=tmp_path)
+    request = CgVsCodeRequest(ctx=ctx, workspace_root=tmp_path)
 
     provisioning = await get_language("C++").build_vscode_provisioning(request)
 
@@ -532,16 +536,58 @@ async def test_cpp_vscode_config_attaches_over_docker_exec(tmp_path: Path) -> No
     assert config["miDebuggerServerAddress"] == f"localhost:{GDBSERVER_PORT}"
     assert config["pipeTransport"]["pipeProgram"] == "docker"
     assert config["stopAtEntry"] is True
-    # Absolute host path, not ${workspaceFolder}: the workspace root is usually a *parent* of the
-    # working directory, so ${workspaceFolder} would map /src to the wrong place.
-    assert config["sourceFileMap"][SRC_MOUNT_DIR] == str(root)
-    assert ".devcontainer/devcontainer.json" in provisioning.files
+    # No sourceFileMap at all: the workspace is mounted at its own path, so the paths gdb recorded
+    # are already the paths VS Code has open. There is nothing left to map.
+    assert "sourceFileMap" not in config
+    # The container is named per workspace, not per working directory, which is what lets a
+    # configuration that must name it stay static.
+    assert container_name_for(LANG_SLUG, tmp_path) in config["pipeTransport"]["pipeArgs"]
+    # Under .meta/, which is gitignored -- at the working directory root it would be committed
+    # into whatever repository tracks the directory.
+    assert ".meta/.devcontainer/devcontainer.json" in provisioning.files
+
+
+async def test_cpp_vscode_config_is_the_same_for_every_working_directory(tmp_path: Path) -> None:
+    """The property the redesign exists for. Two working directories in one workspace must produce
+       an identical configuration, or launch.json needs rewriting whenever you switch between
+       them."""
+    workspace = tmp_path / "workspace"
+    first = _ctx(workspace / "a", ECHO_DOUBLE)
+    second = _ctx(workspace / "b", ECHO_DOUBLE)
+
+    language = get_language("C++")
+    from_first = await language.build_vscode_provisioning(
+            CgVsCodeRequest(ctx=first, workspace_root=workspace))
+    from_second = await language.build_vscode_provisioning(
+            CgVsCodeRequest(ctx=second, workspace_root=workspace))
+
+    assert from_first is not None and from_second is not None
+    assert from_first.configurations == from_second.configurations
+    assert from_first.tasks == from_second.tasks
+    # Including the container, since they share one.
+    assert (from_first.configurations[0]["pipeTransport"]["pipeArgs"]
+            == from_second.configurations[0]["pipeTransport"]["pipeArgs"])
+
+
+async def test_cpp_vscode_tasks_pass_the_file_and_the_real_workspace(tmp_path: Path) -> None:
+    """`${file}` is what makes the task kind-agnostic and directory-agnostic; `${workspaceFolder}`
+       is VS Code telling cg the real workspace, which beats `find_workspace_root`'s guess."""
+    request = CgVsCodeRequest(ctx=_ctx(tmp_path, ECHO_DOUBLE), workspace_root=tmp_path)
+
+    provisioning = await get_language("C++").build_vscode_provisioning(request)
+
+    assert provisioning is not None
+    commands = [t["command"] for t in provisioning.tasks]
+    assert commands == [
+            'cg debug start --file "${file}" --workspace-root "${workspaceFolder}"',
+            'cg debug stop --file "${file}" --workspace-root "${workspaceFolder}"',
+        ]
+    # No --puzzle-dir/--contribution-dir, and no test case: both are resolved at launch time.
+    assert not any("-dir " in c for c in commands)
 
 
 async def test_cpp_vscode_config_has_start_and_stop_tasks(tmp_path: Path) -> None:
-    request = CgVsCodeRequest(
-            ctx=_ctx(tmp_path, ECHO_DOUBLE), kind="puzzle",
-            test_cases=(CgLaunchTestCase(id="1", label="Doubles"),), workspace_root=tmp_path)
+    request = CgVsCodeRequest(ctx=_ctx(tmp_path, ECHO_DOUBLE), workspace_root=tmp_path)
 
     provisioning = await get_language("C++").build_vscode_provisioning(request)
 
@@ -556,14 +602,12 @@ async def test_devcontainer_references_the_stable_alias_not_a_content_hash(tmp_p
     """A devcontainer.json is written once and read by VS Code much later, so embedding the
        content-addressed tag would leave it naming an image that no longer exists after the next
        toolchain tweak."""
-    request = CgVsCodeRequest(
-            ctx=_ctx(tmp_path, ECHO_DOUBLE), kind="puzzle",
-            test_cases=(CgLaunchTestCase(id="1", label="Doubles"),), workspace_root=tmp_path)
+    request = CgVsCodeRequest(ctx=_ctx(tmp_path, ECHO_DOUBLE), workspace_root=tmp_path)
 
     provisioning = await get_language("C++").build_vscode_provisioning(request)
 
     assert provisioning is not None
-    image = json.loads(provisioning.files[".devcontainer/devcontainer.json"])["image"]
+    image = json.loads(provisioning.files[".meta/.devcontainer/devcontainer.json"])["image"]
     assert image == latest_alias_for(LANG_SLUG)
     assert image.endswith(":latest")
 
@@ -581,7 +625,7 @@ async def test_cpp_debug_session_starts_and_stops(tmp_path: Path) -> None:
 
     assert session.ok, session.output
     assert session.details["address"] == f"localhost:{GDBSERVER_PORT}"
-    assert session.details["container"] == container_name_for(LANG_SLUG, ctx.root)
+    assert session.details["container"] == container_name_for(LANG_SLUG, ctx.mount_root)
 
     # Redirected from a copy this wrote, holding exactly the bytes asked for--no terminator
     # supplied, since the caller's value didn't have one. Redirecting from a contribution's own
@@ -601,11 +645,13 @@ async def test_cpp_debug_build_records_the_symlink_path_for_breakpoints(tmp_path
     assert (await get_language("C++").build(ctx, profile="debug", timeout=900)).ok
 
     dwarf = subprocess.run(
-            ["docker", "exec", container_name_for(LANG_SLUG, ctx.root),
+            ["docker", "exec", container_name_for(LANG_SLUG, ctx.mount_root),
              "sh", "-c", "readelf --debug-dump=info /build/debug/solution | grep -m1 DW_AT_name"],
             capture_output=True, text=True, timeout=60, check=False)
 
-    assert f"{SRC_MOUNT_DIR}/solution.cpp" in dwarf.stdout
+    # The *host* path, verbatim -- which is exactly why no sourceFileMap is needed: the debugger
+    # can open this path directly.
+    assert str(ctx.solution_link) in dwarf.stdout
 
 
 # --- cg docker clean ------------------------------------------------------------------------
@@ -631,7 +677,7 @@ async def test_clean_removes_containers_and_images_and_they_rebuild(tmp_path: Pa
     language = get_language("C++")
     ctx = _ctx(tmp_path, ECHO_DOUBLE)
     assert (await language.build(ctx, timeout=900)).ok
-    assert any(name == container_name_for(LANG_SLUG, ctx.root)
+    assert any(name == container_name_for(LANG_SLUG, ctx.mount_root)
                for name, _root in await list_managed_containers())
     assert await list_managed_images()
 
@@ -752,7 +798,7 @@ async def test_recovers_when_the_container_is_removed_out_of_band(tmp_path: Path
     assert (await language.run(ctx, "21\n")).output == "42\n"
 
     subprocess.run(
-            ["docker", "rm", "-f", container_name_for(LANG_SLUG, ctx.root)],
+            ["docker", "rm", "-f", container_name_for(LANG_SLUG, ctx.mount_root)],
             capture_output=True, timeout=60, check=False)
 
     rebuilt = await language.build(ctx, timeout=900)

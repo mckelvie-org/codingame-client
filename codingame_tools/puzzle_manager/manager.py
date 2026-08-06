@@ -79,7 +79,6 @@ from ..language import (
     CgBuildResult,
     CgDebugSession,
     CgLanguageContext,
-    CgLaunchTestCase,
     CgVsCodeRequest,
     find_workspace_root,
     get_language,
@@ -371,15 +370,22 @@ class CgPuzzleManager:
        than per-working-directory so one tweak applies everywhere. The CLI passes the value resolved
        from config; the default keeps library/test use working with no config at all."""
 
+    mount_root: Path | None
+    """Editor workspace root to bind-mount for containerized languages, or `None` to derive it (see
+       `language_context`). Normally VS Code's `${workspaceFolder}`, passed through by the CLI: cg's
+       own `find_workspace_root` is a heuristic, and the editor knows the real answer."""
+
     def __init__(
                 self,
                 puzzle_dir: Path | str,
                 client: CgClient,
                 *,
                 toolchain_dir: Path | None = None,
+                mount_root: Path | None = None,
             ) -> None:
         self.puzzle_dir = Path(puzzle_dir).resolve()
         self.client = client
+        self.mount_root = Path(mount_root).resolve() if mount_root is not None else None
         self.toolchain_dir = (
                 Path(toolchain_dir) if toolchain_dir is not None
                 else default_global_data_dir() / TOOLCHAIN_SUBDIR_NAME
@@ -1165,8 +1171,18 @@ class CgPuzzleManager:
             test_cases.append(test_case)
         return test_cases
 
-    def language_context(self, solution_language: CgSolutionLanguage | None = None) -> CgLanguageContext:
+    def language_context(
+                self,
+                solution_language: CgSolutionLanguage | None = None,
+                *,
+                mount_root: Path | None = None,
+            ) -> CgLanguageContext:
         """Describe this working directory to `codingame_tools.language`--see `CgLanguageContext`.
+
+           `mount_root` is what a containerized language bind-mounts. It defaults to the enclosing
+           VS Code workspace root, so that in-container paths equal host paths and one container
+           serves the whole workspace; pass it explicitly (VS Code's `${workspaceFolder}`) when the
+           real workspace is known, since `find_workspace_root` is only a guess.
 
            Infallible by design: never reads `puzzle.json`, never needs the directory to have been
            imported. `solution_language` is only used to locate the `solution.<ext>` symlink; pass
@@ -1180,6 +1196,7 @@ class CgPuzzleManager:
                 solution_link=link if link is not None and link.exists() else None,
                 meta_dir=self.meta_dir,
                 toolchain_dir=self.toolchain_dir,
+                mount_root=mount_root or self.mount_root or find_workspace_root(self.puzzle_dir),
             )
 
     async def provision_vscode(
@@ -1187,11 +1204,14 @@ class CgPuzzleManager:
                 *,
                 workspace_root: Path | None = None,
                 force: bool = False,
+                check: bool = False,
             ) -> list[Path]:
         """Generate this working directory's VS Code run/debug configuration, if its language has
-           any (currently only Python3), and write it into the workspace.
+           any, and write it into the workspace.
 
-           The test-case dropdown is generated from what's on disk right now, so it can't go stale.
+           What's generated is the same for every working directory of that language, so this is
+           run once per language rather than once per directory, and nothing here goes stale when
+           test cases or the solution language change.
 
         Args:
             workspace_root: Where `.vscode/` goes. Defaults to `find_workspace_root()`--VS Code
@@ -1199,9 +1219,14 @@ class CgPuzzleManager:
                              not this working directory (see `codingame_tools.language.vscode`).
             force:          Overwrite an existing config file that isn't strict JSON (i.e. uses
                              JSONC comments) instead of refusing.
+            check:          Report what *would* change without touching anything. This is how
+                             staleness is detected: generated entries carry no version stamp, so
+                             "would rewriting change anything?" is the whole question, and it stays
+                             correct when a future release alters what gets generated.
 
         Returns:
-            Every path written, in write order. Empty if this language has no VS Code integration.
+            Every path that changed (or, under `check`, would change), in write order. Empty means
+            already up to date, or that this language has no VS Code integration.
 
         Raises:
             FileNotFoundError: if this working directory has never been imported.
@@ -1214,19 +1239,17 @@ class CgPuzzleManager:
                 Path(workspace_root).resolve() if workspace_root is not None
                 else find_workspace_root(self.puzzle_dir)
             )
-        test_cases = tuple(
-                CgLaunchTestCase(id=str(tc.index), label=tc.label)
-                for tc in list_downloaded_test_cases(self.tests_dir)
-            )
         request = CgVsCodeRequest(
-                ctx=self.language_context(puzzle_data.solution_language), kind="puzzle",
-                test_cases=test_cases, workspace_root=resolved_workspace_root,
+                ctx=self.language_context(
+                        puzzle_data.solution_language, mount_root=resolved_workspace_root),
+                workspace_root=resolved_workspace_root,
             )
         provisioning = await get_language(puzzle_data.solution_language).build_vscode_provisioning(request)
         if provisioning is None:
             return []
         return write_provisioning(
-                provisioning, root=self.puzzle_dir, workspace_root=resolved_workspace_root, force=force)
+                provisioning, root=self.puzzle_dir, workspace_root=resolved_workspace_root,
+                language=puzzle_data.solution_language, force=force, dry_run=check)
 
     async def start_debug_session(
                 self,

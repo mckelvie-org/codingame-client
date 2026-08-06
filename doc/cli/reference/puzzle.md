@@ -20,10 +20,10 @@ Every `cg puzzle` subcommand.
 | [`cg puzzle debug start`](#cg-puzzle-debug-start) | Build the debug profile and start a stopped debug target fed by TEST-INDEX's input, ready for a debugger to attach. |
 | [`cg puzzle debug stop`](#cg-puzzle-debug-stop) | Stop a debug target started by `cg puzzle debug start`. |
 | [`cg puzzle build`](#cg-puzzle-build) | Compile data/solution.src, if its language needs compiling (a no-op for interpreted languages like Python3). |
-| [`cg puzzle vscode`](#cg-puzzle-vscode) | Generate VS Code run/debug configuration for this puzzle working directory. |
 | [`cg puzzle set-language`](#cg-puzzle-set-language) | Switch this puzzle to a different language, restoring your own most recent code for it. |
 | [`cg puzzle activate`](#cg-puzzle-activate) | Make DIRECTORY the active puzzle working directory, so subsequent `cg puzzle` commands use it without needing --puzzle-dir. |
 | [`cg puzzle deactivate`](#cg-puzzle-deactivate) | Clear the active puzzle working directory, so `cg puzzle` commands fall back to the configured default and the usual directory discovery. |
+| [`cg puzzle select-test`](#cg-puzzle-select-test) | Choose which test case `cg puzzle debug` (and `cg play --selected`) runs against. |
 | [`cg puzzle where`](#cg-puzzle-where) | Show which puzzle working directory would be used. |
 | [`cg puzzle delete`](#cg-puzzle-delete) | Delete this puzzle working directory. Purely local |
 
@@ -106,12 +106,6 @@ positional arguments:
                         without running, or to warm a cold container image up front. Near-instant
                         when the source hasn't changed since the last successful build. Compiler
                         diagnostics go to stderr.
-    vscode              Generate VS Code run/debug configuration for this puzzle working
-                        directory. The test-case dropdown is built from the test cases actually on
-                        disk, so re-run this after `cg puzzle import`/`repair` to refresh it.
-                        Writes into the workspace root's .vscode/ (VS Code only reads launch.json
-                        from the workspace root, never from a subdirectory), merging with what's
-                        already there and replacing only this working directory's own entries.
     set-language        Switch this puzzle to a different language, restoring your own most recent
                         code for it. CodinGame keeps your latest source per language, so anything
                         you'd previously written in the target language comes back; a language
@@ -127,6 +121,12 @@ positional arguments:
     deactivate          Clear the active puzzle working directory, so `cg puzzle` commands fall
                         back to the configured default and the usual directory discovery. Does not
                         touch any files--only the selection.
+    select-test         Choose which test case `cg puzzle debug` (and `cg play --selected`) runs
+                        against. Debugging feeds one stdin, so it needs exactly one test. Recorded
+                        in .meta/selected-test.json rather than in launch.json, which is what lets
+                        one VS Code debug configuration serve every puzzle directory instead of
+                        being regenerated per directory. With no INDEX, shows the current
+                        selection.
     where               Show which puzzle working directory would be used.
     delete              Delete this puzzle working directory. Purely local--there is no server-
                         side counterpart to delete (a puzzle already exists on the server before
@@ -381,27 +381,6 @@ options:
                         build a container image. Default 120.0.
 ```
 
-## `cg puzzle vscode`
-
-```text
-usage: cg puzzle vscode [-h] [--workspace-dir DIR] [--force]
-
-Generate VS Code run/debug configuration for this puzzle working directory. The test-case dropdown
-is built from the test cases actually on disk, so re-run this after `cg puzzle import`/`repair` to
-refresh it. Writes into the workspace root's .vscode/ (VS Code only reads launch.json from the
-workspace root, never from a subdirectory), merging with what's already there and replacing only
-this working directory's own entries.
-
-options:
-  -h, --help           show this help message and exit
-  --workspace-dir DIR  Workspace root to write .vscode/ into. Defaults to the nearest enclosing
-                       directory that already has a .vscode/, then the nearest one under version
-                       control, then the working directory itself.
-  --force              Overwrite an existing .vscode/ config file that isn't strict JSON (VS Code
-                       allows comments there, which can't be merged into safely). Without this,
-                       such a file is left untouched and an error is reported.
-```
-
 ## `cg puzzle set-language`
 
 ```text
@@ -451,6 +430,25 @@ default and the usual directory discovery. Does not touch any files--only the se
 
 options:
   -h, --help  show this help message and exit
+```
+
+## `cg puzzle select-test`
+
+```text
+usage: cg puzzle select-test [-h] [--clear] [INDEX]
+
+Choose which test case `cg puzzle debug` (and `cg play --selected`) runs against. Debugging feeds
+one stdin, so it needs exactly one test. Recorded in .meta/selected-test.json rather than in
+launch.json, which is what lets one VS Code debug configuration serve every puzzle directory
+instead of being regenerated per directory. With no INDEX, shows the current selection.
+
+positional arguments:
+  INDEX       1-based test case index, as shown by `cg puzzle play`. Omit to show the current
+              selection.
+
+options:
+  -h, --help  show this help message and exit
+  --clear     Forget the explicit selection and fall back to the first test case.
 ```
 
 ## `cg puzzle where`

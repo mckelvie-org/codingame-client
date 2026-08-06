@@ -12,6 +12,12 @@
 | [`cg logout`](#cg-logout) | Log out of a given profile's session. |
 | [`cg whoami`](#cg-whoami) | Show the current logged-in user and other session info for the given profile. |
 | [`cg status`](#cg-status) | Summarize the current session: login status, profile details, and points/rank stats for the logged-in codingamer. |
+| [`cg play`](#cg-play) | Run the solution for whatever file you name against its working directory's test cases, whether that's a puzzle or a contribution. |
+| [`cg vscode`](#cg-vscode) | Editor integration for VS Code. All-or-nothing opt-in: nothing here is written unless you ask for it, and what is written is confined to entries cg names as... |
+| [`cg vscode install`](#cg-vscode-install) | Install cg's VS Code run/debug configuration. |
+| [`cg debug`](#cg-debug) | Debug-session commands that work in any working directory, puzzle or contribution. |
+| [`cg debug start`](#cg-debug-start) | Build the debug profile and start a stopped debug target fed by the working directory's selected test case, ready for a debugger to attach. |
+| [`cg debug stop`](#cg-debug-stop) | Stop a debug target started by `cg debug start`. |
 | [`cg contributions`](#cg-contributions) | List server-side contributions, one line per contribution (handle, id, status, puzzle type, title). |
 
 ## `cg`
@@ -43,6 +49,20 @@ positional arguments:
     api                 Low-level API commands.
     api-helper          Higher-level helper commands, layered on top of the plain API wrappers
                         (retries, polling, data normalization).
+    play                Run the solution for whatever file you name against its working
+                        directory's test cases, whether that's a puzzle or a contribution.
+                        Entirely local--no network access at all. Exists so one editor task can
+                        serve every working directory in a workspace: `cg play --file ${file}`
+                        needs to know neither which kind of working directory it's in nor where
+                        that directory is. Exits non-zero if any test fails.
+    vscode              Editor integration for VS Code. All-or-nothing opt-in: nothing here is
+                        written unless you ask for it, and what is written is confined to entries
+                        cg names as its own.
+    debug               Debug-session commands that work in any working directory, puzzle or
+                        contribution. The kind-agnostic counterparts of `cg puzzle debug` / `cg
+                        contribution debug`, taking a file instead of a directory and a test
+                        selection instead of a test argument--which is what lets one static VS
+                        Code launch configuration per language serve a whole workspace.
     contributions       List server-side contributions, one line per contribution (handle, id,
                         status, puzzle type, title). By default lists all pending (community-
                         review-queue) contributions from every author
@@ -172,6 +192,161 @@ why. With --json (top-level option), renders as JSON instead of text.
 
 options:
   -h, --help  show this help message and exit
+```
+
+## `cg play`
+
+```text
+usage: cg play [-h] [--file FILE] [--selected] [--timeout SECONDS] [--build-timeout SECONDS]
+               [--workspace-root DIR]
+
+Run the solution for whatever file you name against its working directory's test cases, whether
+that's a puzzle or a contribution. Entirely local--no network access at all. Exists so one editor
+task can serve every working directory in a workspace: `cg play --file ${file}` needs to know
+neither which kind of working directory it's in nor where that directory is. Exits non-zero if any
+test fails.
+
+options:
+  -h, --help            show this help message and exit
+  --file, -f FILE       Any file inside the working directory to run--normally VS Code's ${file}.
+                        Its kind (puzzle or contribution) and root are both inferred from it.
+                        Defaults to discovering a working directory from the current directory.
+  --selected, -s        Run only the test case selected for debugging (see `cg puzzle select-
+                        test`/`cg contribution select-test`) instead of all of them.
+  --timeout SECONDS     Per-test-case run timeout in seconds.
+  --build-timeout SECONDS
+                        Build timeout in seconds, for compiled languages.
+  --workspace-root DIR  The editor workspace root containing the working directory--normally VS
+                        Code's ${workspaceFolder}. Only matters for containerized languages, which
+                        bind-mount it so in-container paths match host paths; passing it
+                        explicitly beats cg's own guess. Defaults to searching upward for a
+                        .vscode/ or VCS directory.
+```
+
+## `cg vscode`
+
+```text
+usage: cg vscode [-h] COMMAND ...
+
+Editor integration for VS Code. All-or-nothing opt-in: nothing here is written unless you ask for
+it, and what is written is confined to entries cg names as its own.
+
+positional arguments:
+  COMMAND
+    install   Install cg's VS Code run/debug configuration. What it writes is the same for every
+              working directory of a given language, so this is run once per language rather than
+              once per working directory--and never again after an import, repair, or language
+              change. With --file, sets up just that file's working directory; with no arguments,
+              every working directory cg can find (the one you are standing in, plus the active
+              puzzle and contribution). Writes into the workspace root's .vscode/ (VS Code only
+              reads launch.json from the workspace root, never from a subdirectory), merging with
+              what is already there: it replaces only the entries it generated, leaves yours
+              alone, and does not touch a file whose content would not change.
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## `cg vscode install`
+
+```text
+usage: cg vscode install [-h] [--file FILE] [--workspace-dir DIR] [--force] [--check]
+
+Install cg's VS Code run/debug configuration. What it writes is the same for every working
+directory of a given language, so this is run once per language rather than once per working
+directory--and never again after an import, repair, or language change. With --file, sets up just
+that file's working directory; with no arguments, every working directory cg can find (the one you
+are standing in, plus the active puzzle and contribution). Writes into the workspace root's
+.vscode/ (VS Code only reads launch.json from the workspace root, never from a subdirectory),
+merging with what is already there: it replaces only the entries it generated, leaves yours alone,
+and does not touch a file whose content would not change.
+
+options:
+  -h, --help           show this help message and exit
+  --file, -f FILE      Set up only the working directory this file belongs to. Defaults to every
+                       working directory cg can find.
+  --workspace-dir DIR  Workspace root to write .vscode/ into. Defaults to the nearest enclosing
+                       directory that already has a .vscode/, then the nearest one under version
+                       control, then the working directory itself.
+  --force              Overwrite an existing .vscode/ config file that isn't strict JSON (VS Code
+                       allows comments there, which can't be merged into safely). Without this,
+                       such a file is left untouched and an error is reported.
+  --check              Report what would change and exit non-zero if anything would, without
+                       writing. Use it to find out whether a cg upgrade changed the generated
+                       configuration--there is no version stamp to compare, because the generated
+                       content is the version.
+```
+
+## `cg debug`
+
+```text
+usage: cg debug [-h] COMMAND ...
+
+Debug-session commands that work in any working directory, puzzle or contribution. The kind-
+agnostic counterparts of `cg puzzle debug` / `cg contribution debug`, taking a file instead of a
+directory and a test selection instead of a test argument--which is what lets one static VS Code
+launch configuration per language serve a whole workspace.
+
+positional arguments:
+  COMMAND
+    start     Build the debug profile and start a stopped debug target fed by the working
+              directory's selected test case, ready for a debugger to attach. Prints the
+              connection details. Which test is selected comes from `.meta/` (see `cg puzzle
+              select-test` / `cg contribution select-test`), defaulting to the first test case--so
+              this command needs no test argument, and a launch configuration wiring it to a
+              preLaunchTask never has to be regenerated.
+    stop      Stop a debug target started by `cg debug start`. Always succeeds, including when
+              nothing is running--it's wired to a postDebugTask, which fires even for a session
+              that never really began.
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## `cg debug start`
+
+```text
+usage: cg debug start [-h] [--file FILE] [--build-timeout SECONDS] [--workspace-root DIR]
+
+Build the debug profile and start a stopped debug target fed by the working directory's selected
+test case, ready for a debugger to attach. Prints the connection details. Which test is selected
+comes from `.meta/` (see `cg puzzle select-test` / `cg contribution select-test`), defaulting to
+the first test case--so this command needs no test argument, and a launch configuration wiring it
+to a preLaunchTask never has to be regenerated.
+
+options:
+  -h, --help            show this help message and exit
+  --file, -f FILE       Any file inside the working directory to debug--normally VS Code's
+                        ${file}. Its kind (puzzle or contribution) and root are both inferred from
+                        it. Defaults to discovering a working directory from the current
+                        directory.
+  --build-timeout SECONDS
+                        Wall-clock timeout for the debug build.
+  --workspace-root DIR  The editor workspace root containing the working directory--normally VS
+                        Code's ${workspaceFolder}. Only matters for containerized languages, which
+                        bind-mount it so in-container paths match host paths; passing it
+                        explicitly beats cg's own guess. Defaults to searching upward for a
+                        .vscode/ or VCS directory.
+```
+
+## `cg debug stop`
+
+```text
+usage: cg debug stop [-h] [--file FILE] [--workspace-root DIR]
+
+Stop a debug target started by `cg debug start`. Always succeeds, including when nothing is
+running--it's wired to a postDebugTask, which fires even for a session that never really began.
+
+options:
+  -h, --help            show this help message and exit
+  --file, -f FILE       Any file inside the working directory whose debug session to stop--
+                        normally VS Code's ${file}. Defaults to discovering a working directory
+                        from the current directory.
+  --workspace-root DIR  The editor workspace root containing the working directory--normally VS
+                        Code's ${workspaceFolder}. Only matters for containerized languages, which
+                        bind-mount it so in-container paths match host paths; passing it
+                        explicitly beats cg's own guess. Defaults to searching upward for a
+                        .vscode/ or VCS directory.
 ```
 
 ## `cg contributions`

@@ -68,8 +68,8 @@ class CgLanguageContext:
 
     root: Path
     """The puzzle/contribution working directory root (resolved absolute)--the directory holding
-       `data/`, `.meta/`, and the `solution.<ext>` symlink. For a containerized language this is the
-       mount source, which is why it's the root and not just `data/`."""
+       `data/`, `.meta/`, and the `solution.<ext>` symlink. Not `data/`, because the `solution.<ext>`
+       symlink and `.meta/` both sit beside it and both matter to a build."""
 
     solution_file: Path
     """`<root>/data/solution.src`--the one real, editable, submittable file."""
@@ -82,9 +82,19 @@ class CgLanguageContext:
        `codingame_tools.test_runner.debug_stdin`'s no-realpath rule)."""
 
     meta_dir: Path
-    """The working directory's `.meta/`--gitignored scratch space. Used for per-root toolchain
-       overrides. Note this is *not* always `<root>/.meta`: a contribution whose git-dir lives in
-       `data/` puts it at `<root>/data/.meta`."""
+    """The working directory's `.meta/` (always `<root>/.meta`)--gitignored scratch space. Used for
+       per-root toolchain overrides and generated editor files."""
+
+    mount_root: Path
+    """The directory a containerized language bind-mounts, **at its own path** inside the container
+       (see `codingame_tools.language._docker`). Normally the VS Code workspace root containing
+       `root`, so that in-container paths and host paths are the same string--which is what lets a
+       generated debug configuration drop `sourceFileMap` entirely, and lets one container serve
+       every working directory in the workspace.
+
+       Always contains `root`. Falls back to `root` itself when there is no enclosing workspace, in
+       which case a containerized language behaves exactly as it did when it mounted the working
+       directory."""
 
     toolchain_dir: Path
     """The per-user global toolchain directory (`<cg data dir>/docker`), holding the shared,
@@ -289,6 +299,15 @@ class CgLanguage(ABC):  # noqa: B024 -- deliberately no @abstractmethod; see doc
            never really began. Base implementation: no-op, so a language that needs no teardown
            inherits correct behavior."""
         return None
+
+    @property
+    def supports_vscode(self) -> bool:
+        """Whether `build_vscode_provisioning` returns anything for this language.
+
+           Exists so a caller can tell "already up to date" from "nothing to generate", which are
+           both an empty result. Answering that by *calling* the builder would need a working
+           directory to build a request from, which a caller reporting an error may not have."""
+        return False
 
     async def build_vscode_provisioning(self, request: CgVsCodeRequest) -> CgVsCodeProvisioning | None:
         """Describe the VS Code run/debug configuration this language wants for the working

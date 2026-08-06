@@ -18,6 +18,7 @@ __all__ = [
     "COVER_PLACEHOLDER_ASSET_NAME",
     "DATA_SUBDIR_NAME",
     "META_SUBDIR_NAME",
+    "CONTRIBUTION_META_FILE_NAME",
     "GIT_METADATA_SUBDIR_NAME",
     "CONTRIBUTION_STATUS_CACHE_FILE_NAME",
     "SELECTED_TEST_FILE_NAME",
@@ -70,36 +71,62 @@ DATA_SUBDIR_NAME = "data"
    convenience symlink, and `.meta/` (bookkeeping)."""
 
 META_SUBDIR_NAME = ".meta"
-"""Container for internal bookkeeping--specifically `.contribution-git/` (see
-   `GIT_METADATA_SUBDIR_NAME`), when this working directory's git-dir lives outside `data/` (see
-   `manager.CgContributionManager.git_dir`). Lives as a sibling of `data/` in that case, or nested
-   inside `data/` (i.e. `data/.meta/`) when the git-dir lives *inside* `data/` instead--either way,
-   always paired with a `.gitignore` (see `GITIGNORE_FILE_NAME`) in its immediate parent, so it's
-   never accidentally picked up by whatever project ends up tracking `data/`."""
+"""Container for this client's own generated bookkeeping--the status cache, the selected test, the
+   solution snapshot, the generated editor/devcontainer files, and (in one of the two layouts) the
+   git-dir itself.
+
+   **Always `<contribution_dir>/.meta`, a sibling of `data/`--never inside it**, in either layout.
+   `data/` holds user state and nothing else: it is the git working tree, it is what gets pushed to
+   CodinGame, and it is the only part worth backing up. Generated, disposable, rebuildable-by-
+   `repair()` state has no business in there. Paired with a `.gitignore` (see `GITIGNORE_FILE_NAME`)
+   in `<contribution_dir>`, so it's never picked up by whatever outer project comes to track the
+   working directory."""
 
 GIT_METADATA_SUBDIR_NAME = ".contribution-git"
-"""Name of the actual git-dir directory (objects/refs/HEAD/index/config) under `META_SUBDIR_NAME`.
-   Deliberately not named `.git`--see `manager`'s module docstring for why nothing inside `data/`
-   may ever carry a literal `.git` marker."""
+"""Name of the git-dir directory (objects/refs/HEAD/index/config) under `META_SUBDIR_NAME`, used in
+   the **external** layout--i.e. `<contribution_dir>/.meta/.contribution-git/`, with `data/` as its
+   work tree via `--git-dir`/`--work-tree` decoupling.
+
+   Deliberately not named `.git`: in this layout the working directory sits inside some outer git
+   project, and a `.git` marker anywhere under `<contribution_dir>` would trip that project's own
+   embedded-repository detection. See `DATA_GIT_DIR_NAME` for the other layout, and `manager`'s
+   module docstring for how one is chosen."""
+
+DATA_GIT_DIR_NAME = ".git"
+"""Name of the git-dir in the **embedded** layout, i.e. `data/.git`--which makes `data/` a
+   perfectly ordinary git working directory the user can drive with plain `git` commands.
+
+   Chosen when nothing was already tracking the working directory at creation time, and recorded in
+   `.meta/contribution-meta.json` (see `schema.CgContributionMeta.git_repo`). Only the git-dir ever
+   moves between layouts: `.meta/` stays at `<contribution_dir>/.meta` in both (see
+   `META_SUBDIR_NAME`)."""
 
 SELECTED_TEST_FILE_NAME = "selected-test.json"
 """Name of `.meta/`'s selected-test file--see `CgContributionSelectedTest`."""
 
-CONTRIBUTION_STATUS_CACHE_FILE_NAME = "contribution-status.json"
+CONTRIBUTION_META_FILE_NAME = "contribution-meta.json"
+"""Name of the `.meta/` file recording how this working directory is put together--currently just
+   where its git-dir is. See `schema.CgContributionMeta`."""
 
-SOLUTION_SNAPSHOT_FILE_NAME = "solution-snapshot.json"
-"""Name of the `.meta/` file recording the starter stub this client last generated into
-   `data/solution.src`--see `CgContributionSolutionSnapshot`."""
+CONTRIBUTION_STATUS_CACHE_FILE_NAME = "contribution-status.json"
 """Name of the offline cache of non-version-tied server metadata (score/votes/comment count/
    views/moderator approve-reject tallies/etc.), under `META_SUBDIR_NAME`--see
    `schema.CgContributionStatusCache`. Deliberately NOT git-tracked (unlike `contribution-data.
    json`, which lives in `data/`)--this is a disposable, opportunistically-refreshed cache, not
    diffable/mergeable content, and none of it is tied to any particular content version."""
 
+SOLUTION_SNAPSHOT_FILE_NAME = "solution-snapshot.json"
+"""Name of the `.meta/` file recording the starter stub this client last generated into
+   `data/solution.src`--see `CgContributionSolutionSnapshot`."""
+
 GITIGNORE_FILE_NAME = ".gitignore"
-"""Written (containing just `.meta/`) at creation time, in whichever directory directly contains
-   `META_SUBDIR_NAME`, so `.meta/`'s contents (our own internal git plumbing state) can never end
-   up tracked by whatever outer project comes to track the rest of that directory, now or later."""
+"""Written (containing just `.meta/`) at creation time in `<contribution_dir>`, which is where
+   `META_SUBDIR_NAME` always lives, so `.meta/`'s contents (this client's generated state) can never
+   end up tracked by whatever outer project comes to track the working directory, now or later.
+
+   Written unconditionally, in both git-dir layouts. In the external layout there is an outer
+   project tracking this directory *today*; in the embedded one there is not, but there may well be
+   later, and a `.gitignore` costs nothing until then."""
 
 MAIN_BRANCH_NAME = "main"
 """The user's own working line--see `manager`'s module docstring."""

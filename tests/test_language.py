@@ -16,7 +16,6 @@ from codingame_tools.language import (
     CgDefaultLanguage,
     CgLanguageContext,
     CgLanguageOperationNotSupportedError,
-    CgLaunchTestCase,
     CgRunFinished,
     CgRunOutputChunk,
     CgVsCodeRequest,
@@ -52,6 +51,7 @@ def _ctx(root: Path, source: str | None = None, *, extension: str = "py") -> CgL
     return CgLanguageContext(
             root=root, solution_file=solution_file, solution_link=link,
             meta_dir=root / ".meta", toolchain_dir=root / ".toolchain",
+            mount_root=root.parent,
         )
 
 
@@ -267,66 +267,61 @@ async def test_run_streaming_yields_output_progressively_before_completion(tmp_p
 # --- VS Code provisioning ------------------------------------------------------------------------
 
 
-def _request(root: Path, kind: str, test_cases: list[tuple[str, str]]) -> CgVsCodeRequest:
-    return CgVsCodeRequest(
-            ctx=_ctx(root, "print(1)\n"), kind=kind,  # type: ignore[arg-type]
-            test_cases=tuple(CgLaunchTestCase(id=i, label=lbl) for i, lbl in test_cases),
-            workspace_root=root.parent,
-        )
+def _request(root: Path) -> CgVsCodeRequest:
+    return CgVsCodeRequest(ctx=_ctx(root, "print(1)\n"), workspace_root=root.parent)
 
 
-async def test_python3_provisioning_generates_the_test_case_list_from_real_test_cases(tmp_path: Path) -> None:
-    """The whole point of generating this: the hand-written config it replaces carried a note
-       telling you to regenerate its 25-entry list by hand after every `cg puzzle import`."""
+async def test_python3_provisioning_is_the_same_for_every_working_directory(tmp_path: Path) -> None:
+    """The property the whole redesign exists for. A configuration that varies per working
+       directory has to be regenerated after every import, language change, or new directory; one
+       that doesn't is written once and forgotten.
+
+       Nothing distinguishes a puzzle from a contribution here either--`codingame_tools.debug`
+       works that out from the file it is handed."""
+    puzzle = tmp_path / "puzzle"
+    puzzle.mkdir()
+    contribution = tmp_path / "some-contribution"
+    contribution.mkdir()
+
+    language = get_language("Python3")
+    from_puzzle = await language.build_vscode_provisioning(_request(puzzle))
+    from_contribution = await language.build_vscode_provisioning(_request(contribution))
+
+    assert from_puzzle is not None and from_contribution is not None
+    assert from_puzzle.configurations == from_contribution.configurations
+
+
+async def test_python3_provisioning_defers_both_questions_to_launch_time(tmp_path: Path) -> None:
+    """Which directory, and which test case. Baking either in is what forced regeneration."""
     root = tmp_path / "puzzle"
     root.mkdir()
 
-    provisioning = await get_language("Python3").build_vscode_provisioning(
-            _request(root, "puzzle", [("1", "Basic North"), ("2", "Basic East")]))
-
-    assert provisioning is not None
-    (test_case_input,) = provisioning.inputs
-    assert test_case_input["id"] == "cg_puzzle_testCase"
-    assert test_case_input["options"] == [
-            {"label": "1: Basic North", "value": "1"},
-            {"label": "2: Basic East", "value": "2"},
-        ]
-
-
-async def test_python3_puzzle_provisioning_targets_the_puzzle_debug_module(tmp_path: Path) -> None:
-    root = tmp_path / "puzzle"
-    root.mkdir()
-
-    provisioning = await get_language("Python3").build_vscode_provisioning(
-            _request(root, "puzzle", [("1", "Only")]))
+    provisioning = await get_language("Python3").build_vscode_provisioning(_request(root))
 
     assert provisioning is not None
     (config,) = provisioning.configurations
-    assert config["name"] == "CG puzzle: Debug solution against test case"
+    assert config["name"] == "CG Python3: Debug solution"
     assert config["type"] == "debugpy"
-    assert config["module"] == "codingame_tools.puzzle_manager.debug"
+    # Kind-agnostic entry point: it resolves puzzle-vs-contribution, the working directory, and the
+    # selected test itself.
+    assert config["module"] == "codingame_tools.debug"
     # ${file}, not an absolute path: binds breakpoints to whatever the user actually has open,
-    # including the solution.py symlink rather than its data/solution.src target.
-    assert config["args"] == ["${file}", "${input:cg_puzzle_testCase}"]
+    # including the solution.py symlink rather than its data/solution.src target. And nothing else--
+    # no test index, no side.
+    assert config["args"] == ["${file}"]
 
 
-async def test_python3_contribution_provisioning_adds_a_side_picker(tmp_path: Path) -> None:
-    """A contribution's debug entry point takes ORDINAL and SIDE separately, so side is its own
-       two-value picker rather than doubling the length of the ordinal list."""
-    root = tmp_path / "contribution"
+async def test_python3_provisioning_emits_no_pickstring_inputs(tmp_path: Path) -> None:
+    """Test selection lives in `.meta/selected-test.json` now. A `pickString` list went stale the
+       moment test cases changed, and was the single biggest reason launch.json needed rewriting."""
+    root = tmp_path / "puzzle"
     root.mkdir()
 
-    provisioning = await get_language("Python3").build_vscode_provisioning(
-            _request(root, "contribution", [("01", "First")]))
+    provisioning = await get_language("Python3").build_vscode_provisioning(_request(root))
 
     assert provisioning is not None
-    (config,) = provisioning.configurations
-    assert config["module"] == "codingame_tools.contribution_manager.debug"
-    assert config["args"] == [
-            "${file}", "${input:cg_contribution_testCase}", "${input:cg_contribution_side}",
-        ]
-    side_input = next(i for i in provisioning.inputs if i["id"] == "cg_contribution_side")
-    assert side_input["options"] == ["local", "validator"]
+    assert provisioning.inputs == []
+    assert not any("${input:" in a for a in provisioning.configurations[0]["args"])
 
 
 async def test_python3_provisioning_needs_no_build_task_or_extra_files(tmp_path: Path) -> None:
@@ -336,7 +331,7 @@ async def test_python3_provisioning_needs_no_build_task_or_extra_files(tmp_path:
     root.mkdir()
 
     provisioning = await get_language("Python3").build_vscode_provisioning(
-            _request(root, "puzzle", [("1", "Only")]))
+            _request(root))
 
     assert provisioning is not None
     assert provisioning.tasks == []
@@ -349,4 +344,4 @@ async def test_a_language_without_vscode_support_provisions_nothing(tmp_path: Pa
     root.mkdir()
 
     assert await get_language("Java").build_vscode_provisioning(
-            _request(root, "puzzle", [("1", "Only")])) is None
+            _request(root)) is None

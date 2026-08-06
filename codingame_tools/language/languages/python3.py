@@ -11,20 +11,22 @@ from collections.abc import AsyncGenerator
 
 from .._process import run_argv_streaming
 from ..base import DEFAULT_RUN_TIMEOUT_SECONDS, CgLanguage, CgLanguageContext, CgRunEvent
-from ..vscode import CgVsCodeProvisioning, CgVsCodeRequest, owner_name, owner_slug
+from ..vscode import ACTION_DEBUG, CgVsCodeProvisioning, CgVsCodeRequest, entry_name
 
 __all__ = [
     "CgPython3Language",
     "LANGUAGE",
 ]
 
-_DEBUG_MODULE = {
-        "puzzle": "codingame_tools.puzzle_manager.debug",
-        "contribution": "codingame_tools.contribution_manager.debug",
-    }
+_DEBUG_MODULE = "codingame_tools.debug"
 """The `python -m` entry point that resolves a test case and runs `solution.src` in-process under
    the debugger--see `codingame_tools.test_runner.debug_stdin` for why it must be in-process (a
-   subprocess can't be stepped into by a debugger attached to the parent)."""
+   subprocess can't be stepped into by a debugger attached to the parent).
+
+   Kind-agnostic, which is the whole reason one configuration can serve a workspace: it works out
+   puzzle-vs-contribution from the file it is handed. The two per-kind entry points it wraps
+   (`puzzle_manager.debug`, `contribution_manager.debug`) each demand to be told, and that is what
+   used to force a configuration per working directory."""
 
 
 class CgPython3Language(CgLanguage):
@@ -45,61 +47,45 @@ class CgPython3Language(CgLanguage):
     async def build_contribution_create_stub_source(self) -> str:
         return "n = input()\nprint(n)\n"
 
+    @property
+    def supports_vscode(self) -> bool:
+        return True
+
     async def build_vscode_provisioning(self, request: CgVsCodeRequest) -> CgVsCodeProvisioning:
-        """A `debugpy` launch configuration that runs `data/solution.src` against a test case
-           picked from a dropdown, plus the dropdown(s) feeding it.
+        """A single `debugpy` launch configuration that runs the solution the active editor tab
+           belongs to, against that working directory's selected test case.
 
-           The test-case list is generated from what's actually on disk, which is the point: the
-           hand-written configuration this replaces carried a note telling you to regenerate its
-           25-entry list by hand after every `cg puzzle import`.
+           **Nothing in it is specific to a working directory**, so it is written once and never
+           regenerated--not after an import, not after a language change, not for the next puzzle.
+           The two questions a debug launch has to answer are both deferred to launch time:
 
-           Passes VS Code's `${file}` macro as the target rather than an absolute path, so the
-           debugger binds breakpoints to the exact file the user has open--including when that's
-           the `solution.py` symlink rather than its `data/solution.src` target. That's the same
-           no-realpath invariant `codingame_tools.test_runner.debug_stdin` documents, and it also
-           means one configuration works for every Python working directory in the workspace.
+           - *which working directory*, from VS Code's `${file}` macro, resolved by
+             `codingame_tools.debug`; and
+           - *which test case*, from that directory's `.meta/selected-test.json`, defaulting to the
+             first test case.
+
+           What it replaces was the opposite: a `pickString` of every test case on disk plus, for
+           contributions, a local/validator picker, all baked in and all stale the moment the test
+           cases changed.
+
+           Passing `${file}` rather than an absolute path also keeps breakpoints bound to the exact
+           file the user has open--including when that's the `solution.py` symlink rather than its
+           `data/solution.src` target. Same no-realpath invariant
+           `codingame_tools.test_runner.debug_stdin` documents.
 
            No build, so no `preLaunchTask`; no container, so no extra files."""
-        prefix = owner_name(request.ctx.root)
-        slug = owner_slug(request.ctx.root)
-        kind = request.kind
-        index_input_id = f"cg_{slug}_testCase"
-        inputs = [
-                {
-                    "id": index_input_id,
-                    "type": "pickString",
-                    "description": f"Test case to run {request.ctx.root.name}'s solution against",
-                    "options": [
-                            {"label": f"{tc.id}: {tc.label}", "value": tc.id}
-                            for tc in request.test_cases
-                        ],
-                },
-            ]
-        args: list[str] = ["${file}", f"${{input:{index_input_id}}}"]
-        if kind == "contribution":
-            # Local vs validator is a fixed two-way choice, kept as its own picker rather than
-            # multiplying every ordinal by two in a single list.
-            side_input_id = f"cg_{slug}_side"
-            inputs.append({
-                    "id": side_input_id,
-                    "type": "pickString",
-                    "description": "Test case side",
-                    "options": ["local", "validator"],
-                })
-            args.append(f"${{input:{side_input_id}}}")
         return CgVsCodeProvisioning(
                 configurations=[
                         {
-                            "name": f"{prefix}Debug solution against test case",
+                            "name": entry_name(self.cg_id, ACTION_DEBUG),
                             "type": "debugpy",
                             "request": "launch",
-                            "module": _DEBUG_MODULE[kind],
-                            "args": args,
+                            "module": _DEBUG_MODULE,
+                            "args": ["${file}"],
                             "console": "integratedTerminal",
                             "justMyCode": True,
                         },
                     ],
-                inputs=inputs,
                 recommended_extensions=["ms-python.python"],
             )
 

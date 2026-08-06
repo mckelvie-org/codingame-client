@@ -1,12 +1,16 @@
 """The working-directory root's own manifest (`contribution.json`) and the per-view content
    manifest inside `data/` (`contribution-data.json`):
 
-   - `contribution.json` (`CgContributionIdentity`): global identity plus the (effectively
-     constant, once decided) location of this working directory's git-dir--see
-     `codingame_tools.contribution_manager.manager`'s module docstring for the `--git-dir`/
-     `--work-tree` layout this supports. Lives only at the working directory's own root (a sibling
+   - `contribution.json` (`CgContributionIdentity`): global identity, and only that--which
+     contribution this directory tracks. Lives only at the working directory's own root (a sibling
      of `data/`, never inside it, and never itself git-tracked as part of `data/`'s content). Its
      presence is what identifies a directory as a contribution working directory at all.
+
+   - `.meta/contribution-meta.json` (`CgContributionMeta`): how the working directory is put
+     together (currently just where its git-dir is)--chosen and maintained by this client rather
+     than describing the contribution, so it is meta state rather than identity. See
+     `codingame_tools.contribution_manager.manager`'s module docstring for the `--git-dir`/
+     `--work-tree` layout it selects between.
 
    - `contribution-data.json` (`CgContributionView`): the actual content manifest, inside `data/`
      (see `codingame_tools.contribution_manager.layout.DATA_SUBDIR_NAME`)--part of `data/`'s
@@ -37,6 +41,7 @@ __all__ = [
     "CONTRIBUTION_DATA_FILE_NAME",
     "CONTRIBUTION_SCHEMA_VERSION",
     "CgContributionIdentity",
+    "CgContributionMeta",
     "CgContributionView",
     "CgContributionStatusCache",
 ]
@@ -103,14 +108,42 @@ class CgContributionIdentity(JSONWizardX):
        actually needs--everything else about prior git history is either present (git-dir found
        where recorded) or, if not, deliberately not reconstructed, just re-fetched fresh."""
 
-    git_dir_in_data: bool = False
-    """Where this working directory's git-dir lives, decided once at creation time and never
-       re-derived afterward (so a git project appearing around this directory *after* creation
-       can't cause the git-dir location to be miscomputed for a repo that already exists at a
-       fixed spot): `True` -> nested inside `data/` (at `data/.meta/.contribution-git/`, chosen
-       when nothing else was already tracking this location); `False` -> external, at
-       `<contribution_dir>/.meta/.contribution-git/` (chosen when this directory was already
-       inside another git repository at creation time). See `manager`'s module docstring."""
+
+@dataclass
+class CgContributionMeta(JSONWizardX):
+    """`.meta/contribution-meta.json`: this client's own state about how the working directory is
+       put together, as opposed to what it *is* (`contribution.json`) or what it *holds* (`data/`).
+
+       Chosen and maintained entirely by the meta infrastructure, so it belongs here rather than in
+       the identity manifest, which describes the contribution itself and is constant for the
+       directory's lifetime.
+
+       Not merely a tidiness argument--see `manager`'s "portability contract". `contribution.json`
+       and `data/` are the *exportable* state: copy them elsewhere, `repair()`, and you have a
+       working directory. So they may hold only facts true of the contribution wherever it is. Where
+       the git-dir goes is a fact about *this checkout on this machine*, and two checkouts of one
+       contribution can legitimately differ--the same content exported from a standalone directory
+       into a colleague's monorepo must come up external rather than embedded. Recorded in
+       `contribution.json` it would travel and be wrong on arrival, which is what 1.0.x did.
+
+       Being in `.meta/` makes it disposable, like everything else here--so nothing may depend on
+       it surviving. `CgContributionManager.git_dir` treats it as a cached answer and falls back to
+       looking for the repository on disk, which is why deleting `.meta/` can never orphan a
+       `data/.git`, and why a freshly exported directory with no `.meta/` at all still works (see
+       `_resolve_git_dir`)."""
+
+    git_repo: str
+    """Where this working directory's git-dir is, relative to the working directory root, in POSIX
+       form--either `".meta/.contribution-git"` (external, with `data/` as its work tree) or
+       `"data/.git"` (embedded, making `data/` an ordinary git working directory). Decided once at
+       `create()`/`import_()` time--see `manager`'s module docstring for how, and why it is not
+       re-derived on every command.
+
+       A path rather than a flag because it is read far more often than it is written, and a path
+       is directly usable. It is still only ever one of those two values; anything else is not
+       something the rest of this package knows how to drive."""
+
+    extra_data: CatchAll = field(default_factory=dict)
 
 
 @dataclass

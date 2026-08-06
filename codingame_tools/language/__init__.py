@@ -54,7 +54,6 @@ from .base import (
 from .default import CgDefaultLanguage
 from .registry import get_language, get_language_by_extension, list_language_cg_ids
 from .vscode import (
-    CgLaunchTestCase,
     CgVsCodeKind,
     CgVsCodeMergeError,
     CgVsCodeProvisioning,
@@ -83,7 +82,6 @@ __all__ = [
     "CgDockerCleanResult",
     "clean_managed",
     "list_managed_containers",
-    "CgLaunchTestCase",
     "CgVsCodeKind",
     "CgVsCodeMergeError",
     "CgVsCodeProvisioning",

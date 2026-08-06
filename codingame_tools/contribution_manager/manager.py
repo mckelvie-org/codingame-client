@@ -31,12 +31,45 @@
    never touching `HEAD`, the real index, or anything under `data/`. This is deliberate: `data/`
    must always and only ever reflect `main`'s real content.
 
-   The repo's actual git-dir (objects/refs/HEAD/index/config) is kept *outside* `data/`'s tracked
-   content, via `--git-dir`/`--work-tree` decoupling (see `git_repo`)--so a `data/`-containing
-   directory can also be tracked normally by whatever outer project the user keeps it in, without
-   `data/` ever carrying a `.git` marker that would trip that outer project's own embedded-
-   repository detection. Where the git-dir actually lives is decided once, at `import_()` time (see
-   `CgContributionIdentity.git_dir_in_data`), and never re-derived afterward.
+   The git-dir itself (objects/refs/HEAD/index/config) lives in one of two places, decided once at
+   `create()`/`import_()` time (recorded in `.meta/contribution-meta.json`, see
+   `CgContributionMeta.git_repo`) and never re-derived on subsequent commands--so a git project
+   appearing around this directory later can't move a repo that already exists at a fixed spot:
+
+   - **External**, at `<contribution_dir>/.meta/.contribution-git/` with `data/` as its work tree,
+     via `--git-dir`/`--work-tree` decoupling (see `git_repo`). Chosen when the working directory is
+     created inside an existing git project. Nothing under `<contribution_dir>` carries a `.git`
+     marker, so that outer project's own embedded-repository detection is never tripped.
+   - **Embedded**, at `data/.git`--`data/` as a perfectly ordinary git working directory, drivable
+     with plain `git` commands. Chosen when nothing was already tracking this location, where there
+     is no outer project for a `.git` marker to confuse.
+
+   `.meta/` is **not** part of that choice: it is always `<contribution_dir>/.meta`, a sibling of
+   `data/`, in both layouts. `data/` holds user state and only user state.
+
+   ## The portability contract
+
+   **`contribution.json` + `data/` are the exportable state of a contribution.** Copy just those two
+   to another machine--or sync them through an outer git repo, or a backup, or a zip file--run
+   `repair()`, and you get a consistent working directory. Everything else is reconstructible from
+   them plus the server.
+
+   This is the principle that decides where any given piece of state lives, and it cuts sharply:
+
+   - `contribution.json` and `data/` may contain **only** facts true of the contribution *wherever
+     it is*. They travel.
+   - `.meta/` holds facts true of *this checkout on this machine*. It does not travel, is gitignored,
+     and is always rebuildable.
+
+   The git-dir location is the second kind, which is why it lives in `.meta/contribution-meta.json`
+   and not in the identity manifest. Two checkouts of the same contribution can legitimately disagree
+   about it: exported from a standalone directory (`data/.git`) into a colleague's monorepo, the copy
+   must come up external (`.meta/.contribution-git`), because an embedded `.git` would turn their
+   project's own tracking inside out. A layout recorded in `contribution.json` would travel with the
+   export and be *wrong on arrival*--which is exactly what versions through 1.0.x did.
+
+   The same contract is why `_resolve_git_dir` can find an existing repository on disk rather than
+   depending on the record: a freshly exported directory has no `.meta/` at all, and must still work.
 """
 
 from __future__ import annotations
@@ -73,7 +106,6 @@ from ..language import (
     CgBuildResult,
     CgDebugSession,
     CgLanguageContext,
-    CgLaunchTestCase,
     CgVsCodeRequest,
     find_workspace_root,
     get_language,
@@ -91,9 +123,11 @@ from .git_repo import CgGitError, CgGitRepo, init_repo, is_inside_existing_repo
 from .layout import (
     ASSETS_SUBDIR_NAME,
     CONSTRAINTS_FILE_NAME,
+    CONTRIBUTION_META_FILE_NAME,
     CONTRIBUTION_STATUS_CACHE_FILE_NAME,
     COVER_IMAGE_FILE_NAME,
     COVER_PLACEHOLDER_ASSET_NAME,
+    DATA_GIT_DIR_NAME,
     DATA_SUBDIR_NAME,
     GIT_METADATA_SUBDIR_NAME,
     GITIGNORE_FILE_NAME,
@@ -120,6 +154,7 @@ from .schema import (
     CONTRIBUTION_IDENTITY_FILE_NAME,
     CONTRIBUTION_SCHEMA_VERSION,
     CgContributionIdentity,
+    CgContributionMeta,
     CgContributionSelectedTest,
     CgContributionSolutionSnapshot,
     CgContributionStatusCache,
@@ -606,11 +641,15 @@ def _starter_contribution_data(title: str) -> CgContributionData:
         )
 
 
-def _write_meta_gitignore(parent_dir: Path) -> None:
-    """Write `parent_dir/.gitignore` containing `.meta/`, so `.meta/`'s contents (our own internal
-       git plumbing state--see `META_SUBDIR_NAME`/`GIT_METADATA_SUBDIR_NAME`) can never end up
-       tracked by whatever project comes to track the rest of `parent_dir`, now or later."""
-    (parent_dir / GITIGNORE_FILE_NAME).write_text(f"{META_SUBDIR_NAME}/\n")
+def _write_meta_gitignore(contribution_dir: Path) -> None:
+    """Write `<contribution_dir>/.gitignore` containing `.meta/`, so `.meta/`'s contents (this
+       client's generated state--see `META_SUBDIR_NAME`) can never end up tracked by whatever outer
+       project comes to track the working directory, now or later.
+
+       Always `<contribution_dir>`, in both git-dir layouts, because that is where `.meta/` always
+       is. Note it protects `.meta/` from the *outer* project only: the contribution's own repo has
+       `data/` as its work tree and cannot see `.meta/` at all."""
+    (contribution_dir / GITIGNORE_FILE_NAME).write_text(f"{META_SUBDIR_NAME}/\n")
 
 
 def _materialize_data(
@@ -621,27 +660,25 @@ def _materialize_data(
             ready_for_moderation: bool,
             data: CgContributionData,
             cover_bytes: bytes | None,
-            git_dir_in_data: bool,
         ) -> CgContributionView:
     """Write one view's content directly into `target_dir`: sidecar text files, `solution.src`,
-       `cover.png`, `tests/`, `contribution-data.json`, and (if `git_dir_in_data`) `.gitignore`.
-       `target_dir` is whatever the caller wants--`self.data_dir` (the real working tree) for
-       `import_()`, or a throwaway staging directory for `fetch()`'s `server` tree-building (see
-       `CgGitRepo.write_tree_from_dir`)--this function itself has no opinion about which.
+       `cover.png`, `tests/`, `contribution-data.json`. `target_dir` is whatever the caller
+       wants--`self.data_dir` (the real working tree) for `import_()`, or a throwaway staging
+       directory for `fetch()`'s `server` tree-building (see `CgGitRepo.write_tree_from_dir`)--this
+       function itself has no opinion about which.
 
-       `git_dir_in_data` must be threaded through here (rather than writing `.gitignore` once,
-       only in `import_()`) so that *every* tree ever committed onto `server`--not just the first
-       one--includes it when the git-dir actually lives under `data/`. Otherwise a later
-       `checkout_all()` landing on a `.gitignore`-less `server` commit would delete the file from
-       disk, and the very next `git clean -fd` would then delete `.meta/` (the git-dir itself,
-       unprotected once nothing excludes it)--confirmed by direct testing.
+       Everything written here is contribution content, and nothing else. That is what makes the
+       `server` branch a faithful mirror of what CodinGame holds, and it is why `.meta/` lives
+       outside `data/`: back when the git-dir could sit at `data/.meta/`, every tree committed onto
+       `server` had to carry a synthetic `.gitignore` protecting it, or a `checkout_all()` landing
+       on a `.gitignore`-less commit followed by `git clean -fd` would delete the git-dir out from
+       under the repo. With the embedded layout at `data/.git`, git excludes its own git-dir
+       inherently and no such special case exists.
 
     Returns:
         The `CgContributionView` that was written to `target_dir/contribution-data.json`.
     """
     target_dir.mkdir(parents=True, exist_ok=True)
-    if git_dir_in_data:
-        _write_meta_gitignore(target_dir)
 
     _write_sidecar(target_dir / STATEMENT_FILE_NAME, data.statement)
     _write_sidecar(target_dir / INPUT_DESCRIPTION_FILE_NAME, data.input_description)
@@ -755,12 +792,18 @@ class CgContributionManager:
     contribution_dir: Path
     client: CgClient
 
+    mount_root: Path | None
+    """Editor workspace root to bind-mount for containerized languages, or `None` to derive it (see
+       `language_context`). Normally VS Code's `${workspaceFolder}`, passed through by the CLI: cg's
+       own `find_workspace_root` is a heuristic, and the editor knows the real answer."""
+
     def __init__(
                 self,
                 contribution_dir: Path | str,
                 client: CgClient,
                 *,
                 toolchain_dir: Path | None = None,
+                mount_root: Path | None = None,
             ) -> None:
         # Always resolved to an absolute path: git_repo.py's subprocess calls set `cwd` to
         # `git_dir`/`work_tree` themselves (see CgGitRepo._run), so a relative `contribution_dir`
@@ -771,6 +814,7 @@ class CgContributionManager:
         # `contribution/data`, not the original cwd).
         self.contribution_dir = Path(contribution_dir).resolve()
         self.client = client
+        self.mount_root = Path(mount_root).resolve() if mount_root is not None else None
         self.toolchain_dir = (
                 Path(toolchain_dir) if toolchain_dir is not None
                 else default_global_data_dir() / TOOLCHAIN_SUBDIR_NAME
@@ -800,56 +844,160 @@ class CgContributionManager:
     def solution_file(self) -> Path:
         return self.data_dir / SOLUTION_FILE_NAME
 
-    def _meta_dir_for(self, git_dir_in_data: bool) -> Path:
-        root = self.data_dir if git_dir_in_data else self.contribution_dir
-        return root / META_SUBDIR_NAME
-
     @property
     def meta_dir(self) -> Path:
-        """This working directory's `.meta/`--which is bistable: `data/.meta` when the git-dir lives
-           in `data/`, else `<contribution_dir>/.meta` (see the module docstring).
+        """This working directory's `.meta/`--always `<contribution_dir>/.meta`, in both git-dir
+           layouts (see the module docstring). Never inside `data/`, which holds user state only.
 
-           Unlike `git_dir`/`status_cache_file`, this **never raises**: a working directory that has
-           never been imported has no `contribution.json` to say which layout it uses, and this
-           returns the non-`data/` default rather than failing. That matters because
-           `language_context()` needs a meta dir and must stay infallible--`cg contribution play`
-           works today on a directory holding nothing but `data/contribution-data.json`, and that
-           must keep working. Callers that genuinely need the *authoritative* location for an
-           imported directory (anything touching the git-dir) must go through `git_dir`."""
+           A plain path join, so it **never raises** and needs no `contribution.json` to answer.
+           That matters because `language_context()` needs a meta dir and must stay infallible--`cg
+           contribution play` works today on a directory holding nothing but
+           `data/contribution-data.json`, and that must keep working."""
+        return self.contribution_dir / META_SUBDIR_NAME
+
+    @property
+    def meta_file(self) -> Path:
+        """Path to `.meta/contribution-meta.json`--see `CgContributionMeta`."""
+        return self.meta_dir / CONTRIBUTION_META_FILE_NAME
+
+    def load_meta(self) -> CgContributionMeta | None:
+        """This working directory's `.meta/contribution-meta.json`, or `None` if it doesn't exist
+           (never created, or `.meta/` was deleted) or fails to parse.
+
+           Unparseable is treated as absent rather than fatal, like every other `.meta/` file: the
+           whole directory is disposable and rebuildable, and `git_dir` can find the repository on
+           disk without it."""
+        if not self.meta_file.is_file():
+            return None
+        try:
+            return CgContributionMeta.load(self.meta_file)
+        except Exception:
+            logger.warning("Failed to parse %s--treating as absent.", self.meta_file, exc_info=True)
+            return None
+
+    def _save_meta(self, git_dir: Path) -> None:
+        """Record where this working directory's git-dir is, as a root-relative POSIX path."""
+        self.meta_dir.mkdir(parents=True, exist_ok=True)
+        relative = git_dir.relative_to(self.contribution_dir).as_posix()
+        CgContributionMeta(git_repo=relative).save(self.meta_file)
+        self._drop_legacy_identity_meta()
+
+    def _drop_legacy_identity_meta(self) -> None:
+        """Remove `gitDirInData` from `contribution.json` once the same fact lives in `.meta/`.
+
+           Versions through 1.0.x kept the git-dir location in the identity manifest. Nothing reads
+           it any more--`_resolve_git_dir` finds an existing repository on disk, which gets a 1.0.x
+           working directory to the right answer without it--but `CatchAll` faithfully round-trips
+           unknown keys, so it would otherwise sit there forever implying it still means something.
+
+           Only ever *removes* a key this package used to own, and only once its replacement has
+           been written; any other unrecognized key is left alone."""
         identity = self.load_identity()
-        return self._meta_dir_for(identity.git_dir_in_data if identity is not None else False)
+        if identity is None or not identity.extra_data or "gitDirInData" not in identity.extra_data:
+            return
+        identity.extra_data = {k: v for k, v in identity.extra_data.items() if k != "gitDirInData"}
+        identity.save(self.identity_file)
 
     def _git_dir_for(self, git_dir_in_data: bool) -> Path:
-        return self._meta_dir_for(git_dir_in_data) / GIT_METADATA_SUBDIR_NAME
+        """The git-dir the given layout puts this working directory's repo in--see the module
+           docstring for the two, and `git_dir` for reading the layout actually in force."""
+        if git_dir_in_data:
+            return self.data_dir / DATA_GIT_DIR_NAME
+        return self.meta_dir / GIT_METADATA_SUBDIR_NAME
+
+    def _resolve_git_dir(self) -> Path:
+        """Where this working directory's git-dir is, in decreasing order of authority:
+
+           1. **`.meta/contribution-meta.json`**, written at `create()`/`import_()` time. The normal
+              answer, and the reason no command has to go looking.
+           2. **An existing repository on disk**, at either of the two known locations. `.meta/` is
+              disposable--deleting it and repairing is documented as always valid--so the recorded
+              answer must never be the *only* copy. Probing keeps a `data/.git`, which survives
+              losing `.meta/`, from being orphaned and then shadowed by a second, empty repository.
+              Refuses if both exist, rather than picking one and abandoning the other's history.
+           3. **Derived** from whether this directory sits inside an existing git project, the same
+              rule `create()` applies. Only reached when there is no repository yet.
+
+           Ordering 1 above 3 is what keeps a git project appearing around this directory *after*
+           creation from relocating a repository that already exists at a fixed spot; ordering 2
+           above 3 covers the same hazard when the record itself is gone.
+
+        Raises:
+            CgContributionManagerError: if repositories exist at both locations.
+        """
+        recorded = self.load_meta()
+        if recorded is not None:
+            return self.contribution_dir / Path(recorded.git_repo)
+
+        external = self._git_dir_for(False)
+        embedded = self._git_dir_for(True)
+        found = [path for path in (external, embedded) if path.is_dir()]
+        if len(found) > 1:
+            raise CgContributionManagerError(
+                    f"Found git-dirs at both {external} and {embedded}, and {self.meta_file} is "
+                    "missing, so there is nothing to say which one is this working directory's. "
+                    "Refusing to guess--inspect both (`git --git-dir=<path> log --oneline main`) "
+                    "and delete the one you don't want."
+                )
+        if found:
+            return found[0]
+        return self._git_dir_for(not is_inside_existing_repo(self.contribution_dir))
 
     @property
     def git_dir(self) -> Path:
-        """Path to this working directory's git-dir--see the module docstring for the two
-           possible locations, and `CgContributionIdentity.git_dir_in_data` for which one this
-           working directory actually uses (decided once, at `import_()` time).
+        """Path to this working directory's git-dir--see `_resolve_git_dir` for how it is found and
+           the module docstring for the two places it can be.
 
         Raises:
             FileNotFoundError: if this working directory has never been imported--nothing to
                                 derive it from.
         """
-        identity = self.load_identity()
-        if identity is None:
+        if self.load_identity() is None:
             raise FileNotFoundError(f"{self.identity_file} does not exist--this working directory has never been imported.")
-        return self._git_dir_for(identity.git_dir_in_data)
+        self._reject_legacy_layout()
+        return self._resolve_git_dir()
+
+    def _reject_legacy_layout(self) -> None:
+        """Refuse to operate on a working directory laid out by a pre-1.1 version of this package.
+
+           Those put `.meta/` inside `data/` whenever the git-dir was in `data/`, so the git-dir
+           landed at `data/.meta/.contribution-git/` rather than today's `data/.git/`. Left
+           undetected, `git_dir` would simply point at a path that doesn't exist and the next
+           `repair()` would cheerfully initialize a *second*, empty repo beside the real one--
+           silently abandoning the local history in the first.
+
+           There is no automatic migration: relocating a git-dir means rewriting the absolute
+           `core.worktree` it was initialized with, and for a never-pushed contribution that repo
+           holds the only copy of the local history. Better to say so and let the user decide.
+
+        Raises:
+            CgContributionManagerError: if the legacy layout is present.
+        """
+        legacy_git_dir = self.data_dir / META_SUBDIR_NAME / GIT_METADATA_SUBDIR_NAME
+        if not legacy_git_dir.is_dir():
+            return
+        raise CgContributionManagerError(
+                f"{legacy_git_dir} is a git-dir in the layout used before codingame-tools 1.1, "
+                f"which put .meta/ inside data/. It is now always {self.meta_dir}, and a git-dir "
+                f"inside data/ is now an ordinary {self.data_dir / DATA_GIT_DIR_NAME}.\n"
+                "\n"
+                "To migrate, from the working directory root:\n"
+                f"  git --git-dir={legacy_git_dir} --work-tree={self.data_dir} log --oneline main\n"
+                "    -- review anything local you would lose (nothing, if every version was pushed)\n"
+                f"  rm -rf {self.data_dir / META_SUBDIR_NAME}\n"
+                "  cg contribution repair\n"
+                "\n"
+                "`repair()` re-fetches from the server for a pushed contribution, or re-commits "
+                "data/ as it stands for one that was never pushed. Either way data/ itself--your "
+                "actual content--is left untouched; only the git history is rebuilt."
+            )
 
     @property
     def status_cache_file(self) -> Path:
-        """Path to `.meta/contribution-status.json` (see `CgContributionStatusCache`)--same two
-           possible parent locations as `git_dir`, same `git_dir_in_data` switch.
-
-        Raises:
-            FileNotFoundError: if this working directory has never been imported/created--nothing
-                                to derive it from.
-        """
-        identity = self.load_identity()
-        if identity is None:
-            raise FileNotFoundError(f"{self.identity_file} does not exist--this working directory has never been imported/created.")
-        return self._meta_dir_for(identity.git_dir_in_data) / CONTRIBUTION_STATUS_CACHE_FILE_NAME
+        """Path to `.meta/contribution-status.json` (see `CgContributionStatusCache`). Like
+           `meta_dir`, and unlike `git_dir`, this never raises--nothing about its location depends
+           on which git-dir layout is in force."""
+        return self.meta_dir / CONTRIBUTION_STATUS_CACHE_FILE_NAME
 
     @property
     def git_repo(self) -> CgGitRepo:
@@ -889,7 +1037,7 @@ class CgContributionManager:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         view.save(self.contribution_data_file)
 
-    def _save_identity(self, contribution_id: CgContributionId | None, *, git_dir_in_data: bool) -> None:
+    def _save_identity(self, contribution_id: CgContributionId | None) -> None:
         """Write `contribution.json` if it doesn't already exist (never overwrites--identity is
            constant for a working directory's lifetime, except `contribution_handle` itself--see
            `_write_contribution_handle`). `contribution_id=None` for `create()`'s brand new,
@@ -899,7 +1047,6 @@ class CgContributionManager:
         self.contribution_dir.mkdir(parents=True, exist_ok=True)
         CgContributionIdentity(
                 schema_version=CONTRIBUTION_SCHEMA_VERSION, contribution_handle=contribution_id,
-                git_dir_in_data=git_dir_in_data,
             ).save(self.identity_file)
 
     def _write_contribution_handle(self, contribution_id: CgContributionId | None) -> None:
@@ -956,8 +1103,6 @@ class CgContributionManager:
            extra live calls on a path that's already the heaviest one in this class; `fetch()`
            (`cg contribution fetch`, or `status(remote=True)`/`rebase()`, which both call it) is
            the deliberate, cheap-by-default place for this."""
-        identity = self.load_identity()
-        assert identity is not None  # only ever called from methods that already require one
         moderator_approvals = await self.client.services.contribution.find_contribution_moderators(
                 contribution.id, "validate")
         moderator_denials = await self.client.services.contribution.find_contribution_moderators(
@@ -969,8 +1114,7 @@ class CgContributionManager:
                 moderator_denials=moderator_denials,
                 _refreshed_at=CgEpochMillis.upcast(datetime.now(timezone.utc)),
             )
-        meta_dir = self._meta_dir_for(identity.git_dir_in_data)
-        meta_dir.mkdir(parents=True, exist_ok=True)
+        self.meta_dir.mkdir(parents=True, exist_ok=True)
         cache.save(self.status_cache_file)
 
     def read_status_cache(self) -> CgContributionStatusCache | None:
@@ -979,10 +1123,7 @@ class CgContributionManager:
            enough to write it) or fails to parse (opportunistic cache, same self-healing spirit as
            the cover-image reuse in `fetch()`--corrupt/unreadable is treated as absent, not fatal).
         """
-        try:
-            path = self.status_cache_file
-        except FileNotFoundError:
-            return None
+        path = self.status_cache_file
         if not path.is_file():
             return None
         try:
@@ -1003,8 +1144,9 @@ class CgContributionManager:
            `findContribution` (unless `contribution` is already given), downloading the cover
            image if one is set, then initializing the git repo with a single shared root commit
            on both `main` and `server` (so `git merge-base main server` starts out meaningful),
-           plus the corresponding `version-data` commit. Writes `contribution.json` (deciding and
-           recording `git_dir_in_data`) if this is a fresh working directory.
+           plus the corresponding `version-data` commit. Writes `contribution.json` if this is a
+           fresh working directory, and `.meta/contribution-meta.json` either way (repair mode runs
+           precisely when `.meta/` went missing, so the record needs rewriting there too).
 
            Also doubles as one of `repair()`'s two modes: if `contribution.json` and `data/`
            already exist (e.g. from cloning an outer project that tracks them, or a corrupted/
@@ -1029,8 +1171,8 @@ class CgContributionManager:
                     "into the same directory."
                 )
         repairing = identity is not None
-        git_dir_in_data = identity.git_dir_in_data if identity is not None else not is_inside_existing_repo(self.contribution_dir)
-        git_dir = self._git_dir_for(git_dir_in_data)
+        self._reject_legacy_layout()
+        git_dir = self._resolve_git_dir()
         if git_dir.is_dir():
             raise CgContributionManagerError(
                     f"{git_dir} already exists--this working directory has already been imported "
@@ -1055,11 +1197,9 @@ class CgContributionManager:
                     ready_for_moderation=version.ready_for_moderation if version.ready_for_moderation is not None else False,
                     data=data,
                     cover_bytes=cover_bytes,
-                    git_dir_in_data=git_dir_in_data,
                 )
-            if not git_dir_in_data:
-                _write_meta_gitignore(self.contribution_dir)
-            self._save_identity(contribution_id, git_dir_in_data=git_dir_in_data)
+            _write_meta_gitignore(self.contribution_dir)
+            self._save_identity(contribution_id)
             _refresh_solution_symlink(self.contribution_dir, data.solution_language)
 
         if repairing:
@@ -1075,6 +1215,7 @@ class CgContributionManager:
             # whatever's on disk.
             renormalize_test_case_dirs(self.tests_dir)
 
+        self._save_meta(git_dir)  # both paths: repair mode runs when .meta/ went missing
         init_repo(git_dir, self.data_dir)
         repo = CgGitRepo(git_dir, self.data_dir)
         repo.set_head(MAIN_BRANCH_NAME)
@@ -1127,18 +1268,17 @@ class CgContributionManager:
         # Never pushed--purely local reconstruction, no network access, mirroring create()'s own
         # git-init/commit steps but preserving data/'s current on-disk content instead of
         # overwriting it with placeholder content.
-        git_dir = self._git_dir_for(identity.git_dir_in_data)
+        self._reject_legacy_layout()
+        git_dir = self._resolve_git_dir()
         if git_dir.is_dir():
             raise CgContributionManagerError(f"{git_dir} already exists--nothing to repair.")
         if not self.data_dir.is_dir():
             raise FileNotFoundError(f"{self.data_dir} does not exist--nothing to repair from.")
 
-        if identity.git_dir_in_data:
-            _write_meta_gitignore(self.data_dir)
-        else:
-            _write_meta_gitignore(self.contribution_dir)
+        _write_meta_gitignore(self.contribution_dir)
         renormalize_test_case_dirs(self.tests_dir)  # see import_()'s repair mode for why
 
+        self._save_meta(git_dir)
         init_repo(git_dir, self.data_dir)
         repo = CgGitRepo(git_dir, self.data_dir)
         repo.set_head(MAIN_BRANCH_NAME)
@@ -1207,8 +1347,8 @@ class CgContributionManager:
                     f"{identity.contribution_handle!r})--`create()` only makes sense for a brand "
                     "new working directory."
                 )
-        git_dir_in_data = not is_inside_existing_repo(self.contribution_dir)
-        git_dir = self._git_dir_for(git_dir_in_data)
+        self._reject_legacy_layout()
+        git_dir = self._git_dir_for(not is_inside_existing_repo(self.contribution_dir))
         if git_dir.is_dir():
             raise CgContributionManagerError(
                     f"{git_dir} already exists, though {self.identity_file} does not--refusing "
@@ -1227,11 +1367,11 @@ class CgContributionManager:
                 _starter_contribution_data(title), solution_language=language, solution=solution)
         _materialize_data(
                 self.data_dir, puzzle_type=puzzle_type, draft=True, ready_for_moderation=False,
-                data=data, cover_bytes=_cover_placeholder_bytes(), git_dir_in_data=git_dir_in_data,
+                data=data, cover_bytes=_cover_placeholder_bytes(),
             )
-        if not git_dir_in_data:
-            _write_meta_gitignore(self.contribution_dir)
-        self._save_identity(None, git_dir_in_data=git_dir_in_data)
+        _write_meta_gitignore(self.contribution_dir)
+        self._save_identity(None)
+        self._save_meta(git_dir)
         # Record the generated stub, so `set_language()` can tell a brand-new contribution (nothing
         # to lose) from one whose solution.src holds real work.
         self._write_solution_snapshot(language, solution)
@@ -1360,7 +1500,7 @@ class CgContributionManager:
                 staging = Path(tmp)
                 _materialize_data(
                         staging, puzzle_type=view.puzzle_type, draft=True, ready_for_moderation=False,
-                        data=stub_data, cover_bytes=None, git_dir_in_data=identity.git_dir_in_data,
+                        data=stub_data, cover_bytes=None,
                     )
                 stub_tree = repo.write_tree_from_dir(staging)
             server_sha = self._record_server_commit(
@@ -1532,7 +1672,6 @@ class CgContributionManager:
                     ready_for_moderation=version.ready_for_moderation if version.ready_for_moderation is not None else False,
                     data=data,
                     cover_bytes=cover_bytes,
-                    git_dir_in_data=identity.git_dir_in_data,
                 )
             tree = repo.write_tree_from_dir(staging)
         self._record_server_commit(repo, tree, contribution, cover_bytes, f"Fetch from server (version {version.version})")
@@ -1964,8 +2103,18 @@ class CgContributionManager:
             test_cases = [tc for tc in test_cases if tc.side != "validator"]
         return test_cases
 
-    def language_context(self, solution_language: CgSolutionLanguage | None = None) -> CgLanguageContext:
+    def language_context(
+                self,
+                solution_language: CgSolutionLanguage | None = None,
+                *,
+                mount_root: Path | None = None,
+            ) -> CgLanguageContext:
         """Describe this working directory to `codingame_tools.language`--see `CgLanguageContext`.
+
+           `mount_root` is what a containerized language bind-mounts. It defaults to the enclosing
+           VS Code workspace root, so that in-container paths equal host paths and one container
+           serves the whole workspace; pass it explicitly (VS Code's `${workspaceFolder}`) when the
+           real workspace is known, since `find_workspace_root` is only a guess.
 
            Infallible by design: never requires this directory to have been imported (`meta_dir`
            falls back to the non-`data/` layout when there's no `contribution.json` to say
@@ -1980,6 +2129,7 @@ class CgContributionManager:
                 solution_link=link if link is not None and link.exists() else None,
                 meta_dir=self.meta_dir,
                 toolchain_dir=self.toolchain_dir,
+                mount_root=mount_root or self.mount_root or find_workspace_root(self.contribution_dir),
             )
 
     @property
@@ -2144,12 +2294,14 @@ class CgContributionManager:
                 *,
                 workspace_root: Path | None = None,
                 force: bool = False,
+                check: bool = False,
             ) -> list[Path]:
         """Generate this working directory's VS Code run/debug configuration, if `solution_language`
-           has any (currently only Python3), and write it into the workspace.
+           has any, and write it into the workspace.
 
-           The test-case dropdown is generated from what's on disk right now, so it can't go stale.
-           Ordinals are deduplicated across local/validator sides--the side is its own picker.
+           What's generated is the same for every working directory of that language, so this is run
+           once per language rather than once per directory, and nothing here goes stale when test
+           cases or the solution language change.
 
         Args:
             solution_language: The language `data/solution.src` is written in.
@@ -2158,9 +2310,14 @@ class CgContributionManager:
                                 not this working directory (see `codingame_tools.language.vscode`).
             force:             Overwrite an existing config file that isn't strict JSON (i.e. uses
                                 JSONC comments) instead of refusing.
+            check:             Report what *would* change without touching anything. This is how
+                                staleness is detected: generated entries carry no version stamp, so
+                                "would rewriting change anything?" is the whole question, and it
+                                stays correct when a future release alters what gets generated.
 
         Returns:
-            Every path written, in write order. Empty if this language has no VS Code integration.
+            Every path that changed (or, under `check`, would change), in write order. Empty means
+            already up to date, or that this language has no VS Code integration.
 
         Raises:
             CgVsCodeMergeError: if an existing config file can't be safely merged into.
@@ -2169,20 +2326,17 @@ class CgContributionManager:
                 Path(workspace_root).resolve() if workspace_root is not None
                 else find_workspace_root(self.contribution_dir)
             )
-        seen: dict[str, str] = {}
-        for tc in self.list_local_tests():
-            seen.setdefault(tc.ordinal, tc.title)
-        test_cases = tuple(CgLaunchTestCase(id=o, label=t) for o, t in seen.items())
         request = CgVsCodeRequest(
-                ctx=self.language_context(solution_language), kind="contribution",
-                test_cases=test_cases, workspace_root=resolved_workspace_root,
+                ctx=self.language_context(
+                        solution_language, mount_root=resolved_workspace_root),
+                workspace_root=resolved_workspace_root,
             )
         provisioning = await get_language(solution_language).build_vscode_provisioning(request)
         if provisioning is None:
             return []
         return write_provisioning(
                 provisioning, root=self.contribution_dir,
-                workspace_root=resolved_workspace_root, force=force)
+                workspace_root=resolved_workspace_root, language=solution_language, force=force, dry_run=check)
 
     async def start_debug_session(
                 self,

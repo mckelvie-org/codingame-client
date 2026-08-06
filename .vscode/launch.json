@@ -1,118 +1,5 @@
 {
   "version": "0.2.0",
-  "inputs": [
-    {
-      "id": "cg_contribution_testCase",
-      "type": "pickString",
-      "description": "Test case to run contribution's solution against",
-      "options": [
-        {
-          "label": "01: Problem statement example",
-          "value": "01"
-        },
-        {
-          "label": "02: Up-to-date check and partial rebuild",
-          "value": "02"
-        },
-        {
-          "label": "03: Single rule with no actions",
-          "value": "03"
-        },
-        {
-          "label": "04: Up-to-date ages",
-          "value": "04"
-        },
-        {
-          "label": "05: Multiple required targets",
-          "value": "05"
-        },
-        {
-          "label": "06: No-action intermediates and unused rules",
-          "value": "06"
-        },
-        {
-          "label": "07: Multiple targets with identical prerequisites",
-          "value": "07"
-        },
-        {
-          "label": "08: Built-in macros and comments",
-          "value": "08"
-        },
-        {
-          "label": "09: Multi-target rule with same-age staleness",
-          "value": "09"
-        },
-        {
-          "label": "10: Same target in multiple rules",
-          "value": "10"
-        },
-        {
-          "label": "11: Large partial rebuild",
-          "value": "11"
-        },
-        {
-          "label": "12: Cycle detection",
-          "value": "12"
-        },
-        {
-          "label": "13: Unreachable cycle detection",
-          "value": "13"
-        },
-        {
-          "label": "14: All rebuild features combined",
-          "value": "14"
-        },
-        {
-          "label": "15: Multiple action lines per rule",
-          "value": "15"
-        },
-        {
-          "label": "16: Kitchen sink",
-          "value": "16"
-        }
-      ]
-    },
-    {
-      "id": "cg_contribution_side",
-      "type": "pickString",
-      "description": "Test case side",
-      "options": [
-        "local",
-        "validator"
-      ]
-    },
-    {
-      "id": "cg_puzzle_testCase",
-      "type": "pickString",
-      "description": "Test case to debug puzzle's solution against",
-      "options": [
-        {
-          "label": "1: Simple test case",
-          "value": "1"
-        },
-        {
-          "label": "2: Only negative numbers",
-          "value": "2"
-        },
-        {
-          "label": "3: Choose the right temperature",
-          "value": "3"
-        },
-        {
-          "label": "4: Choose the right temperature 2",
-          "value": "4"
-        },
-        {
-          "label": "5: Complex test case",
-          "value": "5"
-        },
-        {
-          "label": "6: No temperature",
-          "value": "6"
-        }
-      ]
-    }
-  ],
   "configurations": [
     {
       "name": "Python: Current File",
@@ -147,20 +34,7 @@
       "justMyCode": true
     },
     {
-      "name": "CG contribution: Debug solution against test case",
-      "type": "debugpy",
-      "request": "launch",
-      "module": "codingame_tools.contribution_manager.debug",
-      "args": [
-        "${file}",
-        "${input:cg_contribution_testCase}",
-        "${input:cg_contribution_side}"
-      ],
-      "console": "integratedTerminal",
-      "justMyCode": true
-    },
-    {
-      "name": "CG puzzle: Debug solution against test case",
+      "name": "CG C++: Debug solution",
       "type": "cppdbg",
       "request": "launch",
       "program": "/build/debug/solution",
@@ -175,18 +49,26 @@
         "pipeArgs": [
           "exec",
           "-i",
-          "cg-cpp-0f3ef16dfe0f",
+          "cg-cpp-9e84e543be86",
           "sh",
           "-c"
         ],
         "debuggerPath": "/usr/bin/gdb",
         "pipeCwd": ""
       },
-      "sourceFileMap": {
-        "/src": "/Users/sam/projects/pypi/codingame-tools/puzzle"
-      },
-      "preLaunchTask": "CG puzzle: start debug session",
-      "postDebugTask": "CG puzzle: stop debug session"
+      "preLaunchTask": "CG C++: Start debug session",
+      "postDebugTask": "CG C++: Stop debug session"
+    },
+    {
+      "name": "CG Python3: Debug solution",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "codingame_tools.debug",
+      "args": [
+        "${file}"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": true
     }
   ]
 }

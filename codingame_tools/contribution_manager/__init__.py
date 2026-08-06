@@ -25,6 +25,7 @@ from .contribution_commit_data import (
 )
 from .git_repo import CgGitError, CgGitRepo, init_repo, is_inside_existing_repo
 from .layout import (
+    CONTRIBUTION_META_FILE_NAME,
     CONTRIBUTION_STATUS_CACHE_FILE_NAME,
     COVER_IMAGE_FILE_NAME,
     DATA_SUBDIR_NAME,
@@ -74,6 +75,7 @@ from .schema import (
     CONTRIBUTION_IDENTITY_FILE_NAME,
     CONTRIBUTION_SCHEMA_VERSION,
     CgContributionIdentity,
+    CgContributionMeta,
     CgContributionStatusCache,
     CgContributionView,
 )
@@ -107,10 +109,12 @@ __all__ = [
     "CgContributionLocalTestCase",
     "list_local_test_cases",
     "CgContributionIdentity",
+    "CgContributionMeta",
     "CgContributionView",
     "CgContributionStatusCache",
     "CONTRIBUTION_IDENTITY_FILE_NAME",
     "CONTRIBUTION_DATA_FILE_NAME",
+    "CONTRIBUTION_META_FILE_NAME",
     "CONTRIBUTION_STATUS_CACHE_FILE_NAME",
     "CONTRIBUTION_SCHEMA_VERSION",
     "CgContributionCommitMetadata",

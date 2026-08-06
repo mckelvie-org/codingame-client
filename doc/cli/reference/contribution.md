@@ -15,10 +15,10 @@ Every `cg contribution` subcommand.
 | [`cg contribution debug start`](#cg-contribution-debug-start) | Build the debug profile and start a stopped debug target fed by the given test case's input, ready for a debugger to attach. |
 | [`cg contribution debug stop`](#cg-contribution-debug-stop) | Stop a debug target started by `cg contribution debug start`. |
 | [`cg contribution build`](#cg-contribution-build) | Compile data/solution.src, if its language needs compiling (a no-op for interpreted languages like Python3). |
-| [`cg contribution vscode`](#cg-contribution-vscode) | Generate VS Code run/debug configuration for this contribution working directory. |
 | [`cg contribution set-language`](#cg-contribution-set-language) | Switch this contribution's reference-solution language, writing a fresh starter stub. |
 | [`cg contribution activate`](#cg-contribution-activate) | Make DIRECTORY the active contribution working directory, so subsequent `cg contribution` commands use it without needing --contribution-dir. |
 | [`cg contribution deactivate`](#cg-contribution-deactivate) | Clear the active contribution working directory, so `cg contribution` commands fall back to the configured default and the usual directory discovery. |
+| [`cg contribution select-test`](#cg-contribution-select-test) | Choose which test case (and ) runs against. |
 | [`cg contribution where`](#cg-contribution-where) | Show which contribution working directory would be used. |
 | [`cg contribution status`](#cg-contribution-status) | Human-friendly summary of this contribution: submission/review status, sync status against the server, votes/comments/views, the moderator approve/reject gat... |
 | [`cg contribution discard-local`](#cg-contribution-discard-local) | Discard local edits: reset this working directory's content to match server's current tip exactly. |
@@ -108,12 +108,6 @@ positional arguments:
                         without running, or to warm a cold container image up front. Near-instant
                         when the source hasn't changed since the last successful build. Compiler
                         diagnostics go to stderr.
-    vscode              Generate VS Code run/debug configuration for this contribution working
-                        directory. The test-case dropdown is built from the test cases actually on
-                        disk, so re-run this after tests/ changes to refresh it. Writes into the
-                        workspace root's .vscode/ (VS Code only reads launch.json from the
-                        workspace root, never from a subdirectory), merging with what's already
-                        there and replacing only this working directory's own entries.
     set-language        Switch this contribution's reference-solution language, writing a fresh
                         starter stub. DESTRUCTIVE: unlike a puzzle, a contribution stores only ONE
                         solution with no per-language history, so there is nothing to restore and
@@ -132,6 +126,11 @@ positional arguments:
     deactivate          Clear the active contribution working directory, so `cg contribution`
                         commands fall back to the configured default and the usual directory
                         discovery. Does not touch any files--only the selection.
+    select-test         Choose which test case (and ) runs against. Debugging feeds one stdin, so
+                        it needs exactly one test. Recorded in .meta/selected-test.json rather
+                        than in launch.json, which is what lets one VS Code debug configuration
+                        serve every contribution directory instead of being regenerated per
+                        directory. With no ORDINAL, shows the current selection.
     where               Show which contribution working directory would be used.
     status              Human-friendly summary of this contribution: submission/review status,
                         sync status against the server, votes/comments/views, the moderator
@@ -383,27 +382,6 @@ options:
                         build a container image. Default 120.0.
 ```
 
-## `cg contribution vscode`
-
-```text
-usage: cg contribution vscode [-h] [--workspace-dir DIR] [--force]
-
-Generate VS Code run/debug configuration for this contribution working directory. The test-case
-dropdown is built from the test cases actually on disk, so re-run this after tests/ changes to
-refresh it. Writes into the workspace root's .vscode/ (VS Code only reads launch.json from the
-workspace root, never from a subdirectory), merging with what's already there and replacing only
-this working directory's own entries.
-
-options:
-  -h, --help           show this help message and exit
-  --workspace-dir DIR  Workspace root to write .vscode/ into. Defaults to the nearest enclosing
-                       directory that already has a .vscode/, then the nearest one under version
-                       control, then the working directory itself.
-  --force              Overwrite an existing .vscode/ config file that isn't strict JSON (VS Code
-                       allows comments there, which can't be merged into safely). Without this,
-                       such a file is left untouched and an error is reported.
-```
-
 ## `cg contribution set-language`
 
 ```text
@@ -455,6 +433,25 @@ selection.
 
 options:
   -h, --help  show this help message and exit
+```
+
+## `cg contribution select-test`
+
+```text
+usage: cg contribution select-test [-h] [--clear] [ORDINAL] [SIDE]
+
+Choose which test case (and ) runs against. Debugging feeds one stdin, so it needs exactly one
+test. Recorded in .meta/selected-test.json rather than in launch.json, which is what lets one VS
+Code debug configuration serve every contribution directory instead of being regenerated per
+directory. With no ORDINAL, shows the current selection.
+
+positional arguments:
+  ORDINAL     Ordinal directory name, e.g. '01'. Omit to show the current selection.
+  SIDE        Which side of that ordinal. Defaults to 'local'.
+
+options:
+  -h, --help  show this help message and exit
+  --clear     Forget the explicit selection and fall back to the first local test.
 ```
 
 ## `cg contribution where`

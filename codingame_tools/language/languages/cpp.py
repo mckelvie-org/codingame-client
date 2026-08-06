@@ -12,7 +12,6 @@ from pathlib import Path
 
 from .._docker import (
     BUILD_DIR,
-    SRC_MOUNT_DIR,
     CgDockerError,
     CgToolchain,
     container_name_for,
@@ -31,7 +30,14 @@ from ..base import (
     CgLanguageContext,
     CgRunEvent,
 )
-from ..vscode import CgVsCodeProvisioning, CgVsCodeRequest, owner_name, owner_slug
+from ..vscode import (
+    ACTION_DEBUG,
+    ACTION_START_DEBUG_SESSION,
+    ACTION_STOP_DEBUG_SESSION,
+    CgVsCodeProvisioning,
+    CgVsCodeRequest,
+    entry_name,
+)
 
 __all__ = [
     "CgCppLanguage",
@@ -228,7 +234,10 @@ def _devcontainer_json(root: Path) -> str:
     """A `devcontainer.json` for "Reopen in Container".
 
        Purely a convenience for IntelliSense over the container's own headers--none of the run or
-       debug functionality needs it, since those drive the container from the host. It references
+       debug functionality needs it, since those drive the container from the host. That's what
+       makes it safe to keep under `.meta/` (gitignored, generated, not the user's to maintain)
+       even though VS Code won't discover it there on its own: point the Dev Containers extension
+       at it explicitly if you want it. It references
        the **already-built image by tag** rather than a `dockerFile` path, which sidesteps pointing
        at Dockerfiles that live outside the folder (they're per-user and global by default).
 
@@ -273,16 +282,20 @@ class CgCppLanguage(CgLanguage):
            `codingame_tools.test_runner.debug_stdin` documents). Otherwise compile
            `data/solution.src` directly.
 
+           The host path *is* the in-container path--the mount root is bind-mounted at its own
+           location (see `codingame_tools.language._docker`)--so there is nothing to translate here,
+           and the path g++ records in the debug info is one the host debugger can open directly.
+           That is what removes `sourceFileMap` from the generated launch configuration.
+
            Either way `-x c++` is mandatory--g++ doesn't recognize a `.src` extension and would
            treat the file as a linker input ("file format not recognized")."""
         if profile == "debug" and ctx.solution_link is not None:
-            return f"{SRC_MOUNT_DIR}/{ctx.solution_link.name}"
-        relative = ctx.solution_file.relative_to(ctx.root)
-        return f"{SRC_MOUNT_DIR}/{relative.as_posix()}"
+            return str(ctx.solution_link)
+        return str(ctx.solution_file)
 
     async def _toolchain(self, ctx: CgLanguageContext, *, timeout: float) -> CgToolchain:
         return await ensure_toolchain(
-                root=ctx.root, meta_dir=ctx.meta_dir, toolchain_dir=ctx.toolchain_dir,
+                root=ctx.mount_root, meta_dir=ctx.meta_dir, toolchain_dir=ctx.toolchain_dir,
                 lang_slug=LANG_SLUG, template_version=TEMPLATE_VERSION,
                 template_body=TEMPLATE_BODY, timeout=timeout,
             )
@@ -358,19 +371,18 @@ class CgCppLanguage(CgLanguage):
            live inside the working directory, since this one does by construction.
 
            `meta_dir` is the natural home: it's gitignored scratch space and it sits inside `root`,
-           so it's already visible inside the read-only `/src` mount with no extra plumbing."""
+           which sits inside the mount root--so it's already visible inside the container at the
+           same path, with no extra plumbing."""
         build_result = await self.build(ctx, profile="debug", timeout=timeout)
         if not build_result.ok:
             return CgDebugSession(ok=False, output=build_result.output)
         stdin_file = ctx.meta_dir / DEBUG_STDIN_FILE_NAME
         stdin_file.parent.mkdir(parents=True, exist_ok=True)
         stdin_file.write_text(stdin_text, encoding="utf-8")
-        relative = stdin_file.relative_to(ctx.root)
         toolchain = await self._toolchain(ctx, timeout=timeout)
         result = await run_argv_capture(
                 docker_exec_argv(
-                    toolchain.container_name,
-                    start_debug_script(f"{SRC_MOUNT_DIR}/{relative.as_posix()}")),
+                    toolchain.container_name, start_debug_script(str(stdin_file))),
                 timeout=timeout,
             )
         if not result.ok:
@@ -395,56 +407,47 @@ class CgCppLanguage(CgLanguage):
         await run_argv_capture(
                 docker_exec_argv(toolchain.container_name, STOP_DEBUG_SCRIPT), timeout=60.0)
 
+    @property
+    def supports_vscode(self) -> bool:
+        return True
+
     async def build_vscode_provisioning(self, request: CgVsCodeRequest) -> CgVsCodeProvisioning:
-        """A `cppdbg` configuration that attaches to the in-container `gdbserver`, plus the tasks
-           that start and stop it and a `devcontainer.json` for IntelliSense.
+        """A single `cppdbg` configuration that attaches to the in-container `gdbserver`, plus the
+           tasks that start and stop it and a `devcontainer.json` for IntelliSense.
+
+           **Nothing in it is specific to a working directory**, so it is written once and never
+           regenerated. Three things used to make that impossible, and each is now resolved at
+           launch time instead of baked in:
+
+           - *Which test case.* Was a `pickString` of everything on disk (plus a local/validator
+             picker for contributions), stale the moment tests changed. Now `cg debug start` reads
+             the working directory's `.meta/selected-test.json`.
+           - *Which working directory.* Was `--puzzle-dir`/`--contribution-dir` with an absolute
+             path. Now `--file ${file}`, from which `cg debug start` infers both the kind and the
+             root.
+           - *Which container.* Was named per working directory. The container is now per
+             (workspace x language)--see `codingame_tools.language._docker.container_name_for`--so
+             its name is the same for every working directory the configuration serves.
 
            gdb runs *inside* the container too, reached via `pipeTransport` shelling out to `docker
            exec`--so the host needs nothing but Docker. `miDebuggerServerAddress` is then the
            container's own localhost, which is why no port is published.
 
-           `sourceFileMap` maps `/src` to the working directory as an **absolute host path**, not
-           `${workspaceFolder}`: the workspace root is usually a parent of the working directory
-           (see `codingame_tools.language.vscode`), so `${workspaceFolder}` would point at the wrong
-           place. The debug build compiles the `solution.<ext>` symlink specifically so the path gdb
-           records maps back onto the file the user has open."""
-        ctx = request.ctx
-        prefix = owner_name(ctx.root)
-        slug = owner_slug(ctx.root)
-        test_input_id = f"cg_{slug}_testCase"
-        cg_args = f"--puzzle-dir {shlex.quote(str(ctx.root))}"
-        debug_command = "puzzle" if request.kind == "puzzle" else "contribution"
-        if request.kind == "contribution":
-            cg_args = f"--contribution-dir {shlex.quote(str(ctx.root))}"
-        container = container_name_for(LANG_SLUG, ctx.root)
+           There is no `sourceFileMap`: the workspace is mounted at its own path, so the paths gdb
+           recorded are already the paths VS Code has open. The debug build compiles the
+           `solution.<ext>` symlink specifically so that path is the one the user is looking at.
 
-        inputs: list[dict[str, object]] = [
-                {
-                    "id": test_input_id,
-                    "type": "pickString",
-                    "description": f"Test case to debug {ctx.root.name}'s solution against",
-                    "options": [
-                            {"label": f"{tc.id}: {tc.label}", "value": tc.id}
-                            for tc in request.test_cases
-                        ],
-                },
-            ]
-        start_args = f"{cg_args} debug start ${{input:{test_input_id}}}"
-        if request.kind == "contribution":
-            side_input_id = f"cg_{slug}_side"
-            inputs.append({
-                    "id": side_input_id,
-                    "type": "pickString",
-                    "description": "Test case side",
-                    "options": ["local", "validator"],
-                })
-            start_args = (
-                    f"{cg_args} debug start ${{input:{test_input_id}}} ${{input:{side_input_id}}}")
+           The tasks pass `${workspaceFolder}` explicitly rather than letting cg guess the mount
+           root, so VS Code's real workspace wins over `find_workspace_root`'s heuristic. A mismatch
+           is self-correcting rather than broken: the mount is part of the container spec hash, so a
+           differently-mounted container is recreated rather than reused."""
+        container = container_name_for(LANG_SLUG, request.workspace_root)
+        target = '--file "${file}" --workspace-root "${workspaceFolder}"'
 
         return CgVsCodeProvisioning(
                 configurations=[
                         {
-                            "name": f"{prefix}Debug solution against test case",
+                            "name": entry_name(self.cg_id, ACTION_DEBUG),
                             "type": "cppdbg",
                             "request": "launch",
                             "program": f"{BUILD_DIR}/debug/solution",
@@ -460,31 +463,40 @@ class CgCppLanguage(CgLanguage):
                                 "debuggerPath": "/usr/bin/gdb",
                                 "pipeCwd": "",
                             },
-                            "sourceFileMap": {SRC_MOUNT_DIR: str(ctx.root)},
-                            "preLaunchTask": f"{prefix}start debug session",
-                            "postDebugTask": f"{prefix}stop debug session",
+                            "preLaunchTask": entry_name(self.cg_id, ACTION_START_DEBUG_SESSION),
+                            "postDebugTask": entry_name(self.cg_id, ACTION_STOP_DEBUG_SESSION),
                         },
                     ],
-                inputs=inputs,
                 tasks=[
                         {
-                            "label": f"{prefix}start debug session",
+                            "label": entry_name(self.cg_id, ACTION_START_DEBUG_SESSION),
                             "type": "shell",
-                            "command": f"cg {debug_command} {start_args}",
+                            "command": f"cg debug start {target}",
                             "presentation": {"reveal": "silent", "panel": "shared"},
                             "problemMatcher": [],
                         },
                         {
-                            "label": f"{prefix}stop debug session",
+                            "label": entry_name(self.cg_id, ACTION_STOP_DEBUG_SESSION),
                             "type": "shell",
-                            "command": f"cg {debug_command} {cg_args} debug stop",
+                            "command": f"cg debug stop {target}",
                             "presentation": {"reveal": "never", "panel": "shared"},
                             "problemMatcher": [],
                         },
                     ],
                 files={
-                    ".devcontainer/devcontainer.json": _devcontainer_json(ctx.root),
+                    # Under .meta/, not the working directory root: this file is generated, never
+                    # hand-edited, and .meta/ is the one place already gitignored -- at the root it
+                    # would be committed into whatever repository tracks the working directory.
+                    # Costs automatic "Reopen in Container" discovery, which only ever offered
+                    # IntelliSense over the container's headers; nothing about running or debugging
+                    # goes through it (see _devcontainer_json).
+                    f"{request.ctx.meta_dir.relative_to(request.ctx.root).as_posix()}/.devcontainer/devcontainer.json":
+                        _devcontainer_json(request.workspace_root),
                 },
+                # Written at the working directory root through 1.0.x, before .meta/ was settled on
+                # as the home for generated files. Left behind it is untracked clutter offering a
+                # stale "Reopen in Container".
+                obsolete_files=[".devcontainer/devcontainer.json"],
                 recommended_extensions=["ms-vscode.cpptools"],
             )
 

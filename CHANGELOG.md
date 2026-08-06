@@ -2,7 +2,124 @@
 
 ## {{UNRELEASED}}
 
-- _Add release notes here._
+- **`launch.json` never needs regenerating again.** The generated VS Code configuration used to be
+  per working directory, so it went stale constantly: a `pickString` of every test case on disk
+  (wrong the moment tests changed), an absolute `--puzzle-dir`, a container named after the
+  directory. Switching puzzles, changing language, or importing anything meant re-running
+  `cg … vscode`.
+
+  Now there is **one configuration per language** for the whole workspace, and it contains nothing
+  specific to any working directory. Both questions a debug launch has to answer moved to launch
+  time: *which directory* from VS Code's `${file}`, and *which test* from that directory's
+  `.meta/selected-test.json` (`cg puzzle select-test` / `cg contribution select-test`, defaulting to
+  the first test — the first *local* one for a contribution).
+
+  New kind-agnostic commands make that possible, each taking `--file` instead of a directory:
+  `cg play`, `cg debug start`, `cg debug stop`, plus a `python -m codingame_tools.debug` entry point.
+  They work out puzzle-vs-contribution from the file they are handed. The per-kind commands remain
+  for naming a test explicitly.
+
+- **`cg puzzle vscode` and `cg contribution vscode` are replaced by `cg vscode install`.** Once the
+  generated configuration stopped depending on the kind of working directory — `CgVsCodeRequest` no
+  longer even has a `kind` field — the two commands were provably identical for a given language,
+  and keeping both implied a distinction that no longer existed.
+
+  With no arguments it sets up *every* working directory it can find (the one you're standing in,
+  plus the active puzzle and the active contribution) rather than making you pick, which is well
+  defined now that entries are per language and languages are independent. `--file` limits it to
+  one. `cg vscode` is a group so later integrations have somewhere to go.
+
+  This is a breaking CLI change: the two old spellings are gone rather than deprecated.
+
+- **Generated VS Code entries have a three-level name**: `CG C++: Debug solution` — a managed prefix
+  stable across every version, then the language, then a well-known action.
+
+  Each level does a job. The prefix makes every entry cg has *ever* written identifiable as a set,
+  so an entry from a version whose naming we didn't anticipate can still be recognised and cleaned
+  up rather than becoming permanent clutter in someone's `launch.json`. The language partitions
+  ownership, so provisioning a C++ working directory can't disturb the Python entry in the same
+  workspace — a real bug in the first cut of this, where whichever language you provisioned last was
+  the only one that survived. The action comes from a fixed vocabulary, so re-provisioning replaces
+  an entry instead of adding a second one.
+
+  A provisioning run therefore replaces everything in its own language's namespace whatever it was
+  called, and removes managed entries whose middle segment names no known language — which is how
+  1.0.x's per-directory names (`CG puzzle: …`) and their orphaned `pickString` inputs are swept up
+  without a dated special case per scheme. `retired_names` remains for the rarer change that moves
+  an entry out of its namespace entirely.
+
+- **`cg vscode install --check`** reports what would change and exits
+  non-zero if anything would, without writing — so you can tell whether an upgrade changed the
+  generated configuration, or gate it in a pre-commit hook. There is no version stamp to compare:
+  the generated content *is* the version.
+
+  Provisioning also no longer rewrites a file whose content wouldn't change, and replaces entries
+  *in place* rather than moving them to the end. Re-running when everything is current is now a
+  genuine no-op on disk: no diffs, no timestamps, no editor reload prompts.
+
+- **Containerized languages mount the workspace at its own path, and `sourceFileMap` is gone.**
+  `/home/me/work` on the host is `/home/me/work` inside the container, so the paths the compiler
+  records in the debug info are already paths the host debugger can open — verified against real
+  DWARF output. Previously the working directory was mounted at `/src` and the launch configuration
+  carried a `sourceFileMap` to undo that, which only worked for the one directory it named.
+
+  A consequence worth knowing: containers are now per (workspace × language) rather than per
+  (working directory × language), which is what lets a static configuration name one. A workspace
+  pays for one image and one container instead of one per puzzle. Containers from the old naming are
+  orphaned rather than swept — `cg docker clean` removes them.
+
+  Assumes host paths are valid Linux paths, which holds on macOS and Linux.
+
+- **Generated files that moved are now cleaned up.** C++ wrote `devcontainer.json` at the working
+  directory root through 1.0.x; it lives under `.meta/` now (generated, gitignored, not the user's to
+  maintain), and the next `cg vscode install` deletes the old one. Only that file, and its directory only
+  if deleting it leaves the directory empty.
+
+- **A contribution's `.meta/` is now always at the working directory root, never inside `data/`.**
+  `data/` is the git work tree, it's what gets pushed to CodinGame, and it's the only part worth
+  backing up — generated, disposable, `repair()`-rebuildable state has no business in it.
+
+  A single flag in `contribution.json` (`gitDirInData`) decides where the git repository goes, and
+  it was moving `.meta/` along with it: a contribution created *outside* any git project got
+  `data/.meta/`, with the repository at `data/.meta/.contribution-git/`. Only the repository should
+  ever have moved. It now does, and its standalone location is a plain `data/.git`, so `data/` is an
+  ordinary git working directory you can drive with bare `git` commands. Contributions created
+  inside an existing git project are unaffected: still `.meta/.contribution-git/` at the root, still
+  no `.git` marker anywhere for the outer project to trip over.
+
+  This also removes a special case. With the repository at `data/.meta/`, every tree committed to
+  the `server` branch had to carry a synthetic `.gitignore` protecting it, or a checkout landing on
+  a commit without one, followed by `git clean -fd`, would delete the repository out from under
+  itself. Git excludes its own `data/.git` inherently, so `server` is now a faithful mirror of
+  contribution content and nothing else.
+
+- **`contribution.json` now holds identity and nothing else.** The git-dir location moved out of it
+  into a new `.meta/contribution-meta.json` (`gitRepo`, a root-relative path), because it is state
+  this client chooses and maintains rather than a fact about the contribution.
+
+  The rule behind it, now written down in the docs and the manager's module docstring:
+  **`contribution.json` + `data/` are the *exportable* state.** Copy those two anywhere — another
+  machine, an outer git repo, a backup — run `repair()`, and you get a consistent working directory.
+  So they may hold only facts true of the contribution *wherever it is*; `.meta/` holds facts true of
+  this checkout on this machine.
+
+  The git-dir layout is the second kind, and putting it in `contribution.json` was actively wrong,
+  not just untidy: exporting a standalone contribution into a colleague's repo carried
+  `gitDirInData: true` along with it, so their copy would come up wanting an embedded `.git` inside
+  their project. The destination now decides for itself.
+
+  Nothing depends on the new file surviving, since a freshly exported directory has no `.meta/` at
+  all: the recorded location is a cached answer, and `git_dir` falls back to finding an existing
+  repository on disk, then to deriving from the local environment. That fallback also means deleting
+  `.meta/` can never orphan a `data/.git` — which the old code, having recorded the fact durably,
+  never had to worry about. A stale `gitDirInData` is dropped from `contribution.json` on the next
+  write.
+
+  **Migration:** working directories created standalone by 1.0.x are detected and refused with
+  instructions rather than silently re-initialized — the new path doesn't exist there, so `repair()`
+  would otherwise build a second, empty repository beside the real one. In short: review anything
+  local you'd lose, `rm -rf data/.meta`, `cg contribution repair`. `data/` is never touched. Working
+  directories created inside a git project need no migration.
 
 ## 1.0.5 (2026-08-05)
 

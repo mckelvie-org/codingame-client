@@ -51,7 +51,6 @@ __all__ = [
     "CgDockerfileState",
     "CgToolchain",
     "CgDockerCleanResult",
-    "SRC_MOUNT_DIR",
     "BUILD_DIR",
     "compose_dockerfile",
     "docker_exec_argv",
@@ -71,12 +70,29 @@ __all__ = [
     "resolve_toolchain_dir",
 ]
 
-SRC_MOUNT_DIR = "/src"
-"""Where the working directory root is bind-mounted (read-only) inside the container. The whole
-   root, not just the solution file: a single-file bind mount breaks the moment an editor saves
-   atomically (write-temp + rename leaves the container holding the old inode). Mounting the root
-   also makes the `solution.<ext>` symlink resolve correctly inside the container, since it's a
-   *relative* link to `data/solution.src`, and makes test-case input files visible for debugging."""
+# Mount root: a cg container bind-mounts one host directory read-only **at its own path**, so
+# `/home/me/work` inside the container is `/home/me/work` on the host. There is deliberately no
+# `/src`-style constant, because there is no translation to do: a host path under the mount root is
+# already the in-container path.
+#
+# That identity is what removes `sourceFileMap` from the generated debug configuration. gdb records
+# whatever path it compiled, so if that path is also valid on the host, the debug adapter can open
+# the file the user already has open and breakpoints bind with nothing to configure.
+#
+# The directory mounted is the **VS Code workspace root** (see
+# `codingame_tools.language.vscode.find_workspace_root`), not the working directory: a
+# `solution.<ext>` symlink is often viewed from elsewhere in the workspace, and a debugger must be
+# able to see it. It also makes one container per (workspace x language) serve every working
+# directory in that workspace--which is what lets the generated launch configuration, which has to
+# name the container, be static.
+#
+# Whole-directory rather than single-file: a single-file bind mount breaks the moment an editor
+# saves atomically (write-temp + rename leaves the container holding the old inode). Mounting a
+# directory also lets the relative `solution.<ext>` -> `data/solution.src` symlink resolve, and makes
+# test-case inputs visible for debugging.
+#
+# Assumes host paths are valid Linux paths, which holds on macOS and Linux. A Windows host would
+# need real translation and a `sourceFileMap` to go with it.
 
 BUILD_DIR = "/build"
 """Where build artifacts live--inside the container, never on the host."""
@@ -176,11 +192,18 @@ def image_tag_for(lang_slug: str, dockerfile_content: str) -> str:
     return f"cg-{lang_slug}:{_short_hash(dockerfile_content)}"
 
 
-def container_name_for(lang_slug: str, root: Path) -> str:
-    """One container per (working directory x language). Hashed because Docker names can't contain
-       `/`; the root is already `.resolve()`d by both managers, so the name is stable and two paths
-       pointing at the same real directory correctly share a container."""
-    return f"cg-{lang_slug}-{_short_hash(str(root))}"
+def container_name_for(lang_slug: str, mount_root: Path) -> str:
+    """One container per (mount root x language)--i.e. per workspace, not per working directory,
+       since the mount root is the workspace root.
+
+       Sharing one container across a workspace's working directories is deliberate: it is what
+       makes the container name a constant a static launch configuration can name, and it means a
+       workspace pays for one image pull and one container rather than one per puzzle. Builds don't
+       collide because artifacts are per-source-path under `BUILD_DIR`.
+
+       Hashed because Docker names can't contain `/`; the mount root is `.resolve()`d, so the name is
+       stable and two paths pointing at the same real directory correctly share a container."""
+    return f"cg-{lang_slug}-{_short_hash(str(mount_root))}"
 
 
 def render_base_dockerfile(lang_slug: str, version: int, body: str) -> str:
@@ -516,7 +539,7 @@ async def remove_containers_for_root(root: Path, *, except_name: str | None = No
     return names
 
 
-def container_create_argv(root: Path, name: str) -> list[str]:
+def container_create_argv(mount_root: Path, name: str) -> list[str]:
     """The `docker run` argv (minus image/command/spec label) used to create a cg container.
 
        Split out so the spec hash can cover it: the hash includes every creation flag, not just the
@@ -529,8 +552,9 @@ def container_create_argv(root: Path, name: str) -> list[str]:
             # zombie in a container that's meant to live for the whole working directory's life.
             "--init",
             *_DEBUG_CREATE_FLAGS,
-            "--label", f"{_LABEL_ROOT}={root}",
-            "--volume", f"{root}:{SRC_MOUNT_DIR}:ro",
+            "--label", f"{_LABEL_ROOT}={mount_root}",
+            # Mounted at its own path--see the mount-root comment above.
+            "--volume", f"{mount_root}:{mount_root}:ro",
             "--workdir", BUILD_DIR,
         ]
 

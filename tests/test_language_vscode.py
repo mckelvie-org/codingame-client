@@ -13,11 +13,11 @@ from typing import Any
 import pytest
 
 from codingame_tools.language.vscode import (
+    MANAGED_PREFIX,
     CgVsCodeMergeError,
     CgVsCodeProvisioning,
+    entry_name,
     find_workspace_root,
-    owner_name,
-    owner_slug,
     write_provisioning,
 )
 
@@ -73,13 +73,11 @@ def test_find_workspace_root_prefers_a_nearer_vscode_dir_over_a_farther_one(tmp_
 # --- ownership naming ---------------------------------------------------------------------------
 
 
-def test_owner_names_derive_from_the_working_directory_name(tmp_path: Path) -> None:
-    assert owner_name(tmp_path / "puzzle") == "CG puzzle: "
-    assert owner_slug(tmp_path / "puzzle") == "puzzle"
-
-
-def test_owner_slug_sanitizes_punctuation(tmp_path: Path) -> None:
-    assert owner_slug(tmp_path / "my-cool.puzzle") == "my_cool_puzzle"
+def test_entry_names_have_three_levels(tmp_path: Path) -> None:
+    """Managed prefix, language, action--each doing a distinct job. Not per working directory any
+       more: one entry per (language, action) serves the whole workspace."""
+    assert entry_name("C++", "Debug solution") == "CG C++: Debug solution"
+    assert entry_name("Python3", "Debug solution").startswith(MANAGED_PREFIX)
 
 
 # --- merge behavior -----------------------------------------------------------------------------
@@ -88,19 +86,22 @@ def test_owner_slug_sanitizes_punctuation(tmp_path: Path) -> None:
 def test_write_creates_launch_json_from_nothing(tmp_path: Path) -> None:
     root = tmp_path / "puzzle"
     root.mkdir()
-    provisioning = CgVsCodeProvisioning(configurations=[_config("CG puzzle: Debug")])
+    provisioning = CgVsCodeProvisioning(configurations=[_config("CG Python3: Debug solution")])
 
-    written = write_provisioning(provisioning, root=root, workspace_root=tmp_path)
+    written = write_provisioning(provisioning, root=root, workspace_root=tmp_path, language="Python3")
 
     assert written == [tmp_path / ".vscode" / "launch.json"]
     data = _launch(tmp_path)
     assert data["version"] == "0.2.0"
-    assert [c["name"] for c in data["configurations"]] == ["CG puzzle: Debug"]
+    assert [c["name"] for c in data["configurations"]] == ["CG Python3: Debug solution"]
 
 
-def test_rewriting_replaces_only_this_working_directorys_entries(tmp_path: Path) -> None:
-    """The core safety property: a user's own configurations, and other working directories'
-       configurations, must survive re-provisioning."""
+def test_rewriting_replaces_its_own_entry_in_place_and_leaves_everything_else(tmp_path: Path) -> None:
+    """The core safety property: nothing is touched except the entry being written.
+
+       Note position is preserved rather than the entry being moved to the end. Re-provisioning a
+       multi-language workspace would otherwise reshuffle the file on every run, showing up as a
+       diff in something the user version-controls for no semantic change."""
     root = tmp_path / "puzzle"
     root.mkdir()
     vscode = tmp_path / ".vscode"
@@ -109,50 +110,166 @@ def test_rewriting_replaces_only_this_working_directorys_entries(tmp_path: Path)
             "version": "0.2.0",
             "configurations": [
                     _config("My Own Thing"),
-                    _config("CG contribution: Debug"),
-                    _config("CG puzzle: Stale Entry"),
+                    {"name": "CG Python3: Debug solution", "type": "stale", "request": "launch"},
+                    _config("Another Of Mine"),
                 ],
         }))
 
     write_provisioning(
-            CgVsCodeProvisioning(configurations=[_config("CG puzzle: Debug")]),
-            root=root, workspace_root=tmp_path)
+            CgVsCodeProvisioning(configurations=[_config("CG Python3: Debug solution")]),
+            root=root, workspace_root=tmp_path, language="Python3")
+
+    configs = _launch(tmp_path)["configurations"]
+    assert [c["name"] for c in configs] == ["My Own Thing", "CG Python3: Debug solution", "Another Of Mine"]
+    assert configs[1]["type"] == "debugpy"  # replaced, not left stale
+
+
+def test_provisioning_one_language_does_not_remove_anothers_entry(tmp_path: Path) -> None:
+    """A provisioning run only ever generates for one language, so "remove everything named CG:"
+       would make whichever language you provisioned last the only one you keep--in a workspace
+       with both a C++ puzzle and a Python contribution, that silently breaks one of them."""
+    python_dir = tmp_path / "py-puzzle"
+    python_dir.mkdir()
+    cpp_dir = tmp_path / "cpp-puzzle"
+    cpp_dir.mkdir()
+
+    write_provisioning(
+            CgVsCodeProvisioning(configurations=[_config("CG Python3: Debug solution")]),
+            root=python_dir, workspace_root=tmp_path, language="Python3")
+    write_provisioning(
+            CgVsCodeProvisioning(configurations=[_config("CG C++: Debug solution")]),
+            root=cpp_dir, workspace_root=tmp_path, language="C++")
 
     assert [c["name"] for c in _launch(tmp_path)["configurations"]] == [
-            "My Own Thing", "CG contribution: Debug", "CG puzzle: Debug",
+            "CG Python3: Debug solution", "CG C++: Debug solution",
         ]
 
 
-def test_rewriting_is_idempotent(tmp_path: Path) -> None:
+def test_an_unrecognized_name_in_this_languages_namespace_is_cleaned_up(tmp_path: Path) -> None:
+    """The property the per-language namespace buys, and the reason it beats a declared list: an
+       entry written by a *previous version* under a name this one has never heard of is still
+       recognisably ours, so it goes--with nothing to remember and nothing to declare."""
     root = tmp_path / "puzzle"
     root.mkdir()
-    provisioning = CgVsCodeProvisioning(configurations=[_config("CG puzzle: Debug")])
+    vscode = tmp_path / ".vscode"
+    vscode.mkdir()
+    (vscode / "launch.json").write_text(json.dumps({
+            "configurations": [
+                    _config("CG Python3: Some Name From The Future"),
+                    _config("Mine"),
+                ],
+        }))
 
-    write_provisioning(provisioning, root=root, workspace_root=tmp_path)
-    write_provisioning(provisioning, root=root, workspace_root=tmp_path)
+    write_provisioning(
+            CgVsCodeProvisioning(configurations=[_config("CG Python3: Debug solution")]),
+            root=root, workspace_root=tmp_path, language="Python3")
 
-    assert [c["name"] for c in _launch(tmp_path)["configurations"]] == ["CG puzzle: Debug"]
+    assert [c["name"] for c in _launch(tmp_path)["configurations"]] == [
+            "Mine", "CG Python3: Debug solution",
+        ]
 
 
-def test_inputs_are_scoped_by_owner_slug(tmp_path: Path) -> None:
+def test_retired_names_reach_outside_this_languages_namespace(tmp_path: Path) -> None:
+    """What `retired_names` is actually for, now that same-language renames need no declaration: an
+       entry stranded under a *different, still-known* language, which neither the namespace rule
+       nor the unknown-segment rule can see."""
+    root = tmp_path / "puzzle"
+    root.mkdir()
+    vscode = tmp_path / ".vscode"
+    vscode.mkdir()
+    (vscode / "launch.json").write_text(json.dumps({
+            "configurations": [_config("CG C++: Debug solution"), _config("Mine")],
+        }))
+
+    write_provisioning(
+            CgVsCodeProvisioning(
+                    configurations=[_config("CG Python3: Debug solution")],
+                    retired_names=["CG C++: Debug solution"]),
+            root=root, workspace_root=tmp_path, language="Python3")
+
+    assert [c["name"] for c in _launch(tmp_path)["configurations"]] == [
+            "Mine", "CG Python3: Debug solution",
+        ]
+
+
+def test_a_users_own_cg_shaped_name_is_never_touched(tmp_path: Path) -> None:
+    """`CG ` marks cg's namespace, but only in the full `CG <segment>: ` shape. Anything else that
+       merely starts with those characters is the user's."""
+    root = tmp_path / "puzzle"
+    root.mkdir()
+    vscode = tmp_path / ".vscode"
+    vscode.mkdir()
+    (vscode / "launch.json").write_text(json.dumps({
+            "configurations": [_config("CG is my favourite tool"), _config("CGI: render")],
+        }))
+
+    write_provisioning(
+            CgVsCodeProvisioning(configurations=[_config("CG Python3: Debug solution")]),
+            root=root, workspace_root=tmp_path, language="Python3")
+
+    assert [c["name"] for c in _launch(tmp_path)["configurations"]] == [
+            "CG is my favourite tool", "CGI: render", "CG Python3: Debug solution",
+        ]
+
+
+def test_per_directory_entries_from_earlier_versions_are_cleaned_out(tmp_path: Path) -> None:
+    """Through 1.0.x every working directory added its own named configuration and its own
+       `pickString` inputs. Matching only the current spelling would leave one stale entry per
+       directory ever provisioned, each prompting for a test case nothing reads."""
     root = tmp_path / "puzzle"
     root.mkdir()
     vscode = tmp_path / ".vscode"
     vscode.mkdir()
     (vscode / "launch.json").write_text(json.dumps({
             "inputs": [{"id": "cg_contribution_testCase"}, {"id": "myOwnInput"}],
-            "configurations": [],
+            "configurations": [
+                    _config("CG puzzle: Debug solution against test case"),
+                    _config("CG my-contribution: Debug solution against test case"),
+                    _config("My Own Thing"),
+                ],
         }))
 
     write_provisioning(
-            CgVsCodeProvisioning(
-                    configurations=[_config("CG puzzle: Debug")],
-                    inputs=[{"id": "cg_puzzle_testCase", "type": "pickString", "options": []}]),
-            root=root, workspace_root=tmp_path)
+            CgVsCodeProvisioning(configurations=[_config("CG Python3: Debug solution")]),
+            root=root, workspace_root=tmp_path, language="Python3")
 
-    assert [i["id"] for i in _launch(tmp_path)["inputs"]] == [
-            "cg_contribution_testCase", "myOwnInput", "cg_puzzle_testCase",
-        ]
+    data = _launch(tmp_path)
+    assert [c["name"] for c in data["configurations"]] == ["My Own Thing", "CG Python3: Debug solution"]
+    # The user's own input survives; ours goes. An empty list would be a puzzling relic, so the
+    # key is dropped entirely when nothing is left of cg's.
+    assert [i["id"] for i in data["inputs"]] == ["myOwnInput"]
+
+
+def test_the_inputs_key_disappears_when_nothing_owns_it(tmp_path: Path) -> None:
+    root = tmp_path / "puzzle"
+    root.mkdir()
+    vscode = tmp_path / ".vscode"
+    vscode.mkdir()
+    (vscode / "launch.json").write_text(json.dumps({
+            "inputs": [{"id": "cg_puzzle_testCase"}], "configurations": [],
+        }))
+
+    write_provisioning(
+            CgVsCodeProvisioning(configurations=[_config("CG Python3: Debug solution")]),
+            root=root, workspace_root=tmp_path, language="Python3")
+
+    assert "inputs" not in _launch(tmp_path)
+
+
+def test_rewriting_is_idempotent(tmp_path: Path) -> None:
+    """Now across working directories too, not just repeated runs on one: two directories in a
+       workspace produce the same entry, so provisioning both leaves exactly one."""
+    root = tmp_path / "puzzle"
+    root.mkdir()
+    other = tmp_path / "contribution"
+    other.mkdir()
+    provisioning = CgVsCodeProvisioning(configurations=[_config("CG Python3: Debug solution")])
+
+    write_provisioning(provisioning, root=root, workspace_root=tmp_path, language="Python3")
+    write_provisioning(provisioning, root=other, workspace_root=tmp_path, language="Python3")
+    write_provisioning(provisioning, root=root, workspace_root=tmp_path, language="Python3")
+
+    assert [c["name"] for c in _launch(tmp_path)["configurations"]] == ["CG Python3: Debug solution"]
 
 
 def test_refuses_to_merge_into_a_jsonc_file(tmp_path: Path) -> None:
@@ -167,8 +284,8 @@ def test_refuses_to_merge_into_a_jsonc_file(tmp_path: Path) -> None:
 
     with pytest.raises(CgVsCodeMergeError):
         write_provisioning(
-                CgVsCodeProvisioning(configurations=[_config("CG puzzle: Debug")]),
-                root=root, workspace_root=tmp_path)
+                CgVsCodeProvisioning(configurations=[_config("CG Python3: Debug solution")]),
+                root=root, workspace_root=tmp_path, language="Python3")
 
     assert (vscode / "launch.json").read_text() == original  # untouched
 
@@ -181,10 +298,10 @@ def test_force_overwrites_a_jsonc_file(tmp_path: Path) -> None:
     (vscode / "launch.json").write_text('{\n  // drop me\n  "configurations": []\n}\n')
 
     write_provisioning(
-            CgVsCodeProvisioning(configurations=[_config("CG puzzle: Debug")]),
-            root=root, workspace_root=tmp_path, force=True)
+            CgVsCodeProvisioning(configurations=[_config("CG Python3: Debug solution")]),
+            root=root, workspace_root=tmp_path, language="Python3", force=True)
 
-    assert [c["name"] for c in _launch(tmp_path)["configurations"]] == ["CG puzzle: Debug"]
+    assert [c["name"] for c in _launch(tmp_path)["configurations"]] == ["CG Python3: Debug solution"]
 
 
 def test_recommended_extensions_are_unioned_never_removed(tmp_path: Path) -> None:
@@ -196,22 +313,103 @@ def test_recommended_extensions_are_unioned_never_removed(tmp_path: Path) -> Non
 
     write_provisioning(
             CgVsCodeProvisioning(recommended_extensions=["ms-python.python", "some.user-extension"]),
-            root=root, workspace_root=tmp_path)
+            root=root, workspace_root=tmp_path, language="Python3")
 
     data = json.loads((vscode / "extensions.json").read_text())
     assert data["recommendations"] == ["some.user-extension", "ms-python.python"]
 
 
 def test_files_are_written_relative_to_the_working_dir_not_the_workspace(tmp_path: Path) -> None:
-    """`.devcontainer/` describes *this puzzle's* toolchain, so it belongs next to the solution--
-       not at the workspace root where .vscode/ goes."""
+    """These files describe *this* working directory's toolchain, so they belong inside it--not at
+       the workspace root where `.vscode/` goes.
+
+       And within it, under `.meta/`: they're generated rather than hand-maintained, and `.meta/` is
+       the only part of a working directory that's gitignored, so anywhere else they'd be committed
+       into whatever repository tracks the directory."""
+    root = tmp_path / "puzzle"
+    root.mkdir()
+    relative = ".meta/.devcontainer/devcontainer.json"
+
+    written = write_provisioning(
+            CgVsCodeProvisioning(files={relative: '{"image": "x"}\n'}),
+            root=root, workspace_root=tmp_path, language="Python3")
+
+    assert written == [root / relative]
+    assert (root / relative).read_text() == '{"image": "x"}\n'
+    assert not (tmp_path / ".meta").exists()
+
+
+# --- obsolete files -----------------------------------------------------------------------------
+
+
+def test_obsolete_files_from_earlier_versions_are_removed(tmp_path: Path) -> None:
+    """C++ wrote `devcontainer.json` at the working directory root through 1.0.x. Left behind it is
+       untracked clutter offering VS Code a stale "Reopen in Container"."""
+    root = tmp_path / "puzzle"
+    old = root / ".devcontainer"
+    old.mkdir(parents=True)
+    (old / "devcontainer.json").write_text("{}")
+
+    write_provisioning(
+            CgVsCodeProvisioning(
+                    files={".meta/.devcontainer/devcontainer.json": "{}"},
+                    obsolete_files=[".devcontainer/devcontainer.json"]),
+            root=root, workspace_root=tmp_path, language="Python3")
+
+    assert (root / ".meta" / ".devcontainer" / "devcontainer.json").is_file()
+    assert not old.exists()  # emptied, so the directory goes too
+
+
+def test_removing_an_obsolete_file_leaves_a_non_empty_directory_alone(tmp_path: Path) -> None:
+    """The user may have put something of their own beside it. Deleting the file is cg cleaning up
+       after itself; deleting their directory is not."""
+    root = tmp_path / "puzzle"
+    old = root / ".devcontainer"
+    old.mkdir(parents=True)
+    (old / "devcontainer.json").write_text("{}")
+    (old / "Dockerfile").write_text("FROM scratch\n")
+
+    write_provisioning(
+            CgVsCodeProvisioning(obsolete_files=[".devcontainer/devcontainer.json"]),
+            root=root, workspace_root=tmp_path, language="Python3")
+
+    assert not (old / "devcontainer.json").exists()
+    assert (old / "Dockerfile").is_file()
+
+
+def test_removing_an_already_absent_obsolete_file_is_a_no_op(tmp_path: Path) -> None:
+    """The normal case, on every run after the first."""
     root = tmp_path / "puzzle"
     root.mkdir()
 
-    written = write_provisioning(
-            CgVsCodeProvisioning(files={".devcontainer/devcontainer.json": '{"image": "x"}\n'}),
-            root=root, workspace_root=tmp_path)
+    write_provisioning(
+            CgVsCodeProvisioning(obsolete_files=[".devcontainer/devcontainer.json"]),
+            root=root, workspace_root=tmp_path, language="Python3")
 
-    assert written == [root / ".devcontainer" / "devcontainer.json"]
-    assert (root / ".devcontainer" / "devcontainer.json").read_text() == '{"image": "x"}\n'
-    assert not (tmp_path / ".devcontainer").exists()
+    assert not (root / ".devcontainer").exists()
+
+
+def test_every_naming_scheme_cg_has_ever_used_is_recognized(tmp_path: Path) -> None:
+    """A managed entry only stays recoverable if the rule that recognizes it is broader than the
+       rule that writes it. Miss a shape and those entries are stranded in the user's file forever,
+       still wired to a debug module or task that may no longer exist."""
+    root = tmp_path / "puzzle"
+    root.mkdir()
+    vscode = tmp_path / ".vscode"
+    vscode.mkdir()
+    (vscode / "launch.json").write_text(json.dumps({
+            "configurations": [
+                    _config("CG puzzle: Debug solution against test case"),      # 1.0.x
+                    _config("CG my-contribution: Debug solution against test case"),
+                    _config("CG: Debug C++ solution (selected test)"),           # intermediate
+                    _config("Mine"),
+                ],
+        }))
+
+    write_provisioning(
+            CgVsCodeProvisioning(configurations=[_config("CG Python3: Debug solution")]),
+            root=root, workspace_root=tmp_path, language="Python3")
+
+    assert [c["name"] for c in _launch(tmp_path)["configurations"]] == [
+            "Mine", "CG Python3: Debug solution",
+        ]
