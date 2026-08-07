@@ -251,6 +251,7 @@ options:
 
 ```text
 usage: cg vscode install [-h] [--file FILE] [--workspace-dir DIR] [--force] [--check]
+                         [--debug-adapter-logging]
 
 Install cg's VS Code run/debug configuration. What it writes is the same for every working
 directory of a given language, so this is run once per language rather than once per working
@@ -262,19 +263,25 @@ merging with what is already there: it replaces only the entries it generated, l
 and does not touch a file whose content would not change.
 
 options:
-  -h, --help           show this help message and exit
-  --file, -f FILE      Set up only the working directory this file belongs to. Defaults to every
-                       working directory cg can find.
-  --workspace-dir DIR  Workspace root to write .vscode/ into. Defaults to the nearest enclosing
-                       directory that already has a .vscode/, then the nearest one under version
-                       control, then the working directory itself.
-  --force              Overwrite an existing .vscode/ config file that isn't strict JSON (VS Code
-                       allows comments there, which can't be merged into safely). Without this,
-                       such a file is left untouched and an error is reported.
-  --check              Report what would change and exit non-zero if anything would, without
-                       writing. Use it to find out whether a cg upgrade changed the generated
-                       configuration--there is no version stamp to compare, because the generated
-                       content is the version.
+  -h, --help            show this help message and exit
+  --file, -f FILE       Set up only the working directory this file belongs to. Defaults to every
+                        working directory cg can find.
+  --workspace-dir DIR   Workspace root to write .vscode/ into. Defaults to the nearest enclosing
+                        directory that already has a .vscode/, then the nearest one under version
+                        control, then the working directory itself.
+  --force               Overwrite an existing .vscode/ config file that isn't strict JSON (VS Code
+                        allows comments there, which can't be merged into safely). Without this,
+                        such a file is left untouched and an error is reported.
+  --check               Report what would change and exit non-zero if anything would, without
+                        writing. Use it to find out whether a cg upgrade changed the generated
+                        configuration--there is no version stamp to compare, because the generated
+                        content is the version.
+  --debug-adapter-logging
+                        Generate a configuration that logs the debug adapter's own conversation
+                        with the debugger to the Debug Console. For diagnosing a session that
+                        misbehaves when everything underneath it works: the adapter is the one
+                        part of the stack that can't be exercised from a terminal. Loud and slow--
+                        re-run without it to turn it back off.
 ```
 
 ## `cg debug`

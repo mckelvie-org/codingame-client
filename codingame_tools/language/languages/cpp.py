@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import platform
 import shlex
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -32,8 +33,8 @@ from ..base import (
 )
 from ..vscode import (
     ACTION_DEBUG,
-    ACTION_START_DEBUG_SESSION,
-    ACTION_STOP_DEBUG_SESSION,
+    ACTION_PREPARE_DEBUG,
+    PRESENTATION,
     CgVsCodeProvisioning,
     CgVsCodeRequest,
     entry_name,
@@ -83,9 +84,15 @@ def build_script(source: str, profile: CgBuildProfile) -> str:
     """Shell to compile `source` (a path inside the container) into `/build/<profile>/solution`,
        skipping the work entirely when nothing relevant changed.
 
-       Hashes **only the source file**--never a directory tree. `/src` contains
-       `.meta/.contribution-git/` (an entire git object database) and `data/tests/`, both of which
-       churn on every git operation and would cause constant spurious rebuilds.
+       Hashes the source file's **contents**, its **path**, and the compiler flags--never a
+       directory tree. The working directory contains a git object database and `tests/`, both of
+       which churn constantly and would cause endless spurious rebuilds.
+
+       The path belongs in the hash because g++ records it in the debug info, so it is part of what
+       the build *is*, not merely how it was made. Omitting it caused a real staleness bug: switching
+       which of two identical-content paths gets compiled (`data/solution.src` versus the
+       `solution.<ext>` symlink pointing at it) left the previous binary in place, still carrying the
+       old path in its DWARF, and breakpoints silently failed to bind.
 
        Caches failures as well as successes: rebuilding known-bad source replays the saved
        diagnostics instead of recompiling, so a repeat is cheap and says exactly the same thing.
@@ -103,7 +110,7 @@ if [ ! -f {src} ]; then
     echo "no solution source at {source}" >&2
     exit 2
 fi
-HASH="$(sha256sum {src} | cut -d' ' -f1)-$(printf '%s' "{flags}" | sha256sum | cut -d' ' -f1)"
+HASH="$(sha256sum {src} | cut -d' ' -f1)-$(printf '%s' "{flags}|{source}" | sha256sum | cut -d' ' -f1)"
 if [ "$(cat {out}/ok 2>/dev/null)" = "$HASH" ]; then
     echo {CACHED_MARKER}
     exit 0
@@ -151,83 +158,146 @@ exec timeout -k 1 {int(timeout) + 1} stdbuf -o0 -e0 {binary}
 """
 
 
-GDBSERVER_PORT = 2345
-"""Port `gdbserver` listens on *inside* the container. Never published to the host: the gdb that
-   connects also runs inside the container (reached by cppdbg's `pipeTransport`, which shells out to
-   `docker exec`), so it dials the container's own localhost. That's what keeps the host's only
-   requirement `docker`--no local gdb, no local toolchain, no port juggling between containers."""
 
 DEBUG_STDIN_FILE_NAME = "debug-stdin"
 """Name of the file `start_debug_session` writes into the working directory's `.meta/` to redirect
    the debugged program's stdin from. A copy rather than the test case's own file, so that exactly
    the bytes the caller specified reach the program--see `start_debug_session`."""
 
-_GDBSERVER_LOG = f"{BUILD_DIR}/gdbserver.log"
-_GDBSERVER_PID = f"{BUILD_DIR}/gdbserver.pid"
+DEBUG_STDIN_CONTAINER_PATH = f"{BUILD_DIR}/debug-stdin"
+"""Where the selected test case's input is staged for the debugged program to read.
 
-_KILL_PREVIOUS = f"""
-if [ -f {_GDBSERVER_PID} ]; then
-    kill "$(cat {_GDBSERVER_PID})" 2>/dev/null || true
-    rm -f {_GDBSERVER_PID}
-fi
-"""
-"""Terminate a previous gdbserver by **recorded PID**, never by `pkill -f <pattern>`.
+   A **fixed** path inside the container, not the working directory's own `.meta/debug-stdin`,
+   because the launch configuration names it (`set args < ...`) and must stay identical for every
+   working directory in the workspace--see `codingame_tools.language.vscode`. Safe because a
+   container hosts one debug session at a time.
 
-   Pattern-matching is a trap here: `docker exec sh -c '<script>'` puts the whole script in the
-   shell's own command line, so any pattern naming gdbserver's arguments also matches the shell
-   running the script--which promptly kills itself (observed as a mysterious exit code 143). A PID
-   file sidesteps that entirely, and needs only `kill`, not procps."""
+   `start_debug_session` copies the real input here; the file the user's working directory holds is
+   still the source of truth."""
+
+_SETUP_COMMANDS = [
+        # gdb runs the program under this, and stdbuf's LD_PRELOAD makes the *program's* stdout
+        # unbuffered. Without it libstdc++ block-buffers a stdout that isn't a terminal--and here it
+        # never is--so nothing the program prints appears until it exits. std::cerr is unbuffered
+        # regardless; this is what fixes std::cout.
+        {"text": "set exec-wrapper stdbuf -o0 -e0",
+         "description": "unbuffer the program's output", "ignoreFailures": True},
+        # Two redirections, both applied by gdb's startup shell.
+        #
+        # `< input` is the whole reason a debug session needs preparing at all: the program must read
+        # the test case, not the terminal.
+        #
+        # `2>&1` is what makes the program's stderr visible. The debug adapter reads gdb's *stdout* --
+        # that is the MI channel -- and the program inherits both of gdb's streams, so its stdout
+        # already arrives in the Debug Console while its stderr went to gdb's stderr, which the
+        # adapter drops on the floor. Observed exactly that: `result` appeared and the `cerr`
+        # diagnostics either side of it did not. Merging also restores ordering between the two,
+        # since they then share one descriptor.
+        {"text": f"set args < {DEBUG_STDIN_CONTAINER_PATH} 2>&1",
+         "description": "feed the test case to stdin; surface stderr in the Debug Console"},
+        # Silences a warning and gets readable std::string/vector in the locals pane.
+        {"text": "set auto-load safe-path /",
+         "description": "allow libstdc++ pretty-printers", "ignoreFailures": True},
+        {"text": "-enable-pretty-printing",
+         "description": "enable pretty printing", "ignoreFailures": True},
+    ]
+"""What gdb is told before the program starts.
+
+   Sent by the adapter as `-interpreter-exec console` before `-exec-run`, and verified to survive
+   that route: driving gdb over MI by hand with exactly these, `-exec-run` hit the breakpoint and
+   the program read its input."""
+
+_ADAPTER_LOGGING = {
+        "engineLogging": True,
+        "trace": True,
+        "traceResponse": True,
+        # Every shared-library load, otherwise--dozens of lines that bury the exchange being read.
+        "moduleLoad": False,
+    }
+"""cppdbg's `logging` block, emitted only under `CgVsCodeRequest.debug_adapter_logging`.
+
+   Puts the full MI conversation in the Debug Console: every command the adapter sends gdb and every
+   response back. The adapter is the one component of this stack that cannot be exercised from a
+   terminal--gdb, the build, stdin redirection and stepping can all be driven by hand and checked."""
+
+_BUILD_PROBLEM_MATCHER = {
+        "owner": "cg-cpp",
+        # Absolute, because that is what we hand the compiler (see source_path_in_container), and
+        # inside the container it is the same absolute path as on the host.
+        "fileLocation": "absolute",
+        # gcc diagnostics and nothing else. A catch-all pattern is a trap: every line the task prints
+        # becomes a "problem", and VS Code then refuses to launch with "errors exist after
+        # preLaunchTask"--observed exactly that, reporting an ordinary progress line as an error.
+        "pattern": [{
+            "regexp": r"^(.*?):(\d+):(\d+):\s+(warning|error):\s+(.*)$",
+            "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5,
+        }],
+    }
+"""Turns a failed debug build into clickable entries in the Problems panel, and stops the launch.
+
+   No `background` section any more: the task prepares and exits, so VS Code simply waits for it.
+   That it needed one--and a readiness pattern to go with it--was an artifact of the task having to
+   leave a debug server running behind it."""
 
 
-def start_debug_script(input_file: str) -> str:
-    """Shell to (re)start a stopped `gdbserver` for the debug build, with stdin redirected from
-       `input_file`.
-
-       The redirection is the reason a debug session is set up by a command of ours rather than left
-       to the debug adapter: doing it in a shell we control sidesteps cppdbg's notoriously
-       unreliable stdin handling entirely.
-
-       `input_file` is a container path to a file `start_debug_session` wrote itself, *not* the test
-       case's own file--see there for why redirecting from the test case would feed the wrong
-       bytes."""
-    binary = f"{BUILD_DIR}/debug/solution"
-    src = shlex.quote(input_file)
-    return f"""
-set -u
-{_KILL_PREVIOUS}
-if [ ! -x {binary} ]; then
-    echo "debug build missing--build with --profile debug first" >&2
-    exit 2
-fi
-if [ ! -f {src} ]; then
-    echo "no such test case input: {input_file}" >&2
-    exit 2
-fi
-rm -f {_GDBSERVER_LOG}
-# setsid detaches it from this exec session, which ends as soon as this script returns.
-setsid gdbserver :{GDBSERVER_PORT} {binary} <{src} >{_GDBSERVER_LOG} 2>&1 &
-echo $! >{_GDBSERVER_PID}
-# gdbserver binds and then blocks waiting for a connection; wait until it says so, rather than
-# returning optimistically and letting the editor report an opaque "connection refused".
-i=0
-while [ $i -lt 40 ]; do
-    if grep -q "Listening on port" {_GDBSERVER_LOG} 2>/dev/null; then
-        exit 0
-    fi
-    i=$((i + 1))
-    sleep 0.25
-done
-cat {_GDBSERVER_LOG} >&2
-exit 1
-"""
+_TARGET_ARCHITECTURES = {
+        "arm64": "arm64", "aarch64": "arm64",
+        "x86_64": "x64", "amd64": "x64", "AMD64": "x64",
+    }
+"""`platform.machine()` -> the spelling cppdbg wants for `targetArchitecture`."""
 
 
-STOP_DEBUG_SCRIPT = f"""
-{_KILL_PREVIOUS}
-exit 0
-"""
-"""Teardown. Always succeeds: it runs from a `postDebugTask`, which fires even when the session
-   never really started, so "nothing to kill" is a normal outcome rather than an error."""
+def target_architecture() -> str | None:
+    """What to tell the debug adapter the debuggee's architecture is, or `None` if unrecognized.
+
+       Without it cppdbg warns "Debuggee TargetArchitecture not detected, assuming x86_64" and does
+       exactly that--wrong on any Apple Silicon or ARM host, where it silently misreads the
+       disassembly and register views. Breakpoints, stepping and variables are unaffected, which is
+       what makes it easy to miss.
+
+       Derived from the *host* architecture rather than by asking the container. Strictly the
+       container is the authority--under QEMU emulation a deliberately foreign image would make this
+       wrong--but asking it would make the generated configuration depend on whether Docker happened
+       to be running, so provisioning would emit different output at different times and
+       `cg vscode install --check` would flap between them. A configuration file should be a function
+       of the project, not of daemon state.
+
+       The host is a sound proxy in every non-emulated case, because cg builds its image from a
+       multi-arch base with no `--platform`, so the container matches the host. An unrecognized host
+       yields `None`, leaving cppdbg to its own detection rather than asserting something false."""
+    return _TARGET_ARCHITECTURES.get(platform.machine())
+
+
+_SOURCE_FILE_MAP = {
+        "${fileDirname}/data/solution.src": "${fileDirname}/solution.cpp",
+    }
+"""Maps the *resolved* solution path back to the `solution.<ext>` symlink, so the editor keeps
+   showing the file you launched from.
+
+   The debug build deliberately compiles the symlink, and the DWARF records it faithfully--but gdb
+   reports two paths for a stop location, `file` (what the DWARF says) and `fullname` (its own
+   `realpath` of it), and the editor navigates by `fullname`. So a breakpoint set in `solution.cpp`
+   binds correctly and then yanks the editor over to `data/solution.src`. Neither we nor the compiler
+   resolve anything; gdb does, downstream of everything we control, and this maps it back.
+
+   Written with `${fileDirname}` rather than an absolute path, which is what keeps this one
+   configuration serving every C++ working directory in the workspace. VS Code substitutes its
+   variables before the adapter sees the config, so this resolves per launch--exactly like the
+   `${file}` the prepare task already relies on. An absolute mapping would mean one launch
+   configuration per working directory, which is the whole thing this design exists to avoid."""
+
+
+_TASK_PRESENTATION = {
+        "reveal": "silent",
+        "panel": "dedicated",
+        "close": True,
+        "showReuseMessage": False,
+    }
+"""The build task has nothing to show unless it fails, and `reveal: silent` shows it exactly then.
+   `close` spares a terminal sitting on "Press any key to close".
+
+   Note this is no longer the program's console: gdb owns the program now, so its output goes to the
+   Debug Console like any ordinary debug session."""
 
 
 def _devcontainer_json(root: Path) -> str:
@@ -274,23 +344,27 @@ class CgCppLanguage(CgLanguage):
         return "//"
 
     def source_path_in_container(self, ctx: CgLanguageContext, profile: CgBuildProfile) -> str:
-        """Which path inside the container to compile.
+        """Which path inside the container to compile: always the real `data/solution.src`, never the
+           `solution.<ext>` symlink, and the same for every profile.
 
-           A **debug** build prefers the `solution.cpp` symlink: g++ records the path it was given
-           in the debug info, and that path has to map back to the file the user actually has open
-           for breakpoints to bind (the same no-realpath invariant
-           `codingame_tools.test_runner.debug_stdin` documents). Otherwise compile
-           `data/solution.src` directly.
+           A debug build used to compile the symlink, on the theory that the path g++ records is the
+           path breakpoints must match. That turned out to be exactly backwards once the editor was
+           in the picture, because the debugger reports *two* paths for a location--`file` from the
+           DWARF, and `fullname`, its own `realpath` of it. Compiling the symlink makes those two
+           disagree, and cppdbg navigates by `fullname`, so a breakpoint bound correctly and then
+           yanked the editor to `data/solution.src`.
+
+           Fixing the navigation with a `sourceFileMap` then broke the binding, because that mapping
+           applies in *both* directions: the editor translated a breakpoint in `solution.cpp` back to
+           `data/solution.src` before sending it, and the DWARF said `solution.cpp`, so gdb could not
+           place it (a hollow breakpoint). Compiling the real file makes `file` and `fullname` agree,
+           which is what lets one explicit mapping handle display without disturbing binding.
 
            The host path *is* the in-container path--the mount root is bind-mounted at its own
-           location (see `codingame_tools.language._docker`)--so there is nothing to translate here,
-           and the path g++ records in the debug info is one the host debugger can open directly.
-           That is what removes `sourceFileMap` from the generated launch configuration.
+           location (see `codingame_tools.language._docker`)--so there is nothing to translate here.
 
-           Either way `-x c++` is mandatory--g++ doesn't recognize a `.src` extension and would
-           treat the file as a linker input ("file format not recognized")."""
-        if profile == "debug" and ctx.solution_link is not None:
-            return str(ctx.solution_link)
+           `-x c++` is mandatory: g++ doesn't recognize a `.src` extension and would treat the file
+           as a linker input ("file format not recognized")."""
         return str(ctx.solution_file)
 
     async def _toolchain(self, ctx: CgLanguageContext, *, timeout: float) -> CgToolchain:
@@ -361,18 +435,25 @@ class CgCppLanguage(CgLanguage):
                 *,
                 timeout: float = DEFAULT_BUILD_TIMEOUT_SECONDS,
             ) -> CgDebugSession:
-        """Build the debug profile and start a stopped `gdbserver` fed by `stdin_text`.
+        """Build the debug profile and stage `stdin_text` where the debugged program will read it.
 
-           `stdin_text` is written to `<meta_dir>/debug-stdin` and redirected from there rather than
-           from the test case's own file. Copying is not incidental: a contribution's test-case file
-           carries a final newline this client added (see `common.text_files`), and redirecting from
-           it would put one extra byte on stdin--diverging from `cg contribution play` and from
-           CodinGame, which appends nothing. A copy also drops the requirement that the caller's file
-           live inside the working directory, since this one does by construction.
+           Despite the name this **starts nothing**. gdb launches the program itself, the way it does
+           for any ordinary local target--see this module's docstring for why there is no gdbserver
+           in the picture. All that is needed beforehand is a current debug build and the input in
+           place, so this is a `preLaunchTask` that prepares and exits.
 
-           `meta_dir` is the natural home: it's gitignored scratch space and it sits inside `root`,
-           which sits inside the mount root--so it's already visible inside the container at the
-           same path, with no extra plumbing."""
+           `stdin_text` is copied rather than the test case's own file being used directly. That is
+           not incidental: a contribution's test-case file carries a final newline this client added
+           (see `common.text_files`), and reading from it would put one extra byte on stdin--
+           diverging from `cg contribution play` and from CodinGame, which appends nothing. Copying
+           also drops the requirement that the caller's file live inside the working directory.
+
+           It lands at `DEBUG_STDIN_CONTAINER_PATH`, a fixed path inside the container, so the launch
+           configuration that names it stays identical for every working directory. The route is a
+           `cp` inside the container rather than a `docker cp`, because the workspace is already
+           bind-mounted at its own absolute path--the file cg just wrote on the host is visible there
+           under the same name.
+        """
         build_result = await self.build(ctx, profile="debug", timeout=timeout)
         if not build_result.ok:
             return CgDebugSession(ok=False, output=build_result.output)
@@ -380,82 +461,92 @@ class CgCppLanguage(CgLanguage):
         stdin_file.parent.mkdir(parents=True, exist_ok=True)
         stdin_file.write_text(stdin_text, encoding="utf-8")
         toolchain = await self._toolchain(ctx, timeout=timeout)
-        result = await run_argv_capture(
+        staged = await run_argv_capture(
                 docker_exec_argv(
-                    toolchain.container_name, start_debug_script(str(stdin_file))),
-                timeout=timeout,
+                    toolchain.container_name,
+                    f"cp {shlex.quote(str(stdin_file))} {DEBUG_STDIN_CONTAINER_PATH}"),
+                timeout=60.0,
             )
-        if not result.ok:
+        if not staged.ok:
             return CgDebugSession(
-                    ok=False, output=(result.combined.strip() or "failed to start gdbserver"))
+                    ok=False,
+                    output=(staged.combined.strip() or "failed to stage the test case input"))
         return CgDebugSession(
                 ok=True, output=build_result.output,
                 details={
                     "container": toolchain.container_name,
-                    "address": f"localhost:{GDBSERVER_PORT}",
                     "program": f"{BUILD_DIR}/debug/solution",
+                    "stdin": DEBUG_STDIN_CONTAINER_PATH,
                 },
             )
 
     async def stop_debug_session(self, ctx: CgLanguageContext) -> None:
-        """Kill any `gdbserver` left running. Never raises--including when Docker is unavailable or
-           the container is already gone, since this runs from a `postDebugTask`."""
-        try:
-            toolchain = await self._toolchain(ctx, timeout=DEFAULT_BUILD_TIMEOUT_SECONDS)
-        except CgDockerError:
-            return
-        await run_argv_capture(
-                docker_exec_argv(toolchain.container_name, STOP_DEBUG_SCRIPT), timeout=60.0)
+        """Nothing to tear down: gdb owns the debugged process, so it dies with the debug session.
+
+           Kept as an explicit no-op rather than removed, because the base class declares it and a
+           language whose debugger *does* leave something running still needs it. It also means
+           `cg debug stop` stays safe to run at any time."""
+        return
 
     @property
     def supports_vscode(self) -> bool:
         return True
 
     async def build_vscode_provisioning(self, request: CgVsCodeRequest) -> CgVsCodeProvisioning:
-        """A single `cppdbg` configuration that attaches to the in-container `gdbserver`, plus the
-           tasks that start and stop it and a `devcontainer.json` for IntelliSense.
+        """A single `cppdbg` configuration in which **gdb launches the program itself**, plus the
+           task that prepares the build and a `devcontainer.json` for IntelliSense.
 
-           **Nothing in it is specific to a working directory**, so it is written once and never
-           regenerated. Three things used to make that impossible, and each is now resolved at
-           launch time instead of baked in:
+           gdb runs *inside the container*, reached by `pipeTransport` shelling out to `docker exec`,
+           so the host needs nothing but Docker. From gdb's point of view this is then an ordinary
+           local target: it forks and execs the program, wires breakpoints before a single
+           instruction runs, and owns its stdin, stdout and stderr.
 
-           - *Which test case.* Was a `pickString` of everything on disk (plus a local/validator
-             picker for contributions), stale the moment tests changed. Now `cg debug start` reads
-             the working directory's `.meta/selected-test.json`.
-           - *Which working directory.* Was `--puzzle-dir`/`--contribution-dir` with an absolute
-             path. Now `--file ${file}`, from which `cg debug start` infers both the kind and the
-             root.
-           - *Which container.* Was named per working directory. The container is now per
-             (workspace x language)--see `codingame_tools.language._docker.container_name_for`--so
-             its name is the same for every working directory the configuration serves.
+           **There is no gdbserver**, and that is deliberate. gdbserver exists for targets that
+           cannot run gdb--embedded boards, foreign architectures, machines reachable only over a
+           network. Here gdb is already on the target, so a second debugger-side process in the same
+           container, talking to the first over a socket, buys nothing and costs the thing that
+           matters: whoever execs the program owns its descriptors. With gdbserver doing it, the
+           program's output went to gdbserver's terminal and never reached the Debug Console, and its
+           stdin had to be arranged separately. With gdb doing it, the program's I/O is simply the
+           debug session's, exactly as VS Code's own Dev Containers arrangement works.
 
-           gdb runs *inside* the container too, reached via `pipeTransport` shelling out to `docker
-           exec`--so the host needs nothing but Docker. `miDebuggerServerAddress` is then the
-           container's own localhost, which is why no port is published.
+           Everything the program needs is set up before `-exec-run`--see `_SETUP_COMMANDS`, notably
+           the stdin redirection that makes it read the selected test case.
 
-           There is no `sourceFileMap`: the workspace is mounted at its own path, so the paths gdb
+           **Nothing here is specific to a working directory**, so it is written once and never
+           regenerated. Which directory and which test case are both resolved at launch time by the
+           `preLaunchTask` (`--file ${file}`, plus `.meta/selected-test.json`), and the container is
+           per *workspace*, so its name is a constant--see
+           `codingame_tools.language._docker.container_name_for`.
+
+           No `sourceFileMap`: the workspace is mounted at its own path, so the paths the compiler
            recorded are already the paths VS Code has open. The debug build compiles the
-           `solution.<ext>` symlink specifically so that path is the one the user is looking at.
+           `solution.<ext>` symlink so that path is the one the user is looking at--though note gdb
+           reports the symlink as `file` and its *resolved* target as `fullname`, and the editor
+           opens `fullname`.
 
-           The tasks pass `${workspaceFolder}` explicitly rather than letting cg guess the mount
+           The task passes `${workspaceFolder}` explicitly rather than letting cg guess the mount
            root, so VS Code's real workspace wins over `find_workspace_root`'s heuristic. A mismatch
-           is self-correcting rather than broken: the mount is part of the container spec hash, so a
-           differently-mounted container is recreated rather than reused."""
+           is self-correcting: the mount is part of the container spec hash, so a differently-mounted
+           container is recreated rather than reused."""
         container = container_name_for(LANG_SLUG, request.workspace_root)
+        architecture = target_architecture()
         target = '--file "${file}" --workspace-root "${workspaceFolder}"'
 
         return CgVsCodeProvisioning(
                 configurations=[
                         {
                             "name": entry_name(self.cg_id, ACTION_DEBUG),
+                            "presentation": PRESENTATION,
                             "type": "cppdbg",
                             "request": "launch",
                             "program": f"{BUILD_DIR}/debug/solution",
                             "cwd": BUILD_DIR,
                             "MIMode": "gdb",
                             "miDebuggerPath": "/usr/bin/gdb",
-                            "miDebuggerServerAddress": f"localhost:{GDBSERVER_PORT}",
                             "stopAtEntry": True,
+                            **({"targetArchitecture": architecture}
+                               if architecture is not None else {}),
                             "externalConsole": False,
                             "pipeTransport": {
                                 "pipeProgram": "docker",
@@ -463,39 +554,38 @@ class CgCppLanguage(CgLanguage):
                                 "debuggerPath": "/usr/bin/gdb",
                                 "pipeCwd": "",
                             },
-                            "preLaunchTask": entry_name(self.cg_id, ACTION_START_DEBUG_SESSION),
-                            "postDebugTask": entry_name(self.cg_id, ACTION_STOP_DEBUG_SESSION),
+                            "setupCommands": _SETUP_COMMANDS,
+                            # Undoes gdb's symlink resolution, so the editor shows the file you
+                            # launched from rather than its target -- see _SOURCE_FILE_MAP.
+                            "sourceFileMap": _SOURCE_FILE_MAP,
+                            "preLaunchTask": entry_name(self.cg_id, ACTION_PREPARE_DEBUG),
+                            **({"logging": _ADAPTER_LOGGING}
+                               if request.debug_adapter_logging else {}),
                         },
                     ],
                 tasks=[
                         {
-                            "label": entry_name(self.cg_id, ACTION_START_DEBUG_SESSION),
+                            "label": entry_name(self.cg_id, ACTION_PREPARE_DEBUG),
                             "type": "shell",
                             "command": f"cg debug start {target}",
-                            "presentation": {"reveal": "silent", "panel": "shared"},
-                            "problemMatcher": [],
-                        },
-                        {
-                            "label": entry_name(self.cg_id, ACTION_STOP_DEBUG_SESSION),
-                            "type": "shell",
-                            "command": f"cg debug stop {target}",
-                            "presentation": {"reveal": "never", "panel": "shared"},
-                            "problemMatcher": [],
+                            "presentation": _TASK_PRESENTATION,
+                            "problemMatcher": _BUILD_PROBLEM_MATCHER,
                         },
                     ],
+                retired_names=[
+                    # Through the gdbserver design this language generated a *pair* of tasks, one to
+                    # start a debug server and one to kill it. gdb needs neither: it launches the
+                    # program and it dies with the session.
+                    entry_name(self.cg_id, "Start debug session"),
+                    entry_name(self.cg_id, "Stop debug session"),
+                ],
                 files={
                     # Under .meta/, not the working directory root: this file is generated, never
                     # hand-edited, and .meta/ is the one place already gitignored -- at the root it
                     # would be committed into whatever repository tracks the working directory.
-                    # Costs automatic "Reopen in Container" discovery, which only ever offered
-                    # IntelliSense over the container's headers; nothing about running or debugging
-                    # goes through it (see _devcontainer_json).
                     f"{request.ctx.meta_dir.relative_to(request.ctx.root).as_posix()}/.devcontainer/devcontainer.json":
                         _devcontainer_json(request.workspace_root),
                 },
-                # Written at the working directory root through 1.0.x, before .meta/ was settled on
-                # as the home for generated files. Left behind it is untracked clutter offering a
-                # stale "Reopen in Container".
                 obsolete_files=[".devcontainer/devcontainer.json"],
                 recommended_extensions=["ms-vscode.cpptools"],
             )

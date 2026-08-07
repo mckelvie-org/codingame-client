@@ -99,33 +99,50 @@ symlink-resolution mismatch to work around.
 
 No local compiler, no local gdb, no local anything except Docker.
 
-`cg` builds a debug profile in the container, starts a stopped `gdbserver`, and VS Code attaches
-through `docker exec`. Stdin is redirected from the test case inside the container, which sidesteps
-the debug adapter's own unreliable stdin handling entirely.
+`gdb` runs *inside the container*, reached through `docker exec`, and launches your program itself —
+exactly as it would for a local target. Breakpoints are wired before a single instruction runs, and
+**your program's output goes to the Debug Console**, like any ordinary debug session. Stdin is fed
+from the selected test case, so a solution that reads input never waits on the terminal.
+
+Both output streams appear there, in order. `stderr` is merged into `stdout` deliberately: the debug
+adapter reads only the debugger's stdout, so an unmerged `stderr` would vanish — `cerr` diagnostics
+being exactly what you reach for while debugging. Both are unbuffered, so they appear as they happen
+rather than in a lump when the program exits.
+
+### Breakpoints and the symlink
+
+You set breakpoints in `solution.cpp` and the editor stays there when they're hit — but what gets
+compiled is the real `data/solution.src`, and one mapping in the launch configuration reconciles the
+two.
+
+That indirection is load-bearing. A debugger reports two paths for a stop location: the one recorded
+in the debug info, and its own `realpath` of that. Compiling the symlink makes those disagree, and
+the editor navigates by the resolved one — so a breakpoint bound correctly and then yanked you over
+to `data/solution.src`. Adding a `sourceFileMap` fixes the navigation but applies in *both*
+directions, so the editor started translating breakpoints back to the real path before sending them;
+with the symlink in the debug info, the debugger couldn't place them and they went hollow.
+Compiling the real file makes both paths agree, which is what lets the mapping handle display
+without disturbing binding.
 
 Your **workspace** is bind-mounted read-only into the container *at its own path* — `/home/me/work`
 inside the container is `/home/me/work` on the host. Two things follow. Breakpoints need no path
 mapping at all, because the paths the compiler recorded are already the paths your editor has open.
 And one container serves every working directory in the workspace, rather than one per puzzle.
 
-Normally you never invoke these by hand — the generated tasks do — but they exist:
+One task runs before the session, to build the debug profile and stage the test case. It has nothing
+to show unless the build fails, in which case compiler errors appear in the Problems panel and the
+launch stops. You can run it by hand:
 
 ```bash
 cg debug start --file puzzle/solution.cpp
-cg debug stop --file puzzle/solution.cpp
 ```
 
-Both work in a puzzle or a contribution and take no test argument; they infer the kind, the working
-directory, and the test from `--file` and the selection. The per-kind forms are still there when you
-want to name a test explicitly:
-
-```bash
-cg puzzle debug start 1
-cg contribution debug start 03 local
-```
-
-`stop` always succeeds, including when nothing is running: it's wired to a post-debug task, which
-fires even for a session that never really started.
+> **Why no gdbserver?** It exists for targets that can't run gdb — embedded boards, foreign
+> architectures, machines reachable only over a network. Here gdb is already *on* the target, so a
+> second debugger-side process in the same container would buy nothing and cost the thing that
+> matters: whoever launches the program owns its stdin, stdout and stderr. With gdbserver launching
+> it, the program's output went to gdbserver's terminal where the editor never saw it. This is the
+> same arrangement VS Code's own Dev Containers support uses, which also has no gdbserver.
 
 ### First run is slow
 

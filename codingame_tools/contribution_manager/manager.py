@@ -2295,6 +2295,7 @@ class CgContributionManager:
                 workspace_root: Path | None = None,
                 force: bool = False,
                 check: bool = False,
+                debug_adapter_logging: bool = False,
             ) -> list[Path]:
         """Generate this working directory's VS Code run/debug configuration, if `solution_language`
            has any, and write it into the workspace.
@@ -2310,6 +2311,9 @@ class CgContributionManager:
                                 not this working directory (see `codingame_tools.language.vscode`).
             force:             Overwrite an existing config file that isn't strict JSON (i.e. uses
                                 JSONC comments) instead of refusing.
+            debug_adapter_logging:
+                                Generate a configuration that logs the debug adapter's own
+                                 protocol exchange--see `CgVsCodeRequest`.
             check:             Report what *would* change without touching anything. This is how
                                 staleness is detected: generated entries carry no version stamp, so
                                 "would rewriting change anything?" is the whole question, and it
@@ -2330,6 +2334,7 @@ class CgContributionManager:
                 ctx=self.language_context(
                         solution_language, mount_root=resolved_workspace_root),
                 workspace_root=resolved_workspace_root,
+                debug_adapter_logging=debug_adapter_logging,
             )
         provisioning = await get_language(solution_language).build_vscode_provisioning(request)
         if provisioning is None:

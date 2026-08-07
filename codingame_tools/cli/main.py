@@ -1977,6 +1977,7 @@ class CgCli(CliBase):
             workspace_dir: Path | None = self.args.workspace_dir
             force: bool = self.args.force
             check: bool = self.args.check
+            adapter_logging: bool = self.args.debug_adapter_logging
             targets = self._provisioning_targets(self.args.file)
             toolchain_dir = self.resolve_toolchain_dir()
 
@@ -1992,7 +1993,8 @@ class CgCli(CliBase):
                         self.eprint(f"{working_dir.root}: no solution language set--skipped.")
                         continue
                     coro = puzzle.provision_vscode(
-                            workspace_root=workspace_dir, force=force, check=check)
+                            workspace_root=workspace_dir, force=force, check=check,
+                            debug_adapter_logging=adapter_logging)
                 else:
                     contribution = CgContributionManager(
                             working_dir.root, cast(CgClient, None), toolchain_dir=toolchain_dir)
@@ -2001,7 +2003,8 @@ class CgCli(CliBase):
                         self.eprint(f"{working_dir.root}: no solution language set--skipped.")
                         continue
                     coro = contribution.provision_vscode(
-                            language, workspace_root=workspace_dir, force=force, check=check)
+                            language, workspace_root=workspace_dir, force=force, check=check,
+                            debug_adapter_logging=adapter_logging)
                 supported = supported or get_language(language).supports_vscode
                 try:
                     changed.extend(await coro)
@@ -2025,6 +2028,12 @@ class CgCli(CliBase):
                             "writing. Use it to find out whether a cg upgrade changed the "
                             "generated configuration--there is no version stamp to compare, "
                             "because the generated content is the version.")
+        p.add_argument("--debug-adapter-logging", action="store_true",
+                       help="Generate a configuration that logs the debug adapter's own "
+                            "conversation with the debugger to the Debug Console. For diagnosing a "
+                            "session that misbehaves when everything underneath it works: the "
+                            "adapter is the one part of the stack that can't be exercised from a "
+                            "terminal. Loud and slow--re-run without it to turn it back off.")
         return handler
 
     @cli_command("Debug-session commands that work in any working directory, puzzle or "
@@ -2071,7 +2080,7 @@ class CgCli(CliBase):
             if not session.ok:
                 raise CliExit(1)
             for key, value in session.details.items():
-                print(f"{key}: {value}")
+                self.eprint(f"{key}: {value}")
         p = cmd.get_parser()
         p.add_argument("--file", "-f", type=Path, default=None, metavar="FILE",
                        help="Any file inside the working directory to debug--normally VS Code's "

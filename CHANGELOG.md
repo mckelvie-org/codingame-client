@@ -57,6 +57,66 @@
   *in place* rather than moving them to the end. Re-running when everything is current is now a
   genuine no-op on disk: no diffs, no timestamps, no editor reload prompts.
 
+- **C++ debugging no longer uses gdbserver; gdb launches the program itself.** Your program's
+  stdout and stderr now appear in the Debug Console, like any ordinary debug session, and its stdin
+  is the selected test case.
+
+  gdbserver exists for targets that can't run gdb. Here gdb is already *on* the target — it has to
+  be, since a macOS host can't debug a Linux binary — so gdbserver was a second debugger-side
+  process in the same container, reached over a socket, to debug a program both could see. It cost
+  the thing that matters: whoever `exec`s the program owns its descriptors, so the program's output
+  went to gdbserver's terminal and never reached the editor, and its stdin had to be arranged
+  separately. Worse, the adapter turned out to be launching its own inferior and ignoring our
+  gdbserver entirely — which is why a solution reading input hung forever while a `cg debug start`
+  from a shell read the same input every time.
+
+  gdb now owns the process, `pipeTransport` still runs it in the container, and the test case is fed
+  with gdb's own redirection. The program's `stderr` is merged into its `stdout` for the same
+  reason the rest of this changed: the adapter reads only the debugger's stdout, so an unmerged
+  `stderr` is dropped -- `cerr` diagnostics, precisely what you use while debugging, went missing
+  while `cout` arrived. Merging also restores ordering between the two. This is the arrangement VS Code's Dev Containers support uses, which
+  also has no gdbserver. Gone with it: the background task and its readiness matcher, the
+  `postDebugTask`, the detached-server plumbing, and the two-terminal split. `cg debug start` is now
+  a plain prepare-and-exit `preLaunchTask` that builds and stages the input.
+
+- **C++ debug builds compile `data/solution.src`, not the `solution.<ext>` symlink**, and the launch
+  configuration carries one `sourceFileMap` entry that shows you the symlink anyway.
+
+  A debugger reports two paths per stop location -- the one in the debug info, and its own `realpath`
+  of it -- and the editor navigates by the second. Compiling the symlink made them disagree, so
+  breakpoints bound correctly and then jumped the editor to `data/solution.src`. The mapping that
+  fixes navigation applies in both directions, so it then broke *binding*: the editor translated
+  breakpoints back to the real path before sending them, the debug info named the symlink, and they
+  went hollow. Compiling the real file makes both paths agree, which is what lets the mapping do its
+  job. The mapping is written with `${fileDirname}`, so one configuration still serves every C++
+  working directory.
+
+- **Fixed: a C++ build could be silently reused when the compiled path changed.** The build stamp
+  hashed the source's contents and the compiler flags, but not its path -- and the path is recorded
+  in the debug info, so it is part of what the build *is*. Switching between two identical-content
+  paths (the real file and the symlink pointing at it) hashed the same, left the old binary in place,
+  and breakpoints silently failed to bind against its stale debug info.
+
+- **A debugged C++ program's output now appears in a terminal, live.** It previously went into
+  `/build/gdbserver.log` *inside the container*, where nothing surfaced it — so a debug session
+  looked like nothing had happened at all.
+
+  The cause was self-inflicted. `cg debug start` was a `preLaunchTask`, which must exit before the
+  debug session begins, so `gdbserver` had to be detached with `setsid` — and once detached, its
+  stdio had nowhere to go but a file. Declaring the task `isBackground` instead inverts that: VS Code
+  starts it, waits for `gdbserver`'s own `Listening on port`, attaches the debugger, and leaves the
+  task running for the whole session. `gdbserver` now stays in the foreground, `cg debug start`
+  `exec`s it so it inherits that terminal, and the debuggee inherits it in turn. Program exits →
+  `gdbserver` exits → the task ends with its status.
+
+  Output is also unbuffered now: `gdbserver` runs under `stdbuf -o0 -e0`, which propagates via
+  `LD_PRELOAD` to the debuggee, so `std::cout` isn't block-buffered when stdout isn't a terminal.
+  Without it nothing appeared until the program exited, which is useless while stepping.
+
+  Note the Debug Console still won't show program output, and can't: `gdbserver` does not forward
+  the debuggee's stdout/stderr to `gdb` — verified directly, with `gdbserver`'s own stdout on a live
+  stream rather than a file. The task terminal is the program's console.
+
 - **Containerized languages mount the workspace at its own path, and `sourceFileMap` is gone.**
   `/home/me/work` on the host is `/home/me/work` inside the container, so the paths the compiler
   records in the debug info are already paths the host debugger can open — verified against real

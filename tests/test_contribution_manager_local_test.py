@@ -417,7 +417,10 @@ async def test_debug_session_is_fed_the_value_not_the_file(
         def __getattr__(self, name: str) -> object:
             return getattr(self._real, name)
 
-        async def start_debug_session(self, ctx: object, stdin_text: str, *, timeout: float) -> object:
+        async def start_debug_session(
+                    self, ctx: object, stdin_text: str, *, timeout: float,
+                    verbose: bool = False,
+                ) -> object:
             captured["stdin_text"] = stdin_text
             return object()
 

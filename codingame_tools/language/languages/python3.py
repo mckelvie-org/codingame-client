@@ -11,7 +11,13 @@ from collections.abc import AsyncGenerator
 
 from .._process import run_argv_streaming
 from ..base import DEFAULT_RUN_TIMEOUT_SECONDS, CgLanguage, CgLanguageContext, CgRunEvent
-from ..vscode import ACTION_DEBUG, CgVsCodeProvisioning, CgVsCodeRequest, entry_name
+from ..vscode import (
+    ACTION_DEBUG,
+    PRESENTATION,
+    CgVsCodeProvisioning,
+    CgVsCodeRequest,
+    entry_name,
+)
 
 __all__ = [
     "CgPython3Language",
@@ -78,12 +84,15 @@ class CgPython3Language(CgLanguage):
                 configurations=[
                         {
                             "name": entry_name(self.cg_id, ACTION_DEBUG),
+                            "presentation": PRESENTATION,
                             "type": "debugpy",
                             "request": "launch",
                             "module": _DEBUG_MODULE,
                             "args": ["${file}"],
                             "console": "integratedTerminal",
                             "justMyCode": True,
+                            # debugpy writes its own protocol log to a file rather than the console.
+                            **({"logToFile": True} if request.debug_adapter_logging else {}),
                         },
                     ],
                 recommended_extensions=["ms-python.python"],

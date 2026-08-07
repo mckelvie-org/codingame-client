@@ -6,12 +6,30 @@
    discovery walk never sees it. Drives the `docker` CLI as a subprocess rather than a Docker SDK,
    matching how `git` is already used (`contribution_manager.git_repo`) and adding no dependency.
 
-   **The container holds the build artifacts.** The working directory is bind-mounted read-only at
-   `/src`, and compiled output lives at `/build/<profile>/` inside the container's own writable
+   **The container holds the build artifacts.** The workspace is bind-mounted read-only at its own
+   path, and compiled output lives at `/build/<profile>/` inside the container's own writable
    layer--so the solution source is the only durable state outside the container. Two consequences:
    losing the container means losing the build (harmless--it just rebuilds), and the container must
    be validated on attach rather than trusted, since a stale one bind-mounted to a since-deleted
    directory would otherwise be silently reused.
+
+   That the artifacts die *with* the container is a property worth keeping rather than an accident:
+   it is what makes "the toolchain changed" and "the build is stale" the same event. Change the
+   image or how cg creates containers and the spec hash changes, the container is replaced, and
+   `/build` goes with it--so a binary linked against a toolchain you have since edited cannot
+   survive to be reused. A named volume would outlive the image and need that coupling re-established
+   by hand.
+
+   **The container idles, and is `--rm`.** Nothing runs in it between invocations: `sleep infinity`
+   only holds it open, because `docker exec` needs a running container. That is the *whole* reason
+   it stays up--it is a filesystem we occasionally run a process in, not a service. Measured, the
+   idling buys about 110ms per invocation over `docker run --rm` (41ms vs 152ms), which matters only
+   on the many-exec path of running a full test suite.
+
+   `--rm` is what makes that acceptable: a container that stops for any reason--`docker kill`, Docker
+   Desktop quitting, a reboot--removes itself instead of lingering as a stopped husk that the next
+   run has to reason about. Ephemeral by construction, and the next command simply builds a fresh
+   one.
 
    **State lives on the Docker objects themselves, never beside them.** Everything cg needs to
    decide whether a container is reusable is a label on that container (`cg.root`, `cg.spec`) or a
@@ -547,6 +565,15 @@ def container_create_argv(mount_root: Path, name: str) -> list[str]:
        silently reusing one built the old way."""
     return [
             "run", "--detach", "--name", name,
+            # Auto-remove on exit, so a container that stops for *any* reason--`docker kill`, Docker
+            # Desktop quitting, a reboot--leaves nothing behind rather than a stopped husk. Verified:
+            # without it, killing one leaves `Exited (137)` sitting in `docker ps -a` forever.
+            #
+            # Safe precisely because the container holds only build artifacts (see the module
+            # docstring): losing it costs a rebuild and nothing else. It also makes the "is this
+            # container reusable?" question simpler, since a container that failed is never around
+            # to be asked about.
+            "--rm",
             # --init runs a real init as PID 1, which reaps orphans. Without it the idle `sleep`
             # is PID 1 and never reaps, so every debug session's detached gdbserver lingers as a
             # zombie in a container that's meant to live for the whole working directory's life.

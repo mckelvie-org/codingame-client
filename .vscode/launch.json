@@ -35,14 +35,17 @@
     },
     {
       "name": "CG C++: Debug solution",
+      "presentation": {
+        "group": "cg"
+      },
       "type": "cppdbg",
       "request": "launch",
       "program": "/build/debug/solution",
       "cwd": "/build",
       "MIMode": "gdb",
       "miDebuggerPath": "/usr/bin/gdb",
-      "miDebuggerServerAddress": "localhost:2345",
       "stopAtEntry": true,
+      "targetArchitecture": "arm64",
       "externalConsole": false,
       "pipeTransport": {
         "pipeProgram": "docker",
@@ -56,11 +59,37 @@
         "debuggerPath": "/usr/bin/gdb",
         "pipeCwd": ""
       },
-      "preLaunchTask": "CG C++: Start debug session",
-      "postDebugTask": "CG C++: Stop debug session"
+      "setupCommands": [
+        {
+          "text": "set exec-wrapper stdbuf -o0 -e0",
+          "description": "unbuffer the program's output",
+          "ignoreFailures": true
+        },
+        {
+          "text": "set args < /build/debug-stdin 2>&1",
+          "description": "feed the test case to stdin; surface stderr in the Debug Console"
+        },
+        {
+          "text": "set auto-load safe-path /",
+          "description": "allow libstdc++ pretty-printers",
+          "ignoreFailures": true
+        },
+        {
+          "text": "-enable-pretty-printing",
+          "description": "enable pretty printing",
+          "ignoreFailures": true
+        }
+      ],
+      "sourceFileMap": {
+        "${fileDirname}/data/solution.src": "${fileDirname}/solution.cpp"
+      },
+      "preLaunchTask": "CG C++: Prepare debug session"
     },
     {
       "name": "CG Python3: Debug solution",
+      "presentation": {
+        "group": "cg"
+      },
       "type": "debugpy",
       "request": "launch",
       "module": "codingame_tools.debug",

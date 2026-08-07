@@ -71,24 +71,29 @@
       "problemMatcher": []
     },
     {
-      "label": "CG C++: Start debug session",
+      "label": "CG C++: Prepare debug session",
       "type": "shell",
       "command": "cg debug start --file \"${file}\" --workspace-root \"${workspaceFolder}\"",
       "presentation": {
         "reveal": "silent",
-        "panel": "shared"
+        "panel": "dedicated",
+        "close": true,
+        "showReuseMessage": false
       },
-      "problemMatcher": []
-    },
-    {
-      "label": "CG C++: Stop debug session",
-      "type": "shell",
-      "command": "cg debug stop --file \"${file}\" --workspace-root \"${workspaceFolder}\"",
-      "presentation": {
-        "reveal": "never",
-        "panel": "shared"
-      },
-      "problemMatcher": []
+      "problemMatcher": {
+        "owner": "cg-cpp",
+        "fileLocation": "absolute",
+        "pattern": [
+          {
+            "regexp": "^(.*?):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+            "file": 1,
+            "line": 2,
+            "column": 3,
+            "severity": 4,
+            "message": 5
+          }
+        ]
+      }
     }
   ]
 }

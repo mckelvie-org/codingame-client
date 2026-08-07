@@ -19,6 +19,8 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import platform
+import re
 import shutil
 import subprocess
 import time
@@ -55,15 +57,14 @@ from codingame_tools.language._docker import (
 )
 from codingame_tools.language.languages.cpp import (
     CACHED_MARKER,
+    DEBUG_STDIN_CONTAINER_PATH,
     DEBUG_STDIN_FILE_NAME,
-    GDBSERVER_PORT,
     LANG_SLUG,
-    STOP_DEBUG_SCRIPT,
     TEMPLATE_BODY,
     TEMPLATE_VERSION,
     build_script,
     run_script,
-    start_debug_script,
+    target_architecture,
 )
 
 
@@ -126,6 +127,15 @@ def test_image_tag_is_content_addressed() -> None:
     assert image_tag_for("cpp", "FROM gcc:14\n") == image_tag_for("cpp", "FROM gcc:14\n")
     assert image_tag_for("cpp", "FROM gcc:14\n") != image_tag_for("cpp", "FROM gcc:13\n")
     assert image_tag_for("cpp", "x").startswith("cg-cpp:")
+
+
+def test_containers_remove_themselves_when_they_stop(tmp_path: Path) -> None:
+    """`--rm` is what keeps a container that stops for any reason--`docker kill`, Docker Desktop
+       quitting, a reboot--from lingering as a stopped husk in `docker ps -a`. Verified against real
+       Docker: without it, killing one leaves `Exited (137)` behind forever.
+
+       Safe because the container holds only build artifacts, so losing it costs a rebuild."""
+    assert "--rm" in container_create_argv(tmp_path, "cg-cpp-x")
 
 
 def test_container_name_is_per_mount_root_and_docker_safe(tmp_path: Path) -> None:
@@ -330,18 +340,39 @@ def test_exec_argv_passes_the_script_in_argv_not_stdin() -> None:
     assert docker_exec_argv("c1", "echo hi") == ["docker", "exec", "c1", "sh", "-c", "echo hi"]
 
 
-def test_cpp_source_path_prefers_the_symlink_only_for_debug(tmp_path: Path) -> None:
-    """A debug build compiles the symlink so the path g++ records in the debug info matches the file
-       the user actually has open, which is what makes breakpoints bind.
+def test_build_stamp_covers_the_source_path_not_just_its_contents() -> None:
+    """The compiled path ends up in the debug info, so it is part of what the build *is*.
 
-       Both are plain host paths: the mount root is bind-mounted at its own location, so the
-       in-container path and the host path are the same string and there is nothing to translate.
-       That identity is what lets the launch configuration drop `sourceFileMap`."""
+       Omitting it was a real staleness bug: switching between two identical-content paths--
+       `data/solution.src` and the `solution.<ext>` symlink pointing at it--hashed the same, so the
+       previous binary stayed in place carrying the old path in its DWARF, and breakpoints silently
+       failed to bind."""
+    from_real = build_script("/w/puzzle/data/solution.src", "debug")
+    from_link = build_script("/w/puzzle/solution.cpp", "debug")
+
+    assert "/w/puzzle/data/solution.src" in from_real
+    # The path is folded into the stamp, so the two builds cannot be mistaken for one another.
+    real_hash_line = next(ln for ln in from_real.splitlines() if ln.startswith("HASH="))
+    link_hash_line = next(ln for ln in from_link.splitlines() if ln.startswith("HASH="))
+    assert real_hash_line != link_hash_line
+
+
+def test_cpp_always_compiles_the_real_file_never_the_symlink(tmp_path: Path) -> None:
+    """Compiling the symlink makes the debugger's two paths for a location disagree--`file` from the
+       DWARF and `fullname`, its own realpath of it--and cppdbg navigates by `fullname`. Worse, the
+       `sourceFileMap` that fixes the navigation applies in *both* directions, so the editor
+       translates a breakpoint back to the real path before sending it; if the DWARF names the
+       symlink, gdb can't place it and the breakpoint goes hollow. Observed exactly that.
+
+       Compiling the real file makes `file` and `fullname` agree, which is what lets one explicit
+       mapping handle display without disturbing binding."""
     language = get_language("C++")
     ctx = _ctx(tmp_path, ECHO_DOUBLE)
 
-    assert language.source_path_in_container(ctx, "debug") == str(ctx.solution_link)  # type: ignore[attr-defined]
-    assert language.source_path_in_container(ctx, "run") == str(ctx.solution_file)  # type: ignore[attr-defined]
+    assert ctx.solution_link is not None  # the symlink exists; it is simply not what we compile
+    for profile in ("run", "debug"):
+        assert language.source_path_in_container(ctx, profile) == str(ctx.solution_file)  # type: ignore[attr-defined]
+    # A plain host path: the mount root is bind-mounted at its own location, so nothing translates.
     assert language.source_path_in_container(ctx, "debug").startswith(str(ctx.mount_root))  # type: ignore[attr-defined]
 
 
@@ -498,55 +529,6 @@ async def test_cpp_reports_cached_marker_on_the_fast_path(tmp_path: Path) -> Non
 # --- debug session (pure) -----------------------------------------------------------------------
 
 
-def test_debug_scripts_kill_by_pid_never_by_pattern() -> None:
-    """Regression: `pkill -f 'gdbserver :2345'` also matches the `sh -c '<script>'` process running
-       the script, because the pattern appears in the script text--so the shell killed itself and
-       the command came back as an opaque exit code 143. Killing a recorded PID can't self-match."""
-    for script in (start_debug_script("/src/in.txt"), STOP_DEBUG_SCRIPT):
-        assert "pkill" not in script
-        assert "gdbserver.pid" in script
-
-
-def test_start_debug_script_redirects_stdin_from_the_test_case() -> None:
-    """Redirecting in a shell we control is the entire reason a debug session is a separate step--
-       it sidesteps the debug adapter's own stdin handling."""
-    script = start_debug_script("/src/.meta/tests/1/T/input.txt")
-
-    assert f"gdbserver :{GDBSERVER_PORT}" in script
-    assert "</src/.meta/tests/1/T/input.txt" in script
-
-
-def test_start_debug_script_waits_until_gdbserver_is_listening() -> None:
-    """Returning before it's listening would surface as an opaque "connection refused" in the
-       editor rather than as a failure of the task that was supposed to start it."""
-    assert "Listening on port" in start_debug_script("/src/in.txt")
-
-
-async def test_cpp_vscode_config_attaches_over_docker_exec(tmp_path: Path) -> None:
-    """gdb runs *inside* the container via pipeTransport, so the host needs only docker--no local
-       gdb and no published port (the address is the container's own localhost)."""
-    ctx = _ctx(tmp_path, ECHO_DOUBLE)
-    request = CgVsCodeRequest(ctx=ctx, workspace_root=tmp_path)
-
-    provisioning = await get_language("C++").build_vscode_provisioning(request)
-
-    assert provisioning is not None
-    (config,) = provisioning.configurations
-    assert config["type"] == "cppdbg"
-    assert config["miDebuggerServerAddress"] == f"localhost:{GDBSERVER_PORT}"
-    assert config["pipeTransport"]["pipeProgram"] == "docker"
-    assert config["stopAtEntry"] is True
-    # No sourceFileMap at all: the workspace is mounted at its own path, so the paths gdb recorded
-    # are already the paths VS Code has open. There is nothing left to map.
-    assert "sourceFileMap" not in config
-    # The container is named per workspace, not per working directory, which is what lets a
-    # configuration that must name it stay static.
-    assert container_name_for(LANG_SLUG, tmp_path) in config["pipeTransport"]["pipeArgs"]
-    # Under .meta/, which is gitignored -- at the working directory root it would be committed
-    # into whatever repository tracks the directory.
-    assert ".meta/.devcontainer/devcontainer.json" in provisioning.files
-
-
 async def test_cpp_vscode_config_is_the_same_for_every_working_directory(tmp_path: Path) -> None:
     """The property the redesign exists for. Two working directories in one workspace must produce
        an identical configuration, or launch.json needs rewriting whenever you switch between
@@ -569,33 +551,136 @@ async def test_cpp_vscode_config_is_the_same_for_every_working_directory(tmp_pat
             == from_second.configurations[0]["pipeTransport"]["pipeArgs"])
 
 
-async def test_cpp_vscode_tasks_pass_the_file_and_the_real_workspace(tmp_path: Path) -> None:
-    """`${file}` is what makes the task kind-agnostic and directory-agnostic; `${workspaceFolder}`
-       is VS Code telling cg the real workspace, which beats `find_workspace_root`'s guess."""
+async def test_cpp_debug_launch_has_gdb_run_the_program_itself(tmp_path: Path) -> None:
+    """The property everything else follows from.
+
+       gdbserver exists for targets that can't run gdb; here gdb is already *on* the target, so a
+       second debugger-side process in the same container buys nothing and costs the thing that
+       matters--whoever execs the program owns its descriptors. With gdbserver doing it, the
+       program's output went to gdbserver's terminal and was never seen by the editor, and its stdin
+       had to be arranged separately. With gdb doing it, the program's I/O is the debug session's."""
     request = CgVsCodeRequest(ctx=_ctx(tmp_path, ECHO_DOUBLE), workspace_root=tmp_path)
 
     provisioning = await get_language("C++").build_vscode_provisioning(request)
 
     assert provisioning is not None
-    commands = [t["command"] for t in provisioning.tasks]
-    assert commands == [
-            'cg debug start --file "${file}" --workspace-root "${workspaceFolder}"',
-            'cg debug stop --file "${file}" --workspace-root "${workspaceFolder}"',
-        ]
-    # No --puzzle-dir/--contribution-dir, and no test case: both are resolved at launch time.
-    assert not any("-dir " in c for c in commands)
+    (config,) = provisioning.configurations
+    assert config["type"] == "cppdbg"
+    assert config["request"] == "launch"
+    # No server to attach to: gdb launches the inferior.
+    assert "miDebuggerServerAddress" not in config
+    # But gdb still runs *in the container*, since the host can't debug a Linux binary.
+    assert config["pipeTransport"]["pipeProgram"] == "docker"
+    assert container_name_for(LANG_SLUG, tmp_path) in config["pipeTransport"]["pipeArgs"]
+    # The only sourceFileMap entry undoes gdb's own symlink resolution (see _SOURCE_FILE_MAP); the
+    # mount needs no path translation, since it is mounted at its own path.
+    assert list(config["sourceFileMap"]) == ["${fileDirname}/data/solution.src"]
+    # Relative to the launched file, not absolute--an absolute mapping would need one launch
+    # configuration per working directory, which is what this whole design avoids.
+    assert all("${fileDirname}" in v for v in config["sourceFileMap"].values())
 
 
-async def test_cpp_vscode_config_has_start_and_stop_tasks(tmp_path: Path) -> None:
+async def test_cpp_debug_launch_declares_the_target_architecture(tmp_path: Path) -> None:
+    """Without it cppdbg warns "TargetArchitecture not detected, assuming x86_64" and does exactly
+       that--wrong on any ARM host, where the disassembly and register views silently misread.
+       Breakpoints, stepping and variables all keep working, which is what makes it easy to miss."""
     request = CgVsCodeRequest(ctx=_ctx(tmp_path, ECHO_DOUBLE), workspace_root=tmp_path)
 
     provisioning = await get_language("C++").build_vscode_provisioning(request)
 
     assert provisioning is not None
-    labels = [t["label"] for t in provisioning.tasks]
+    assert provisioning.configurations[0]["targetArchitecture"] == target_architecture()
+    assert target_architecture() in ("arm64", "x64")  # on any host this suite runs on
+
+
+def test_target_architecture_uses_cppdbgs_spelling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`platform.machine()` and cppdbg disagree on names: aarch64 vs arm64, x86_64 vs x64."""
+    for machine, expected in (
+                ("arm64", "arm64"), ("aarch64", "arm64"),
+                ("x86_64", "x64"), ("AMD64", "x64"),
+            ):
+        monkeypatch.setattr(platform, "machine", lambda m=machine: m)
+        assert target_architecture() == expected
+
+    # Unrecognized: say nothing rather than assert something false, and let cppdbg detect.
+    monkeypatch.setattr(platform, "machine", lambda: "sparc64")
+    assert target_architecture() is None
+
+
+async def test_cpp_debug_launch_feeds_the_test_case_to_stdin(tmp_path: Path) -> None:
+    """Without this the program blocks forever at its first read--which is exactly what happened
+       when the adapter turned out to be launching its own inferior, bypassing the one we had set up
+       with a redirect.
+
+       The path is fixed rather than per-directory because the launch configuration names it and has
+       to stay identical for every working directory in the workspace."""
+    request = CgVsCodeRequest(ctx=_ctx(tmp_path, ECHO_DOUBLE), workspace_root=tmp_path)
+
+    provisioning = await get_language("C++").build_vscode_provisioning(request)
+
+    assert provisioning is not None
+    commands = [c["text"] for c in provisioning.configurations[0]["setupCommands"]]
+    # `2>&1` is not decoration: the adapter reads gdb's *stdout*, so the program's stderr is dropped
+    # unless it is merged there. Observed exactly that--stdout arrived, the cerr diagnostics didn't.
+    assert f"set args < {DEBUG_STDIN_CONTAINER_PATH} 2>&1" in commands
+    # And unbuffered, or a stdout that isn't a terminal shows nothing until the program exits.
+    assert any(c.startswith("set exec-wrapper stdbuf") for c in commands)
+
+
+async def test_cpp_debug_needs_only_a_prepare_task(tmp_path: Path) -> None:
+    """One task that prepares and exits--no debug server to start, so nothing to stop afterwards.
+
+       The old pair is declared retired so an upgrade removes them rather than leaving a task
+       wired to a command that no longer does anything."""
+    request = CgVsCodeRequest(ctx=_ctx(tmp_path, ECHO_DOUBLE), workspace_root=tmp_path)
+
+    provisioning = await get_language("C++").build_vscode_provisioning(request)
+
+    assert provisioning is not None
+    (task,) = provisioning.tasks
+    assert task["command"] == (
+            'cg debug start --file "${file}" --workspace-root "${workspaceFolder}"')
+    assert task.get("isBackground") is not True
     config = provisioning.configurations[0]
-    assert config["preLaunchTask"] in labels
-    assert config["postDebugTask"] in labels
+    assert config["preLaunchTask"] == task["label"]
+    assert "postDebugTask" not in config
+    assert "CG C++: Start debug session" in provisioning.retired_names
+    assert "CG C++: Stop debug session" in provisioning.retired_names
+
+
+async def test_cpp_prepare_task_reports_compile_errors_and_nothing_else(tmp_path: Path) -> None:
+    """A catch-all problem-matcher pattern is a trap: every line the task prints becomes a
+       "problem", and VS Code then refuses to launch with "errors exist after preLaunchTask"--
+       observed exactly that, with an ordinary progress line reported as an error."""
+    request = CgVsCodeRequest(ctx=_ctx(tmp_path, ECHO_DOUBLE), workspace_root=tmp_path)
+
+    provisioning = await get_language("C++").build_vscode_provisioning(request)
+
+    assert provisioning is not None
+    pattern = re.compile(provisioning.tasks[0]["problemMatcher"]["pattern"][0]["regexp"])
+    for line in ("container: cg-cpp-abc123", "program: /build/debug/solution", "up to date"):
+        assert pattern.match(line) is None, line
+    match = pattern.match("/w/puzzle/solution.cpp:18:5: error: 'foo' was not declared in this scope")
+    assert match is not None
+    assert match.group(4) == "error"
+
+
+async def test_debug_adapter_logging_is_opt_in(tmp_path: Path) -> None:
+    """The adapter is the one component of this stack that can't be exercised from a terminal, so
+       its own protocol exchange is where a misbehaving session has to be diagnosed. Off by default
+       because it is loud and slow."""
+    ctx = _ctx(tmp_path, ECHO_DOUBLE)
+    language = get_language("C++")
+
+    off = await language.build_vscode_provisioning(
+            CgVsCodeRequest(ctx=ctx, workspace_root=tmp_path))
+    on = await language.build_vscode_provisioning(
+            CgVsCodeRequest(ctx=ctx, workspace_root=tmp_path, debug_adapter_logging=True))
+
+    assert off is not None and on is not None
+    assert "logging" not in off.configurations[0]
+    assert on.configurations[0]["logging"]["engineLogging"] is True
+    assert on.configurations[0]["logging"]["moduleLoad"] is False  # or it buries the exchange
 
 
 async def test_devcontainer_references_the_stable_alias_not_a_content_hash(tmp_path: Path) -> None:
@@ -617,30 +702,40 @@ async def test_devcontainer_references_the_stable_alias_not_a_content_hash(tmp_p
 
 @pytest.mark.docker
 @requires_docker
-async def test_cpp_debug_session_starts_and_stops(tmp_path: Path) -> None:
+async def test_cpp_debug_preparation_builds_and_stages_the_input(tmp_path: Path) -> None:
+    """Despite the name this starts nothing--gdb launches the program. All it has to leave behind is
+       a current debug build and the test case where the launch configuration expects it."""
     language = get_language("C++")
     ctx = _ctx(tmp_path, ECHO_DOUBLE)
 
     session = await language.start_debug_session(ctx, "21", timeout=900)
 
     assert session.ok, session.output
-    assert session.details["address"] == f"localhost:{GDBSERVER_PORT}"
     assert session.details["container"] == container_name_for(LANG_SLUG, ctx.mount_root)
+    assert session.details["stdin"] == DEBUG_STDIN_CONTAINER_PATH
 
-    # Redirected from a copy this wrote, holding exactly the bytes asked for--no terminator
-    # supplied, since the caller's value didn't have one. Redirecting from a contribution's own
-    # test-case file instead would have added one.
+    # Staged from a copy holding exactly the bytes asked for--no terminator supplied, since the
+    # caller's value didn't have one. Reading a contribution's own test-case file would have added
+    # one, diverging from `play` and from CodinGame by a byte.
     assert (ctx.meta_dir / DEBUG_STDIN_FILE_NAME).read_text() == "21"
+    staged = subprocess.run(
+            ["docker", "exec", container_name_for(LANG_SLUG, ctx.mount_root),
+             "cat", DEBUG_STDIN_CONTAINER_PATH],
+            capture_output=True, text=True, timeout=60, check=False)
+    assert staged.stdout == "21"
 
+    # Nothing to tear down, but it must stay safe to call--including twice.
     await language.stop_debug_session(ctx)
-    await language.stop_debug_session(ctx)  # idempotent: postDebugTask fires even on a dead session
+    await language.stop_debug_session(ctx)
 
 
 @pytest.mark.docker
 @requires_docker
-async def test_cpp_debug_build_records_the_symlink_path_for_breakpoints(tmp_path: Path) -> None:
-    """gdb records whatever path it was compiled with, and that path has to map back onto the file
-       the user actually has open for breakpoints to bind--hence compiling the symlink."""
+async def test_cpp_debug_build_records_the_real_source_path(tmp_path: Path) -> None:
+    """The debug info must name `data/solution.src`, the file actually compiled, so that the path
+       the debugger reports and its own realpath of it agree. When they disagree the editor
+       navigates away from the file you set the breakpoint in, and the `sourceFileMap` that fixes
+       that then breaks binding, because it applies in both directions."""
     ctx = _ctx(tmp_path, ECHO_DOUBLE)
     assert (await get_language("C++").build(ctx, profile="debug", timeout=900)).ok
 
@@ -649,9 +744,9 @@ async def test_cpp_debug_build_records_the_symlink_path_for_breakpoints(tmp_path
              "sh", "-c", "readelf --debug-dump=info /build/debug/solution | grep -m1 DW_AT_name"],
             capture_output=True, text=True, timeout=60, check=False)
 
-    # The *host* path, verbatim -- which is exactly why no sourceFileMap is needed: the debugger
-    # can open this path directly.
-    assert str(ctx.solution_link) in dwarf.stdout
+    # The real file, and a *host* path -- which is why no mount translation is needed either.
+    assert str(ctx.solution_file) in dwarf.stdout
+    assert str(ctx.solution_link) not in dwarf.stdout
 
 
 # --- cg docker clean ------------------------------------------------------------------------
@@ -856,3 +951,4 @@ async def test_a_spec_change_forces_recreation(tmp_path: Path) -> None:
 
     assert before != after
     await remove_containers_for_root(root)
+

@@ -51,9 +51,9 @@ __all__ = [
     "find_workspace_root",
     "MANAGED_PREFIX",
     "ACTION_DEBUG",
-    "ACTION_START_DEBUG_SESSION",
-    "ACTION_STOP_DEBUG_SESSION",
+    "ACTION_PREPARE_DEBUG",
     "entry_name",
+    "PRESENTATION",
     "check_provisioning",
     "write_provisioning",
 ]
@@ -88,7 +88,20 @@ class CgVsCodeRequest:
     """Where `.vscode/` will be written--see `find_workspace_root`. Often *not* `ctx.root`.
 
        Also the directory a containerized language must mount, so that paths inside the container
-       match the paths VS Code has open--see `codingame_tools.language._docker.SRC_MOUNT_DIR`."""
+       match the paths VS Code has open--see `codingame_tools.language._docker`."""
+
+    debug_adapter_logging: bool = False
+    """Generate a configuration that logs the debug adapter's own conversation with the debugger.
+
+       Off by default because it is loud and slows a session down. It exists because the debug
+       adapter is the one component of the stack that can't be exercised from a terminal: gdbserver,
+       stdin redirection, stepping and symbol resolution can all be driven by hand and checked, but
+       what VS Code's adapter actually sends and receives can only be observed from inside a real
+       session. When a session misbehaves and everything underneath it demonstrably works, this is
+       the remaining place to look.
+
+       A plugin should turn on whatever its adapter offers, and quieten anything so voluminous it
+       would bury the exchange."""
 
 
 @dataclass(frozen=True)
@@ -235,15 +248,32 @@ def entry_name(language: str, action: str) -> str:
     return f"{MANAGED_PREFIX}{language}: {action}"
 
 
+PRESENTATION = {"group": "cg"}
+"""`presentation` for every generated launch configuration, which clusters cg's entries together in
+   VS Code's Run and Debug dropdown instead of scattering them among the user's.
+
+   Worth having because **F5 runs whatever configuration is selected, never the one matching the
+   file you have open**. Debugging a solution therefore means picking the `CG <language>: ...` entry
+   first, and the commonest way to get a solution that hangs at its first read is to press F5 with
+   someone's own "Python: Current File" still selected--that runs the solution directly, with stdin
+   attached to the terminal rather than to a test case. Grouping can't prevent that, but it makes
+   the right entry easy to find.
+
+   Deliberately does *not* set `order` to push cg above the user's own entries: their configurations
+   are theirs to rank."""
+
 ACTION_DEBUG = "Debug solution"
 """Launch configuration: debug the solution the active editor tab belongs to, against that working
    directory's selected test case."""
 
-ACTION_START_DEBUG_SESSION = "Start debug session"
-"""Task: bring up a stopped debug target for a debugger to attach to (a `preLaunchTask`)."""
+ACTION_PREPARE_DEBUG = "Prepare debug session"
+"""Task: get everything in place for a debug launch--build the debug profile, stage the selected
+   test case's input--and exit. A `preLaunchTask`.
 
-ACTION_STOP_DEBUG_SESSION = "Stop debug session"
-"""Task: tear that target down again (a `postDebugTask`)."""
+   Deliberately *prepares* rather than *starts*: the debugger launches the program itself, as it does
+   for any ordinary local target. An earlier design had this task start a debug server for the
+   adapter to attach to, which is what forced the program's output somewhere the editor could not
+   see it."""
 
 _OWNED_INPUT_RE = re.compile(r"^cg_")
 """Matches a `launch.json` input id cg generated. Nothing generates inputs any more--the `pickString`
