@@ -4,6 +4,8 @@ Decisions that aren't obvious from the code, and the measurements behind them. W
 each one looks wrong at first glance, and each was arrived at by getting it wrong first.
 
 - **[Final newlines](final-newlines.md)** — why server text and local files convert unconditionally
+- **[What CodinGame actually runs](codingame-runtime.md)** — measured compiler, interpreter and
+  library versions, and the `-O0` finding their docs don't mention
   in both directions, why puzzles and contributions differ, and how CodinGame's output comparison
   actually behaves.
 

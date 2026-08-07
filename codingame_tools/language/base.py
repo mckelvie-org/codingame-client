@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from .toolchain.fragment import CgToolchainFragment
 from .vscode import CgVsCodeProvisioning, CgVsCodeRequest
 
 __all__ = [
@@ -299,6 +300,20 @@ class CgLanguage(ABC):  # noqa: B024 -- deliberately no @abstractmethod; see doc
            nothing is running--it's wired to a `postDebugTask`, which fires even if the session
            never really began. Base implementation: no-op, so a language that needs no teardown
            inherits correct behavior."""
+        return None
+
+    @property
+    def toolchain_fragment(self) -> CgToolchainFragment | None:
+        """This language's contribution to a composed toolchain image, or `None` if it has no
+           container support.
+
+           Usually a fragment that installs **nothing** and merely depends on a subsystem plus
+           supplies its own activation script -- C and C++ both resolve to one gcc and differ only in
+           whether they export `CG_CC` or `CG_CXX`. Installing a toolchain directly here is the
+           exception, reserved for a language nothing else shares.
+
+           Base implementation: `None`, so a language that is only a name today contributes nothing
+           to any image rather than silently inflating one."""
         return None
 
     @property

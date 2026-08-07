@@ -11,6 +11,7 @@ from collections.abc import AsyncGenerator
 
 from .._process import run_argv_streaming
 from ..base import DEFAULT_RUN_TIMEOUT_SECONDS, CgLanguage, CgLanguageContext, CgRunEvent
+from ..toolchain.fragment import CgToolchainFragment
 from ..vscode import (
     ACTION_DEBUG,
     PRESENTATION,
@@ -52,6 +53,16 @@ class CgPython3Language(CgLanguage):
 
     async def build_contribution_create_stub_source(self) -> str:
         return "n = input()\nprint(n)\n"
+
+    @property
+    def toolchain_fragment(self) -> CgToolchainFragment:
+        """Depends on the `python311` subsystem and adds nothing of its own.
+
+           Python has no container *backend* yet -- `run_streaming` still uses the host interpreter --
+           so nothing drives this today. It is here because an image is described by what it should
+           contain, not by what happens to be wired up: a dev container needs CodinGame's interpreter
+           present whether or not cg is currently routing through it."""
+        return CgToolchainFragment(slug="python3", version=1, depends_on=("python311",))
 
     @property
     def supports_vscode(self) -> bool:

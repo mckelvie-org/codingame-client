@@ -31,6 +31,7 @@ from ..base import (
     CgLanguageContext,
     CgRunEvent,
 )
+from ..toolchain.fragment import CgToolchainFragment
 from ..vscode import (
     ACTION_DEBUG,
     ACTION_PREPARE_DEBUG,
@@ -487,6 +488,43 @@ class CgCppLanguage(CgLanguage):
            language whose debugger *does* leave something running still needs it. It also means
            `cg debug stop` stays safe to run at any time."""
         return
+
+    @property
+    def toolchain_fragment(self) -> CgToolchainFragment:
+        """Installs nothing: C++ is entirely supplied by the shared `gcc11` subsystem, which C also
+           depends on, so an image containing both carries one compiler rather than two.
+
+           The flags live here rather than in the image because they are cg's business, not the
+           toolchain's -- changing a warning flag should not require rebuilding a multi-gigabyte
+           image. `CG_CXXLIBS` is separate from `CG_CXXFLAGS` because link libraries must follow the
+           translation unit on the command line, not precede it.
+
+           **The flags are measured, not guessed.** A probe run on CodinGame reports `__OPTIMIZE__`
+           *undefined* and `__NO_INLINE__` defined, so the platform compiles at **-O0** -- while cg
+           previously used `-O2`. That asymmetry is the dangerous direction: an O(n^2) solution fast
+           enough locally at -O2 can exceed the time limit on submission, and the local run would
+           have said it was fine. Matching means the local run predicts the remote one, which is the
+           only reason to pin a toolchain at all. See doc/design/codingame-runtime.md.
+
+           `-O0` explicitly rather than by omission, and deliberately **not** configurable. Optimizing
+           past CodinGame buys nothing: puzzles are designed to be solvable in every supported
+           language, so the time limits are set by the slowest of them and a C++ solution has orders
+           of magnitude of headroom either way. It also makes single-stepping faithful -- at -O0 the
+           code you step through is the code you wrote, with nothing reordered or inlined away.
+
+           **`-lm -lpthread -ldl -lcrypt` matches what CodinGame links**, which cg previously omitted
+           entirely -- so a solution using `pthread_create` or `dlopen` linked remotely and failed
+           locally, or worse the reverse."""
+        return CgToolchainFragment(
+                slug="cpp",
+                version=2,
+                depends_on=("gcc11",),
+                env_script=(
+                    'export CG_CXXFLAGS="-std=c++20 -O0 -g -Wall -Wextra"\n'
+                    'export CG_CXXFLAGS_DEBUG="-std=c++20 -O0 -g3 -Wall -Wextra"\n'
+                    'export CG_CXXLIBS="-lm -lpthread -ldl -lcrypt"\n'
+                ),
+            )
 
     @property
     def supports_vscode(self) -> bool:

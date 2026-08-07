@@ -104,10 +104,30 @@ class CgSettingsData(JSONWizardX):
        `cg puzzle deactivate`/`cg puzzle delete`. See `current_contribution_dir` for why this is
        separate from `puzzle_dir` and outranks it."""
 
+    toolchain_languages: list[str] | None = None
+    """Which languages this project's container toolchain image should carry, by CodinGame name
+       (`["Python3", "C", "C++"]`).
+
+       A project-level answer rather than a global one, because it is a property of the work: a repo
+       where you solve Python puzzles has no reason to build a C++ compiler, and this repo--which
+       develops cg itself--wants exactly the languages it exercises. Set in a project `config.yaml`,
+       it applies to every working directory beneath it.
+
+       Unset means **every language cg supports**, which is the intended default: the whole set is
+       about 1.9 GB because the big toolchains share one Debian base, so trimming saves little and
+       costs the user a decision. Set this only to deliberately build something smaller."""
+
+    toolchain_image: str | None = None
+    """A prebuilt toolchain image tag to use instead of building one locally.
+
+       Skips composition and building entirely--the point being that a published multi-language image
+       is a pull rather than a multi-gigabyte local build. Unset means compose a Dockerfile from
+       `toolchain_languages` and build it, which is the path cg development uses."""
+
 
 def overlay_settings_data(base: CgSettingsData, override: CgSettingsData) -> CgSettingsData:
-    """Return a new `CgSettingsData` with each of `default_profile`/`contribution_dir`/
-       `puzzle_dir` taken from `override` where it's set there, else from `base`. The building
+    """Return a new `CgSettingsData` with each field taken from `override` where it's set there,
+       else from `base`. The building
        block for the base-to-refined settings resolution chain (global config.yaml's `settings`
        -> a project config.yaml's `settings` -> settings.json)--see `CgConfig.settings` for where
        the first two tiers get combined, and `CgSettings`'s properties for where settings.json
@@ -122,6 +142,12 @@ def overlay_settings_data(base: CgSettingsData, override: CgSettingsData) -> CgS
             current_puzzle_dir=(
                 override.current_puzzle_dir if override.current_puzzle_dir is not None
                 else base.current_puzzle_dir),
+            toolchain_languages=(
+                override.toolchain_languages if override.toolchain_languages is not None
+                else base.toolchain_languages),
+            toolchain_image=(
+                override.toolchain_image if override.toolchain_image is not None
+                else base.toolchain_image),
         )
 
 
