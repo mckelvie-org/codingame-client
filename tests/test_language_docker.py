@@ -34,11 +34,16 @@ from codingame_tools.language import (
     CgVsCodeRequest,
     get_language,
 )
+from codingame_tools.language import _docker as _docker_module
 from codingame_tools.language._docker import (
     BASE_DOCKERFILE_NAME,
     CUSTOM_DOCKERFILE_NAME,
+    IMAGE_REPOSITORY,
+    CgDockerError,
+    build_image_content,
     clean_managed,
     compose_dockerfile,
+    compose_with_base,
     container_create_argv,
     container_name_for,
     container_spec_hash,
@@ -46,25 +51,28 @@ from codingame_tools.language._docker import (
     docker_exec_argv,
     ensure_base_dockerfile,
     ensure_container,
+    fragment_manifest,
     image_tag_for,
     latest_alias_for,
     list_managed_containers,
     list_managed_images,
     read_base_dockerfile_state,
     remove_containers_for_root,
-    render_base_dockerfile,
     resolve_toolchain_dir,
 )
 from codingame_tools.language.languages.cpp import (
     CACHED_MARKER,
     DEBUG_STDIN_CONTAINER_PATH,
     DEBUG_STDIN_FILE_NAME,
-    LANG_SLUG,
-    TEMPLATE_BODY,
-    TEMPLATE_VERSION,
     build_script,
     run_script,
     target_architecture,
+)
+from codingame_tools.language.toolchain import (
+    BASE_IMAGE,
+    PREAMBLE,
+    fragments_for_languages,
+    render_dockerfile,
 )
 
 
@@ -99,7 +107,7 @@ def _remove_test_container(request: pytest.FixtureRequest, tmp_path: Path) -> It
     if request.node.get_closest_marker("docker") is None or not _docker_available():
         return
     subprocess.run(
-            ["docker", "rm", "-f", container_name_for(LANG_SLUG, tmp_path.resolve())],
+            ["docker", "rm", "-f", container_name_for(tmp_path.resolve())],
             capture_output=True, timeout=60, check=False)
 
 
@@ -118,15 +126,27 @@ def _ctx(tmp_path: Path, source: str) -> CgLanguageContext:
         )
 
 
+
+def _rendered(fragments: str, body: str) -> str:
+    """A cg-rendered base.dockerfile with `fragments` in its header.
+
+       Mirrors what `toolchain.render_dockerfile` emits, so these tests exercise the on-disk state
+       machinery -- write / upgrade / refuse-to-clobber -- without depending on real fragment
+       contents, which `test_language_toolchain.py` covers."""
+    import hashlib
+    digest = hashlib.sha256(body.encode()).hexdigest()
+    return f"# cg-managed toolchain--do not edit.\n# cg-toolchain: fragments={fragments} body-sha256={digest}\n{body}"
+
+
 # --- naming (pure) --------------------------------------------------------------------------
 
 
 def test_image_tag_is_content_addressed() -> None:
     """Keying on Dockerfile content, not on the working directory, is what lets every root share one
        image and makes any edit produce a new tag automatically."""
-    assert image_tag_for("cpp", "FROM gcc:14\n") == image_tag_for("cpp", "FROM gcc:14\n")
-    assert image_tag_for("cpp", "FROM gcc:14\n") != image_tag_for("cpp", "FROM gcc:13\n")
-    assert image_tag_for("cpp", "x").startswith("cg-cpp:")
+    assert image_tag_for("FROM gcc:14\n") == image_tag_for("FROM gcc:14\n")
+    assert image_tag_for("FROM gcc:14\n") != image_tag_for("FROM gcc:13\n")
+    assert image_tag_for("x").startswith(f"{IMAGE_REPOSITORY}:")
 
 
 def test_containers_remove_themselves_when_they_stop(tmp_path: Path) -> None:
@@ -141,12 +161,12 @@ def test_containers_remove_themselves_when_they_stop(tmp_path: Path) -> None:
 def test_container_name_is_per_mount_root_and_docker_safe(tmp_path: Path) -> None:
     """Per mount root--i.e. per workspace--so every working directory in a workspace shares one
        container, which is what lets the generated launch configuration name it and stay static."""
-    a = container_name_for("cpp", tmp_path / "one")
-    b = container_name_for("cpp", tmp_path / "two")
+    a = container_name_for(tmp_path / "one")
+    b = container_name_for(tmp_path / "two")
     assert a != b
     # Docker names can't contain "/", which is why the path is hashed rather than embedded.
     assert "/" not in a
-    assert a.startswith("cg-cpp-")
+    assert a.startswith(f"{IMAGE_REPOSITORY}-")
 
 
 # --- Dockerfile templating and versioning (pure) ---------------------------------------------
@@ -154,41 +174,44 @@ def test_container_name_is_per_mount_root_and_docker_safe(tmp_path: Path) -> Non
 
 def test_a_freshly_written_base_is_recognized_as_unedited(tmp_path: Path) -> None:
     path = tmp_path / BASE_DOCKERFILE_NAME
-    path.write_text(render_base_dockerfile("cpp", 3, "FROM gcc:14\n"))
+    path.write_text(_rendered("gcc11@1,cpp@1", "FROM gcc:14\n"))
 
-    state = read_base_dockerfile_state(path, "cpp")
+    state = read_base_dockerfile_state(path)
 
     assert state.exists
-    assert state.version == 3
+    assert state.fragments == "gcc11@1,cpp@1"
     assert not state.edited
 
 
 def test_editing_the_body_is_detected(tmp_path: Path) -> None:
     path = tmp_path / BASE_DOCKERFILE_NAME
-    path.write_text(render_base_dockerfile("cpp", 3, "FROM gcc:14\n") + "RUN echo hi\n")
+    path.write_text(_rendered("cpp@1", "FROM gcc:14\n") + "RUN echo hi\n")
 
-    assert read_base_dockerfile_state(path, "cpp").edited
+    assert read_base_dockerfile_state(path).edited
 
 
 def test_a_body_starting_with_a_blank_line_is_not_mistaken_for_edited(tmp_path: Path) -> None:
     """Regression: the header regex used `\\s*$`, which in MULTILINE mode happily consumed the
        header's own trailing newline and matched `$` at the next line's end. That pushed the body
-       offset one character too far, so any body beginning with a blank line--which the real C++
-       template does--hashed differently than it was written, and every freshly-generated file read
-       back as "edited" (and so was never upgraded)."""
+       offset one character too far, so any body beginning with a blank line hashed differently than
+       it was written, and every freshly-generated file read back as "edited" (and so was never
+       upgraded)."""
     path = tmp_path / BASE_DOCKERFILE_NAME
-    path.write_text(render_base_dockerfile("cpp", 1, "\nFROM gcc:14\n"))
+    path.write_text(_rendered("cpp@1", "\nFROM gcc:14\n"))
 
-    assert not read_base_dockerfile_state(path, "cpp").edited
+    assert not read_base_dockerfile_state(path).edited
 
 
-def test_the_real_cpp_template_round_trips_as_unedited(tmp_path: Path) -> None:
-    """Same regression, against the actual shipped template rather than a synthetic body."""
-    ensure_base_dockerfile(tmp_path, LANG_SLUG, TEMPLATE_VERSION, TEMPLATE_BODY)
+def test_a_really_rendered_dockerfile_round_trips_as_unedited(tmp_path: Path) -> None:
+    """Same regression, against what the composer actually emits rather than a synthetic body--the
+       two hashers have to agree on exactly where the header ends."""
+    rendered = render_dockerfile(
+            fragments_for_languages(["C++"]), base_image=BASE_IMAGE, preamble=PREAMBLE)
+    ensure_base_dockerfile(tmp_path, rendered)
 
-    state = read_base_dockerfile_state(tmp_path / BASE_DOCKERFILE_NAME, LANG_SLUG)
+    state = read_base_dockerfile_state(tmp_path / BASE_DOCKERFILE_NAME)
 
-    assert state.version == TEMPLATE_VERSION
+    assert state.fragments == fragment_manifest(rendered)
     assert not state.edited
 
 
@@ -197,51 +220,63 @@ def test_a_hand_written_file_with_no_header_counts_as_edited(tmp_path: Path) -> 
     path = tmp_path / BASE_DOCKERFILE_NAME
     path.write_text("FROM gcc:14\n")
 
-    state = read_base_dockerfile_state(path, "cpp")
+    state = read_base_dockerfile_state(path)
 
-    assert state.version is None
+    assert state.fragments is None
     assert state.edited
 
 
 def test_ensure_creates_both_dockerfiles(tmp_path: Path) -> None:
-    path, warnings = ensure_base_dockerfile(tmp_path, "cpp", 1, "FROM gcc:14\n")
+    path, warnings = ensure_base_dockerfile(tmp_path, _rendered("cpp@1", "FROM gcc:14\n"))
 
     assert path.is_file()
     assert (tmp_path / CUSTOM_DOCKERFILE_NAME).is_file()
     assert warnings == []
 
 
-def test_an_unmodified_stale_base_is_silently_upgraded(tmp_path: Path) -> None:
-    """The normal upgrade path: cg ships a new template and the user never had to do anything."""
-    ensure_base_dockerfile(tmp_path, "cpp", 1, "FROM gcc:13\n")
+def test_adding_a_language_regenerates_an_unmodified_base(tmp_path: Path) -> None:
+    """The normal path now that the manifest names the fragments: asking for a bigger language set
+       produces a different manifest, and the user never had to do anything."""
+    ensure_base_dockerfile(tmp_path, _rendered("gcc11@1,cpp@1", "FROM gcc:13\n"))
 
-    _, warnings = ensure_base_dockerfile(tmp_path, "cpp", 2, "FROM gcc:14\n")
+    _, warnings = ensure_base_dockerfile(
+            tmp_path, _rendered("gcc11@1,cpp@1,python311@3", "FROM gcc:14\n"))
 
-    state = read_base_dockerfile_state(tmp_path / BASE_DOCKERFILE_NAME, "cpp")
-    assert state.version == 2
+    state = read_base_dockerfile_state(tmp_path / BASE_DOCKERFILE_NAME)
+    assert state.fragments == "gcc11@1,cpp@1,python311@3"
     assert "gcc:14" in (tmp_path / BASE_DOCKERFILE_NAME).read_text()
     assert warnings == []
 
 
+def test_a_bumped_fragment_version_regenerates_an_unmodified_base(tmp_path: Path) -> None:
+    """Staleness is `recorded != wanted` on the whole manifest, so a version bump inside one fragment
+       is detected even though the language set is identical."""
+    ensure_base_dockerfile(tmp_path, _rendered("gcc11@1,cpp@1", "FROM gcc:13\n"))
+
+    ensure_base_dockerfile(tmp_path, _rendered("gcc11@2,cpp@1", "FROM gcc:14\n"))
+
+    assert "gcc:14" in (tmp_path / BASE_DOCKERFILE_NAME).read_text()
+
+
 def test_an_edited_stale_base_is_warned_about_never_overwritten(tmp_path: Path) -> None:
-    ensure_base_dockerfile(tmp_path, "cpp", 1, "FROM gcc:13\n")
+    ensure_base_dockerfile(tmp_path, _rendered("cpp@1", "FROM gcc:13\n"))
     base = tmp_path / BASE_DOCKERFILE_NAME
     base.write_text(base.read_text() + "RUN echo mine\n")
 
-    _, warnings = ensure_base_dockerfile(tmp_path, "cpp", 2, "FROM gcc:14\n")
+    _, warnings = ensure_base_dockerfile(tmp_path, _rendered("cpp@2", "FROM gcc:14\n"))
 
     assert "RUN echo mine" in base.read_text()
     assert "gcc:14" not in base.read_text()
     assert len(warnings) == 1
-    assert "older cg template" in warnings[0]
+    assert "local edits" in warnings[0]
 
 
 def test_an_edited_current_base_is_left_alone_silently(tmp_path: Path) -> None:
-    ensure_base_dockerfile(tmp_path, "cpp", 2, "FROM gcc:14\n")
+    ensure_base_dockerfile(tmp_path, _rendered("cpp@2", "FROM gcc:14\n"))
     base = tmp_path / BASE_DOCKERFILE_NAME
     base.write_text(base.read_text() + "RUN echo mine\n")
 
-    _, warnings = ensure_base_dockerfile(tmp_path, "cpp", 2, "FROM gcc:14\n")
+    _, warnings = ensure_base_dockerfile(tmp_path, _rendered("cpp@2", "FROM gcc:14\n"))
 
     assert "RUN echo mine" in base.read_text()
     assert warnings == []
@@ -250,18 +285,18 @@ def test_an_edited_current_base_is_left_alone_silently(tmp_path: Path) -> None:
 def test_a_custom_dockerfile_survives_every_base_upgrade(tmp_path: Path) -> None:
     """The whole point of the two-file split: the common customization is additive, so cg can
        replace the base freely without ever needing to merge."""
-    ensure_base_dockerfile(tmp_path, "cpp", 1, "FROM gcc:13\n")
+    ensure_base_dockerfile(tmp_path, _rendered("cpp@1", "FROM gcc:13\n"))
     custom = tmp_path / CUSTOM_DOCKERFILE_NAME
     custom.write_text("RUN apt-get install -y libfoo-dev\n")
 
-    ensure_base_dockerfile(tmp_path, "cpp", 2, "FROM gcc:14\n")
-    ensure_base_dockerfile(tmp_path, "cpp", 3, "FROM gcc:15\n")
+    ensure_base_dockerfile(tmp_path, _rendered("cpp@2", "FROM gcc:14\n"))
+    ensure_base_dockerfile(tmp_path, _rendered("cpp@3", "FROM gcc:15\n"))
 
     assert custom.read_text() == "RUN apt-get install -y libfoo-dev\n"
 
 
 def test_compose_appends_custom_to_base(tmp_path: Path) -> None:
-    ensure_base_dockerfile(tmp_path, "cpp", 1, "FROM gcc:14\n")
+    ensure_base_dockerfile(tmp_path, _rendered("cpp@1", "FROM gcc:14\n"))
     (tmp_path / CUSTOM_DOCKERFILE_NAME).write_text("RUN echo mine\n")
 
     composed = compose_dockerfile(tmp_path)
@@ -271,22 +306,22 @@ def test_compose_appends_custom_to_base(tmp_path: Path) -> None:
 
 
 def test_a_custom_dockerfile_changes_the_image_tag(tmp_path: Path) -> None:
-    ensure_base_dockerfile(tmp_path, "cpp", 1, "FROM gcc:14\n")
-    before = image_tag_for("cpp", compose_dockerfile(tmp_path))
+    ensure_base_dockerfile(tmp_path, _rendered("cpp@1", "FROM gcc:14\n"))
+    before = image_tag_for(compose_dockerfile(tmp_path))
     (tmp_path / CUSTOM_DOCKERFILE_NAME).write_text("RUN echo mine\n")
 
-    assert image_tag_for("cpp", compose_dockerfile(tmp_path)) != before
+    assert image_tag_for(compose_dockerfile(tmp_path)) != before
 
 
 def test_toolchain_dir_prefers_a_per_root_override(tmp_path: Path) -> None:
     meta = tmp_path / ".meta"
-    globals_ = tmp_path / "toolchain"
-    assert resolve_toolchain_dir(meta, globals_, "cpp") == globals_ / "cpp"
+    shared = tmp_path / "toolchain"
+    assert resolve_toolchain_dir(meta, shared) == shared
 
-    override = meta / "docker" / "cpp"
+    override = meta / "docker"
     override.mkdir(parents=True)
     (override / BASE_DOCKERFILE_NAME).write_text("FROM gcc:14\n")
-    assert resolve_toolchain_dir(meta, globals_, "cpp") == override
+    assert resolve_toolchain_dir(meta, shared) == override
 
 
 # --- generated shell (pure) -------------------------------------------------------------------
@@ -455,7 +490,7 @@ async def test_cpp_run_times_out_without_leaving_the_process_running(tmp_path: P
     # timeout so the outer one wins the race and the user gets a clean `timed_out=True` rather than
     # an opaque exit code 124, which means cleanup lands shortly after rather than instantly. Poll
     # for it instead of asserting immediately.
-    container = container_name_for(LANG_SLUG, ctx.mount_root)
+    container = container_name_for(ctx.mount_root)
     deadline = time.monotonic() + 15.0
     while time.monotonic() < deadline:
         procs = subprocess.run(
@@ -504,13 +539,16 @@ async def test_cpp_toolchain_files_are_generated_on_first_use(tmp_path: Path) ->
 
     assert (await get_language("C++").build(ctx, timeout=900)).ok
 
-    directory = ctx.toolchain_dir / LANG_SLUG
+    directory = ctx.toolchain_dir
     assert (directory / BASE_DOCKERFILE_NAME).is_file()
     assert (directory / CUSTOM_DOCKERFILE_NAME).is_file()
-    state = read_base_dockerfile_state(directory / BASE_DOCKERFILE_NAME, LANG_SLUG)
-    assert state.version == TEMPLATE_VERSION
+    state = read_base_dockerfile_state(directory / BASE_DOCKERFILE_NAME)
     assert not state.edited
-    assert TEMPLATE_BODY.strip().splitlines()[0] in (directory / BASE_DOCKERFILE_NAME).read_text()
+    # The manifest names gcc11 because C++ declares a dependency on it, not because anything here
+    # said so -- the point of composing rather than templating per language.
+    assert state.fragments is not None
+    assert "gcc11@" in state.fragments
+    assert "cpp@" in state.fragments
 
 
 @pytest.mark.docker
@@ -571,7 +609,7 @@ async def test_cpp_debug_launch_has_gdb_run_the_program_itself(tmp_path: Path) -
     assert "miDebuggerServerAddress" not in config
     # But gdb still runs *in the container*, since the host can't debug a Linux binary.
     assert config["pipeTransport"]["pipeProgram"] == "docker"
-    assert container_name_for(LANG_SLUG, tmp_path) in config["pipeTransport"]["pipeArgs"]
+    assert container_name_for(tmp_path) in config["pipeTransport"]["pipeArgs"]
     # The only sourceFileMap entry undoes gdb's own symlink resolution (see _SOURCE_FILE_MAP); the
     # mount needs no path translation, since it is mounted at its own path.
     assert list(config["sourceFileMap"]) == ["${fileDirname}/data/solution.src"]
@@ -658,7 +696,7 @@ async def test_cpp_prepare_task_reports_compile_errors_and_nothing_else(tmp_path
 
     assert provisioning is not None
     pattern = re.compile(provisioning.tasks[0]["problemMatcher"]["pattern"][0]["regexp"])
-    for line in ("container: cg-cpp-abc123", "program: /build/debug/solution", "up to date"):
+    for line in ("container: cg-cpp-abc123", "program: /build/cpp/debug/solution", "up to date"):
         assert pattern.match(line) is None, line
     match = pattern.match("/w/puzzle/solution.cpp:18:5: error: 'foo' was not declared in this scope")
     assert match is not None
@@ -693,7 +731,7 @@ async def test_devcontainer_references_the_stable_alias_not_a_content_hash(tmp_p
 
     assert provisioning is not None
     image = json.loads(provisioning.files[".meta/.devcontainer/devcontainer.json"])["image"]
-    assert image == latest_alias_for(LANG_SLUG)
+    assert image == latest_alias_for()
     assert image.endswith(":latest")
 
 
@@ -711,7 +749,7 @@ async def test_cpp_debug_preparation_builds_and_stages_the_input(tmp_path: Path)
     session = await language.start_debug_session(ctx, "21", timeout=900)
 
     assert session.ok, session.output
-    assert session.details["container"] == container_name_for(LANG_SLUG, ctx.mount_root)
+    assert session.details["container"] == container_name_for(ctx.mount_root)
     assert session.details["stdin"] == DEBUG_STDIN_CONTAINER_PATH
 
     # Staged from a copy holding exactly the bytes asked for--no terminator supplied, since the
@@ -719,7 +757,7 @@ async def test_cpp_debug_preparation_builds_and_stages_the_input(tmp_path: Path)
     # one, diverging from `play` and from CodinGame by a byte.
     assert (ctx.meta_dir / DEBUG_STDIN_FILE_NAME).read_text() == "21"
     staged = subprocess.run(
-            ["docker", "exec", container_name_for(LANG_SLUG, ctx.mount_root),
+            ["docker", "exec", container_name_for(ctx.mount_root),
              "cat", DEBUG_STDIN_CONTAINER_PATH],
             capture_output=True, text=True, timeout=60, check=False)
     assert staged.stdout == "21"
@@ -740,8 +778,8 @@ async def test_cpp_debug_build_records_the_real_source_path(tmp_path: Path) -> N
     assert (await get_language("C++").build(ctx, profile="debug", timeout=900)).ok
 
     dwarf = subprocess.run(
-            ["docker", "exec", container_name_for(LANG_SLUG, ctx.mount_root),
-             "sh", "-c", "readelf --debug-dump=info /build/debug/solution | grep -m1 DW_AT_name"],
+            ["docker", "exec", container_name_for(ctx.mount_root),
+             "sh", "-c", "readelf --debug-dump=info /build/cpp/debug/solution | grep -m1 DW_AT_name"],
             capture_output=True, text=True, timeout=60, check=False)
 
     # The real file, and a *host* path -- which is why no mount translation is needed either.
@@ -772,7 +810,7 @@ async def test_clean_removes_containers_and_images_and_they_rebuild(tmp_path: Pa
     language = get_language("C++")
     ctx = _ctx(tmp_path, ECHO_DOUBLE)
     assert (await language.build(ctx, timeout=900)).ok
-    assert any(name == container_name_for(LANG_SLUG, ctx.mount_root)
+    assert any(name == container_name_for(ctx.mount_root)
                for name, _root in await list_managed_containers())
     assert await list_managed_images()
 
@@ -808,37 +846,42 @@ async def test_clean_is_a_no_op_on_an_already_clean_system() -> None:
 
 @pytest.mark.docker
 @requires_docker
-async def test_changing_language_replaces_the_container_rather_than_orphaning_it(tmp_path: Path) -> None:
-    """Container names are per-language, so a working directory that switches `solution_language`
-       would otherwise leave the old language's container running and bind-mounted forever, never
-       referenced again."""
+async def test_a_container_this_cg_would_never_name_is_swept(tmp_path: Path) -> None:
+    """One container now serves every language, but an older cg named them per language
+       (`cg-cpp-<hash>`). Such a container is still running and still bind-mounted, and nothing will
+       ever reference it again--so the sweep goes by the `cg.root` label rather than by name, which
+       is what lets it retire a naming scheme it doesn't know about."""
     root = (tmp_path / "puzzle").resolve()
     root.mkdir()
+    stray = "cg-cpp-deadbeef"
+    subprocess.run(
+            ["docker", "run", "--detach", "--rm", "--name", stray,
+             "--label", f"cg.root={root}", "alpine:latest", "sleep", "600"],
+            capture_output=True, timeout=120, check=True)
+    try:
+        assert stray in {n for n, r in await list_managed_containers() if r == str(root)}
 
-    await ensure_container(root, "cpp", "alpine:latest")
-    assert sorted(n for n, r in await list_managed_containers() if r == str(root)) == [
-            container_name_for("cpp", root)]
+        await ensure_container(root, "alpine:latest")
 
-    await ensure_container(root, "java", "alpine:latest")
-
-    assert sorted(n for n, r in await list_managed_containers() if r == str(root)) == [
-            container_name_for("java", root)]
-
-    await remove_containers_for_root(root)
+        assert sorted(n for n, r in await list_managed_containers() if r == str(root)) == [
+                container_name_for(root)]
+    finally:
+        subprocess.run(["docker", "rm", "-f", stray], capture_output=True, timeout=60, check=False)
+        await remove_containers_for_root(root)
 
 
 @pytest.mark.docker
 @requires_docker
 async def test_only_ever_one_container_per_working_directory(tmp_path: Path) -> None:
-    """The general invariant: whatever sequence of languages a working directory goes through, it
-       has at most one container at a time."""
+    """The general invariant: however many times a working directory is prepared, and whatever
+       languages it builds, it has at most one container at a time."""
     root = (tmp_path / "puzzle").resolve()
     root.mkdir()
 
-    for lang in ("cpp", "java", "cpp", "rust"):
-        await ensure_container(root, lang, "alpine:latest")
+    for attempt in range(3):
+        await ensure_container(root, "alpine:latest")
         active = [n for n, r in await list_managed_containers() if r == str(root)]
-        assert active == [container_name_for(lang, root)], f"after {lang}: {active}"
+        assert active == [container_name_for(root)], f"after attempt {attempt}: {active}"
 
     await remove_containers_for_root(root)
 
@@ -852,12 +895,12 @@ async def test_a_sibling_working_directorys_container_is_left_alone(tmp_path: Pa
     a.mkdir()
     b.mkdir()
 
-    await ensure_container(a, "cpp", "alpine:latest")
-    await ensure_container(b, "cpp", "alpine:latest")
+    await ensure_container(a, "alpine:latest")
+    await ensure_container(b, "alpine:latest")
 
     names = {n for n, _r in await list_managed_containers()}
-    assert container_name_for("cpp", a) in names
-    assert container_name_for("cpp", b) in names
+    assert container_name_for(a) in names
+    assert container_name_for(b) in names
 
     await remove_containers_for_root(a)
     await remove_containers_for_root(b)
@@ -868,8 +911,8 @@ async def test_a_sibling_working_directorys_container_is_left_alone(tmp_path: Pa
 async def test_remove_containers_for_root_can_spare_one(tmp_path: Path) -> None:
     root = (tmp_path / "puzzle").resolve()
     root.mkdir()
-    await ensure_container(root, "cpp", "alpine:latest")
-    keep = container_name_for("cpp", root)
+    await ensure_container(root, "alpine:latest")
+    keep = container_name_for(root)
 
     removed = await remove_containers_for_root(root, except_name=keep)
 
@@ -893,7 +936,7 @@ async def test_recovers_when_the_container_is_removed_out_of_band(tmp_path: Path
     assert (await language.run(ctx, "21\n")).output == "42\n"
 
     subprocess.run(
-            ["docker", "rm", "-f", container_name_for(LANG_SLUG, ctx.mount_root)],
+            ["docker", "rm", "-f", container_name_for(ctx.mount_root)],
             capture_output=True, timeout=60, check=False)
 
     rebuilt = await language.build(ctx, timeout=900)
@@ -923,11 +966,11 @@ async def test_container_state_is_read_back_from_labels(tmp_path: Path) -> None:
        back off the container rather than assumed."""
     root = (tmp_path / "puzzle").resolve()
     root.mkdir()
-    await ensure_container(root, "cpp", "alpine:latest")
+    await ensure_container(root, "alpine:latest")
 
     states = await containers_for_root(root)
 
-    name = container_name_for("cpp", root)
+    name = container_name_for(root)
     assert set(states) == {name}
     assert states[name].running
     assert states[name].spec == container_spec_hash(
@@ -943,12 +986,95 @@ async def test_a_spec_change_forces_recreation(tmp_path: Path) -> None:
        build artifacts belong to the old one."""
     root = (tmp_path / "puzzle").resolve()
     root.mkdir()
-    await ensure_container(root, "cpp", "alpine:latest")
-    before = (await containers_for_root(root))[container_name_for("cpp", root)].spec
+    await ensure_container(root, "alpine:latest")
+    before = (await containers_for_root(root))[container_name_for(root)].spec
 
-    await ensure_container(root, "cpp", "busybox:latest")
-    after = (await containers_for_root(root))[container_name_for("cpp", root)].spec
+    await ensure_container(root, "busybox:latest")
+    after = (await containers_for_root(root))[container_name_for(root)].spec
 
     assert before != after
     await remove_containers_for_root(root)
 
+
+
+# --- explicit toolchain builds (pure) -----------------------------------------------------------
+
+
+async def test_multi_platform_without_push_is_refused_with_the_reason(tmp_path: Path) -> None:
+    """Not a cg policy but a Docker limitation: `buildx --load` cannot put a manifest list into the
+       local daemon. Caught up front with an explanation, because buildx's own failure for this is
+       obscure and the fix (--push) isn't guessable from it."""
+    with pytest.raises(CgDockerError) as excinfo:
+        await build_image_content(
+                "FROM alpine\n", tag="x:1",
+                platforms=["linux/amd64", "linux/arm64"], timeout=60.0)
+
+    message = str(excinfo.value)
+    assert "--push" in message
+    assert "manifest list" in message
+
+
+async def test_multi_platform_is_refused_before_docker_is_even_consulted(
+            tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The check is pure validation, so it must not depend on docker being installed or on buildx
+       being probed--otherwise the diagnosis would vary by machine."""
+    async def explode(*args: object, **kwargs: object) -> object:
+        raise AssertionError("docker must not be invoked for a statically-invalid request")
+    monkeypatch.setattr(_docker_module, "_docker", explode)
+
+    with pytest.raises(CgDockerError):
+        await build_image_content(
+                "FROM alpine\n", tag="x:1",
+                platforms=["linux/amd64", "linux/arm64"], timeout=60.0)
+
+
+async def test_a_single_platform_build_needs_buildx_and_says_so(
+            monkeypatch: pytest.MonkeyPatch) -> None:
+    """One platform is loadable, but still needs buildx to target an architecture at all. When it's
+       missing, the message has to name the escape hatch (omit --platform), since the plain
+       `docker build` path works fine without it."""
+    async def no_buildx(argv: list[str], **kwargs: object) -> object:
+        raise AssertionError(f"unexpected docker call: {argv}")
+    monkeypatch.setattr(_docker_module, "buildx_available", lambda: _false())
+    monkeypatch.setattr(_docker_module, "_docker", no_buildx)
+
+    with pytest.raises(CgDockerError) as excinfo:
+        await build_image_content(
+                "FROM alpine\n", tag="x:1", platforms=["linux/amd64"], timeout=60.0)
+
+    assert "buildx" in str(excinfo.value)
+    assert "--platform" in str(excinfo.value)
+
+
+async def _false() -> bool:
+    return False
+
+
+def test_compose_with_base_reports_the_tag_of_what_would_really_be_built(tmp_path: Path) -> None:
+    """`cg docker toolchain show` has to answer "what tag would this produce?" without writing
+       base.dockerfile. Hashing the base alone would name an image that never exists, because
+       custom.dockerfile is part of what gets piped to `docker build`."""
+    (tmp_path / CUSTOM_DOCKERFILE_NAME).write_text("RUN echo mine\n")
+    rendered = _rendered("cpp@1", "FROM gcc:14\n")
+
+    composed = compose_with_base(tmp_path, rendered)
+
+    assert "RUN echo mine" in composed
+    assert not (tmp_path / BASE_DOCKERFILE_NAME).exists()  # no side effect
+    # Identical to what the build path would compute after writing the base out.
+    ensure_base_dockerfile(tmp_path, rendered)
+    assert image_tag_for(composed) == image_tag_for(compose_dockerfile(tmp_path))
+
+
+def test_compose_with_base_ignores_a_comment_only_custom_file(tmp_path: Path) -> None:
+    """The custom.dockerfile cg generates is entirely comments. It still counts as content--it is
+       appended verbatim--so the tag differs from the bare base's, and that has to stay stable
+       rather than flip depending on how the file is inspected."""
+    generated = (tmp_path / CUSTOM_DOCKERFILE_NAME)
+    ensure_base_dockerfile(tmp_path, _rendered("cpp@1", "FROM gcc:14\n"))
+    assert generated.read_text().lstrip().startswith("#")
+
+    composed = compose_with_base(tmp_path, "FROM gcc:14\n")
+
+    assert composed != "FROM gcc:14\n"
+    assert image_tag_for(composed) != image_tag_for("FROM gcc:14\n")

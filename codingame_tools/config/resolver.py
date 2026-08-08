@@ -310,6 +310,19 @@ class CgConfig:
            `contribution_dir`--see `CgSettings.puzzle_dir`."""
         return resolve_settings_dir(self.settings.puzzle_dir, self.data_dir)
 
+    @property
+    def toolchain_languages(self) -> list[str] | None:
+        """Which languages the container toolchain image should carry (see `settings` above for the
+           global/project config merge), or `None` to include every language cg can containerize.
+           See `CgSettings.toolchain_languages` for the settings.json override."""
+        return self.settings.toolchain_languages
+
+    @property
+    def toolchain_image(self) -> str | None:
+        """A prebuilt toolchain image tag to use instead of composing and building one locally, or
+           `None` to build. See `CgSettings.toolchain_image` for the settings.json override."""
+        return self.settings.toolchain_image
+
     def save(self) -> None:
         """Write `raw_data` back to `config_file`."""
         write_config(self.raw_data, self.config_file)

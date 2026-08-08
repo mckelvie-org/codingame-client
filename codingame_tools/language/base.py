@@ -47,6 +47,15 @@ DEFAULT_BUILD_TIMEOUT_SECONDS = 120.0
    image and compiling from scratch. Keeping the two separate is the whole reason building is its
    own step: a slow first compile must never be reported as a test case timing out."""
 
+DEFAULT_TOOLCHAIN_BUILD_TIMEOUT_SECONDS = 3600.0
+"""Default wall-clock timeout for an explicit `cg docker toolchain build`, as opposed to the
+   incidental image build `DEFAULT_BUILD_TIMEOUT_SECONDS` covers.
+
+   An order of magnitude more generous because the work is different in kind: composing every
+   supported language downloads a JDK, a .NET SDK and a Node tarball, and pip-builds scientific
+   Python wheels, on a link whose speed cg cannot guess. The run path's 120s is right for "make sure
+   the image is current before this test case"; it would be wrong for "build me the whole thing"."""
+
 CgRunStream = Literal["stdout", "stderr"]
 
 CgBuildProfile = Literal["run", "debug"]
@@ -101,6 +110,16 @@ class CgLanguageContext:
     """The per-user global toolchain directory (`<cg data dir>/docker`), holding the shared,
        user-tweakable per-language image definitions. Global rather than per-root so that tweaking a
        language's toolchain once applies to every puzzle and contribution using that language."""
+
+    toolchain_languages: list[str] | None = None
+    """Languages the container toolchain should carry, or `None` for every language cg supports.
+
+       Defaulted because most callers don't care: the default is the right answer, and a context is
+       constructible without knowing anything about images."""
+
+    toolchain_image: str | None = None
+    """A prebuilt toolchain image tag to use instead of composing and building one locally. Skips the
+       Dockerfile entirely -- the point of a published image being a pull rather than a build."""
 
 
 @dataclass(frozen=True)

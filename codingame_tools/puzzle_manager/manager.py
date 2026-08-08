@@ -382,10 +382,14 @@ class CgPuzzleManager:
                 *,
                 toolchain_dir: Path | None = None,
                 mount_root: Path | None = None,
+                toolchain_languages: list[str] | None = None,
+                toolchain_image: str | None = None,
             ) -> None:
         self.puzzle_dir = Path(puzzle_dir).resolve()
         self.client = client
         self.mount_root = Path(mount_root).resolve() if mount_root is not None else None
+        self.toolchain_languages = toolchain_languages
+        self.toolchain_image = toolchain_image
         self.toolchain_dir = (
                 Path(toolchain_dir) if toolchain_dir is not None
                 else default_global_data_dir() / TOOLCHAIN_SUBDIR_NAME
@@ -1197,6 +1201,8 @@ class CgPuzzleManager:
                 meta_dir=self.meta_dir,
                 toolchain_dir=self.toolchain_dir,
                 mount_root=mount_root or self.mount_root or find_workspace_root(self.puzzle_dir),
+                toolchain_languages=self.toolchain_languages,
+                toolchain_image=self.toolchain_image,
             )
 
     async def provision_vscode(

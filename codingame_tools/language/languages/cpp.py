@@ -31,7 +31,7 @@ from ..base import (
     CgLanguageContext,
     CgRunEvent,
 )
-from ..toolchain.fragment import CgToolchainFragment
+from ..toolchain.fragment import ENV_DIR, CgToolchainFragment
 from ..vscode import (
     ACTION_DEBUG,
     ACTION_PREPARE_DEBUG,
@@ -54,33 +54,6 @@ COMPILED_MARKER = "cg-build:compiled"
    can tell a cached no-op from a real compile. Necessary because a clean compile emits no
    diagnostics at all, making it otherwise indistinguishable from the cached path."""
 
-TEMPLATE_VERSION = 1
-"""Bumped whenever `TEMPLATE_BODY` changes. An explicit integer rather than the cg package version,
-   so upgrading cg without a toolchain change causes no image churn. An unmodified `base.dockerfile`
-   older than this is silently regenerated; an edited one is left alone with a warning."""
-
-TEMPLATE_BODY = f"""
-ARG CG_BASE_IMAGE=gcc:14
-FROM ${{CG_BASE_IMAGE}}
-
-# gdb/gdbserver are for debugging; coreutils supplies the `timeout` and `stdbuf` the run wrapper
-# relies on (already present on Debian, named here in case the base image is swapped).
-RUN apt-get update \\
-    && apt-get install -y --no-install-recommends gdb gdbserver coreutils \\
-    && rm -rf /var/lib/apt/lists/*
-
-ENV CG_CXXFLAGS="-std=c++20 -O2 -g -Wall -Wextra"
-ENV CG_CXXFLAGS_DEBUG="-std=c++20 -O0 -g3 -Wall -Wextra"
-
-RUN mkdir -p {BUILD_DIR}/run {BUILD_DIR}/debug
-WORKDIR {BUILD_DIR}
-"""
-"""The cg-owned half of the toolchain image. Users add to it in `custom.dockerfile`, which is
-   appended verbatim and never touched by cg--so this can be replaced on a template bump without
-   any merging. `ARG CG_BASE_IMAGE` and the two `CG_CXXFLAGS*` variables exist so the two most
-   likely tweaks don't require editing the base at all (override them in `custom.dockerfile`)."""
-
-
 def build_script(source: str, profile: CgBuildProfile) -> str:
     """Shell to compile `source` (a path inside the container) into `/build/<profile>/solution`,
        skipping the work entirely when nothing relevant changed.
@@ -90,7 +63,10 @@ def build_script(source: str, profile: CgBuildProfile) -> str:
        which churn constantly and would cause endless spurious rebuilds.
 
        The path belongs in the hash because g++ records it in the debug info, so it is part of what
-       the build *is*, not merely how it was made. Omitting it caused a real staleness bug: switching
+       the build *is*, not merely how it was made. The **toolchain identity** belongs there for the
+       same reason: the compiler and its flags now come from the image's activation script rather
+       than from this file, so switching images -- or editing `custom.dockerfile` -- must invalidate
+       artifacts compiled by the previous one. Omitting it caused a real staleness bug: switching
        which of two identical-content paths gets compiled (`data/solution.src` versus the
        `solution.<ext>` symlink pointing at it) left the previous binary in place, still carrying the
        old path in its DWARF, and breakpoints silently failed to bind.
@@ -102,16 +78,18 @@ def build_script(source: str, profile: CgBuildProfile) -> str:
        machine marker. They have to be separable because a clean compile with no warnings says
        nothing at all, which would otherwise be indistinguishable from the cached fast path."""
     flags = "$CG_CXXFLAGS_DEBUG" if profile == "debug" else "$CG_CXXFLAGS"
-    out = f"{BUILD_DIR}/{profile}"
+    out = f"{BUILD_DIR}/{LANG_SLUG}/{profile}"
     src = shlex.quote(source)
     return f"""
 set -u
+. {ENV_DIR}/{LANG_SLUG}.sh
 mkdir -p {out}
 if [ ! -f {src} ]; then
     echo "no solution source at {source}" >&2
     exit 2
 fi
-HASH="$(sha256sum {src} | cut -d' ' -f1)-$(printf '%s' "{flags}|{source}" | sha256sum | cut -d' ' -f1)"
+TOOLCHAIN="$CG_CXX|$CG_CXXFLAGS|$CG_CXXFLAGS_DEBUG|$CG_CXXLIBS"
+HASH="$(sha256sum {src} | cut -d' ' -f1)-$(printf '%s' "{flags}|{source}|$TOOLCHAIN" | sha256sum | cut -d' ' -f1)"
 if [ "$(cat {out}/ok 2>/dev/null)" = "$HASH" ]; then
     echo {CACHED_MARKER}
     exit 0
@@ -122,7 +100,7 @@ if [ "$(cat {out}/fail 2>/dev/null)" = "$HASH" ]; then
     exit 1
 fi
 echo {COMPILED_MARKER}
-if g++ {flags} -x c++ -o {out}/solution {src} >{out}/log 2>&1; then
+if "$CG_CXX" {flags} -x c++ -o {out}/solution {src} $CG_CXXLIBS >{out}/log 2>&1; then
     printf '%s' "$HASH" >{out}/ok
     rm -f {out}/fail
     cat {out}/log >&2
@@ -148,7 +126,7 @@ def run_script(timeout: float) -> str:
        `stdbuf -o0 -e0` because a C++ binary on a pipe is fully block-buffered, so a solution
        printing a few lines would emit nothing until exit--exactly the problem the Python3 plugin
        solves with `-u`/`PYTHONUNBUFFERED=1`. Without it `run_streaming` would stream nothing."""
-    binary = f"{BUILD_DIR}/run/solution"
+    binary = f"{BUILD_DIR}/{LANG_SLUG}/run/solution"
     return f"""
 set -u
 if [ ! -x {binary} ]; then
@@ -317,7 +295,7 @@ def _devcontainer_json(root: Path) -> str:
        an in-container variant."""
     content = {
             "name": f"CG {root.name} (C++)",
-            "image": latest_alias_for(LANG_SLUG),
+            "image": latest_alias_for(),
             "customizations": {"vscode": {"extensions": ["ms-vscode.cpptools"]}},
             "runArgs": list(_DEVCONTAINER_RUN_ARGS),
         }
@@ -371,8 +349,7 @@ class CgCppLanguage(CgLanguage):
     async def _toolchain(self, ctx: CgLanguageContext, *, timeout: float) -> CgToolchain:
         return await ensure_toolchain(
                 root=ctx.mount_root, meta_dir=ctx.meta_dir, toolchain_dir=ctx.toolchain_dir,
-                lang_slug=LANG_SLUG, template_version=TEMPLATE_VERSION,
-                template_body=TEMPLATE_BODY, timeout=timeout,
+                languages=ctx.toolchain_languages, image=ctx.toolchain_image, timeout=timeout,
             )
 
     async def build(
@@ -476,7 +453,7 @@ class CgCppLanguage(CgLanguage):
                 ok=True, output=build_result.output,
                 details={
                     "container": toolchain.container_name,
-                    "program": f"{BUILD_DIR}/debug/solution",
+                    "program": f"{BUILD_DIR}/{LANG_SLUG}/debug/solution",
                     "stdin": DEBUG_STDIN_CONTAINER_PATH,
                 },
             )
@@ -567,7 +544,7 @@ class CgCppLanguage(CgLanguage):
            root, so VS Code's real workspace wins over `find_workspace_root`'s heuristic. A mismatch
            is self-correcting: the mount is part of the container spec hash, so a differently-mounted
            container is recreated rather than reused."""
-        container = container_name_for(LANG_SLUG, request.workspace_root)
+        container = container_name_for(request.workspace_root)
         architecture = target_architecture()
         target = '--file "${file}" --workspace-root "${workspaceFolder}"'
 
@@ -578,7 +555,7 @@ class CgCppLanguage(CgLanguage):
                             "presentation": PRESENTATION,
                             "type": "cppdbg",
                             "request": "launch",
-                            "program": f"{BUILD_DIR}/debug/solution",
+                            "program": f"{BUILD_DIR}/{LANG_SLUG}/debug/solution",
                             "cwd": BUILD_DIR,
                             "MIMode": "gdb",
                             "miDebuggerPath": "/usr/bin/gdb",

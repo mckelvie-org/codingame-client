@@ -60,14 +60,29 @@ from ..credentials.cg_credentials import (
     validate_profile_name,
 )
 from ..language import (
+    BASE_IMAGE,
     DEFAULT_BUILD_TIMEOUT_SECONDS,
     DEFAULT_RUN_TIMEOUT_SECONDS,
+    DEFAULT_TOOLCHAIN_BUILD_TIMEOUT_SECONDS,
+    PREAMBLE,
     TOOLCHAIN_SUBDIR_NAME,
     CgBuildProfile,
     CgLanguageOperationNotSupportedError,
     CgVsCodeMergeError,
+    all_fragments,
+    build_image_content,
     clean_managed,
+    compose_dockerfile,
+    compose_with_base,
+    default_languages,
+    ensure_base_dockerfile,
+    ensure_image,
+    fragments_for_languages,
     get_language,
+    image_tag_for,
+    render_dockerfile,
+    resolve_language_slugs,
+    tag_image,
 )
 from ..puzzle_manager import (
     PUZZLE_IDENTITY_FILE_NAME,
@@ -397,6 +412,20 @@ class CgCli(CliBase):
            config.yaml exists. Passed into the managers so a language plugin that needs a toolchain
            finds the same one regardless of which working directory it's invoked from."""
         return resolve_config(self.args.config, allow_default=True).data_dir / TOOLCHAIN_SUBDIR_NAME
+
+    def resolve_toolchain_languages(self) -> list[str] | None:
+        """Which languages the toolchain image should carry, from settings, or `None` for every
+           language cg can containerize.
+
+           Passed alongside `resolve_toolchain_dir()` at each manager construction that can reach a
+           containerized build--the two travel together, and a site that opts into one wants the
+           other. See `CgSettings.toolchain_languages`."""
+        return self.resolve_default_settings().toolchain_languages
+
+    def resolve_toolchain_image(self) -> str | None:
+        """A prebuilt image tag to use instead of building one locally, from settings, or `None` to
+           build. See `CgSettings.toolchain_image`."""
+        return self.resolve_default_settings().toolchain_image
 
     @override
     async def ctx_exit(
@@ -1847,6 +1876,8 @@ class CgCli(CliBase):
                 manager = CgPuzzleManager(
                         working_dir.root, cast(CgClient, None),
                         toolchain_dir=self.resolve_toolchain_dir(),
+                        toolchain_languages=self.resolve_toolchain_languages(),
+                        toolchain_image=self.resolve_toolchain_image(),
                         mount_root=self.args.workspace_root)
                 indices = [manager.resolve_debug_test_index()] if selected_only else None
                 for result in await manager.play_local(
@@ -1861,6 +1892,8 @@ class CgCli(CliBase):
                 contribution = CgContributionManager(
                         working_dir.root, cast(CgClient, None),
                         toolchain_dir=self.resolve_toolchain_dir(),
+                        toolchain_languages=self.resolve_toolchain_languages(),
+                        toolchain_image=self.resolve_toolchain_image(),
                         mount_root=self.args.workspace_root)
                 language = contribution.load().data.solution_language
                 if language is None:
@@ -2351,7 +2384,10 @@ class CgCli(CliBase):
             build_timeout: float = self.args.build_timeout
             resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
             manager = CgContributionManager(
-                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+                    resolved_dir, cast(CgClient, None),
+                    toolchain_dir=self.resolve_toolchain_dir(),
+                    toolchain_languages=self.resolve_toolchain_languages(),
+                    toolchain_image=self.resolve_toolchain_image())
             solution_language = manager.load().data.solution_language
             if solution_language is None:
                 raise CliError(f"{manager.contribution_data_file} has no solutionLanguage set.")
@@ -2383,7 +2419,10 @@ class CgCli(CliBase):
             contribution_dir: Path | None = self.args.contribution_dir
             resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
             manager = CgContributionManager(
-                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+                    resolved_dir, cast(CgClient, None),
+                    toolchain_dir=self.resolve_toolchain_dir(),
+                    toolchain_languages=self.resolve_toolchain_languages(),
+                    toolchain_image=self.resolve_toolchain_image())
             solution_language = manager.load().data.solution_language
             if solution_language is not None:
                 await manager.stop_debug_session(solution_language)
@@ -2401,7 +2440,10 @@ class CgCli(CliBase):
             build_timeout: float = self.args.build_timeout
             resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
             manager = CgContributionManager(
-                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+                    resolved_dir, cast(CgClient, None),
+                    toolchain_dir=self.resolve_toolchain_dir(),
+                    toolchain_languages=self.resolve_toolchain_languages(),
+                    toolchain_image=self.resolve_toolchain_image())
             view = manager.load()
             solution_language = view.data.solution_language
             if solution_language is None:
@@ -2440,7 +2482,10 @@ class CgCli(CliBase):
             resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
             # No client: there is no per-language code to fetch, unlike `cg puzzle set-language`.
             manager = CgContributionManager(
-                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+                    resolved_dir, cast(CgClient, None),
+                    toolchain_dir=self.resolve_toolchain_dir(),
+                    toolchain_languages=self.resolve_toolchain_languages(),
+                    toolchain_image=self.resolve_toolchain_image())
             result = await manager.set_language(language, force=force)
             self.eprint(f"{resolved_dir}: {result.previous_language!r} -> {result.language!r}")
             if result.wrote_stub:
@@ -2834,7 +2879,10 @@ class CgCli(CliBase):
             build_timeout: float = self.args.build_timeout
             resolved_dir = resolve_contribution_dir(contribution_dir, settings=self.resolve_default_settings())
             manager = CgContributionManager(
-                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+                    resolved_dir, cast(CgClient, None),
+                    toolchain_dir=self.resolve_toolchain_dir(),
+                    toolchain_languages=self.resolve_toolchain_languages(),
+                    toolchain_image=self.resolve_toolchain_image())
 
             view = manager.load()
             solution_language = view.data.solution_language
@@ -3405,7 +3453,10 @@ class CgCli(CliBase):
             build_timeout: float = self.args.build_timeout
             resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
             manager = CgPuzzleManager(
-                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+                    resolved_dir, cast(CgClient, None),
+                    toolchain_dir=self.resolve_toolchain_dir(),
+                    toolchain_languages=self.resolve_toolchain_languages(),
+                    toolchain_image=self.resolve_toolchain_image())
             stderr_console = Console(stderr=True, highlight=False)
             # Resolved and looped here, rather than delegating the whole batch to
             # manager.play_local(), so each result is displayed as soon as it's available--see
@@ -3621,7 +3672,10 @@ class CgCli(CliBase):
             build_timeout: float = self.args.build_timeout
             resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
             manager = CgPuzzleManager(
-                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+                    resolved_dir, cast(CgClient, None),
+                    toolchain_dir=self.resolve_toolchain_dir(),
+                    toolchain_languages=self.resolve_toolchain_languages(),
+                    toolchain_image=self.resolve_toolchain_image())
             try:
                 session = await manager.start_debug_session(test_index, timeout=build_timeout)
             except CgLanguageOperationNotSupportedError as e:
@@ -3647,7 +3701,10 @@ class CgCli(CliBase):
             puzzle_dir: Path | None = self.args.puzzle_dir
             resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
             manager = CgPuzzleManager(
-                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+                    resolved_dir, cast(CgClient, None),
+                    toolchain_dir=self.resolve_toolchain_dir(),
+                    toolchain_languages=self.resolve_toolchain_languages(),
+                    toolchain_image=self.resolve_toolchain_image())
             await manager.stop_debug_session()
         return handler
 
@@ -3663,7 +3720,10 @@ class CgCli(CliBase):
             build_timeout: float = self.args.build_timeout
             resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
             manager = CgPuzzleManager(
-                    resolved_dir, cast(CgClient, None), toolchain_dir=self.resolve_toolchain_dir())
+                    resolved_dir, cast(CgClient, None),
+                    toolchain_dir=self.resolve_toolchain_dir(),
+                    toolchain_languages=self.resolve_toolchain_languages(),
+                    toolchain_image=self.resolve_toolchain_image())
             result = await manager.build_solution(
                     profile=cast(CgBuildProfile, profile), timeout=build_timeout)
             if result.output:
@@ -3708,6 +3768,154 @@ class CgCli(CliBase):
                 )
         return handler
 
+    @cli_command("Inspect and build the multi-language toolchain image that containerized languages "
+                 "run in. One image serves every language, composed from dependency-ordered "
+                 "fragments--so building it for two languages that share a toolchain (C and C++, or "
+                 "JavaScript and TypeScript) installs that toolchain once.")
+    async def cmd_docker__toolchain(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        return None
+
+    def _requested_toolchain_languages(self) -> list[str] | None:
+        """The language set for a `cg docker toolchain` command: --languages, else the configured
+           `toolchainLanguages`, else None meaning "everything cg supports"."""
+        languages: list[str] | None = self.args.languages
+        if languages is not None:
+            # Accept both `--languages C++ Python3` and `--languages "C++,Python3"`, since a comma
+            # list is what a settings file or CI variable naturally holds.
+            flattened = [part.strip() for item in languages for part in item.split(",")]
+            return [part for part in flattened if part]
+        return self.resolve_default_settings().toolchain_languages
+
+    def _add_languages_argument(self, cmd: CliCommand[Self]) -> None:
+        cmd.get_parser().add_argument(
+                "--languages", "-l", nargs="+", metavar="LANGUAGE",
+                help="CodinGame language names to include, e.g. \"C++\" Python3 (comma-separated "
+                     "also accepted). Defaults to the configured toolchainLanguages, or to every "
+                     "language cg can containerize. The full set is ~1.9GB--far less than the sum "
+                     "of its parts, because the large toolchains share one Debian base--so trimming "
+                     "it saves less than you would expect.")
+
+    @cli_command("List the toolchain fragments cg knows about: the languages that can go into an "
+                 "image, and the shared subsystems they install onto. A language usually installs "
+                 "nothing itself and just depends on a subsystem, which is what lets C and C++, or "
+                 "Java and Scala, coexist without either owning the global environment.")
+    async def cmd_docker__toolchain__list(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            fragments = all_fragments()
+            languages = default_languages()
+            by_language = {name: resolve_language_slugs([name])[0] for name in languages}
+            if self.args.json:
+                print(json.dumps({
+                    "languages": dict(sorted(by_language.items())),
+                    "fragments": {
+                        slug: {"version": f.version, "dependsOn": list(f.depends_on),
+                               "installs": bool(f.dockerfile), "activates": bool(f.env_script)}
+                        for slug, f in sorted(fragments.items())
+                    },
+                }, indent=2, sort_keys=True))
+                return
+            language_slugs = set(by_language.values())
+            print("Languages (each may be named to --languages):")
+            for name, slug in sorted(by_language.items()):
+                depends = ", ".join(fragments[slug].depends_on) or "-"
+                print(f"  {name:<14} fragment {slug:<12} depends on {depends}")
+            print("\nSubsystems (installed on demand, never named directly):")
+            for slug, fragment in sorted(fragments.items()):
+                if slug in language_slugs:
+                    continue
+                depends = ", ".join(fragment.depends_on) or "-"
+                print(f"  {slug:<14} v{fragment.version:<11} depends on {depends}")
+        return handler
+
+    @cli_command("Print the Dockerfile cg would compose for a set of languages, without building "
+                 "anything. Fragments appear in dependency order, deterministically, so a subset's "
+                 "output is a prefix of a superset's--which is what lets their images share layers.")
+    async def cmd_docker__toolchain__show(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            languages = self._requested_toolchain_languages()
+            rendered = render_dockerfile(
+                    fragments_for_languages(
+                            languages if languages is not None else default_languages()),
+                    base_image=BASE_IMAGE, preamble=PREAMBLE,
+                )
+            # The tag has to cover what would actually be built--cg's base *plus* the user's
+            # custom.dockerfile--or it names an image that will never exist. Composed in memory, so
+            # asking a read-only question never overwrites their base.dockerfile.
+            composed = compose_with_base(self.resolve_toolchain_dir(), rendered)
+            print(composed if self.args.composed else rendered, end="")
+            self.eprint(f"image tag would be {image_tag_for(composed)}")
+        self._add_languages_argument(cmd)
+        cmd.get_parser().add_argument(
+                "--composed", action="store_true",
+                help="Print your custom.dockerfile appended too, i.e. exactly what would be piped "
+                     "to `docker build`. The reported image tag already covers it either way.")
+        return handler
+
+    @cli_command("Build the toolchain image ahead of time, instead of letting the first run build "
+                 "it. With no options this produces exactly the image `cg puzzle play` would build, "
+                 "under the same content-addressed tag, so a later run finds it already there.")
+    async def cmd_docker__toolchain__build(self, cmd: CliCommand[Self]) -> OptCmdFunc:
+        async def handler() -> None:
+            platforms: list[str] = self.args.platform or []
+            push: bool = self.args.push
+            tag: str | None = self.args.tag
+            timeout: float = self.args.build_timeout
+
+            languages = self._requested_toolchain_languages()
+            rendered = render_dockerfile(
+                    fragments_for_languages(
+                            languages if languages is not None else default_languages()),
+                    base_image=BASE_IMAGE, preamble=PREAMBLE,
+                )
+            directory = self.resolve_toolchain_dir()
+            _, warnings = ensure_base_dockerfile(directory, rendered)
+            for warning in warnings:
+                self.eprint(f"warning: {warning}")
+
+            content = compose_dockerfile(directory)
+            content_tag = image_tag_for(content)
+            if push and tag is None:
+                raise CliError(
+                        "--push needs --tag: a content-addressed tag like "
+                        f"{content_tag!r} has no registry in it, so there is nowhere to push to. "
+                        "Pass e.g. --tag docker.io/you/cg-toolchain:v1.")
+
+            if platforms or push:
+                await build_image_content(
+                        content, tag=tag or content_tag, platforms=platforms, push=push,
+                        timeout=timeout)
+                self.eprint(f"{'pushed' if push else 'built'} {tag or content_tag}"
+                            f"{' for ' + ', '.join(platforms) if platforms else ''}")
+                return
+
+            # The ordinary path deliberately goes through ensure_image, the same function the run
+            # path uses, so a prebuild and a first run cannot disagree about what to build or what
+            # to call it. It also re-points the :latest alias.
+            built = await ensure_image(directory, timeout=timeout)
+            if tag is not None:
+                await tag_image(built, tag)
+            self.eprint(f"built {built}" + (f", tagged {tag}" if tag else ""))
+        self._add_languages_argument(cmd)
+        p = cmd.get_parser()
+        p.add_argument("--tag", "-t", metavar="TAG",
+                       help="Additional tag for the built image. Required with --push, which needs "
+                            "a registry-qualified name. Without it the image gets only its "
+                            "content-addressed tag, which is what the run path looks for.")
+        p.add_argument("--platform", action="append", metavar="PLATFORM",
+                       help="Target platform, e.g. linux/amd64 or linux/arm64. Repeatable. Needs "
+                            "`docker buildx`. More than one requires --push: a multi-platform image "
+                            "is a manifest list, which the local daemon cannot store. Default: this "
+                            "machine's architecture.")
+        p.add_argument("--push", action="store_true",
+                       help="Push to a registry rather than loading into the local Docker daemon. "
+                            "The only way to produce a multi-architecture image.")
+        p.add_argument("--build-timeout", type=float, default=DEFAULT_TOOLCHAIN_BUILD_TIMEOUT_SECONDS,
+                       metavar="SECONDS",
+                       help="Wall-clock timeout. Generous by default: a cold all-languages build "
+                            "downloads a JDK, a .NET SDK and a Node tarball. Default "
+                            f"{DEFAULT_TOOLCHAIN_BUILD_TIMEOUT_SECONDS}.")
+        return handler
+
     @cli_command("Switch this puzzle to a different language, restoring your own most recent code "
                  "for it. CodinGame keeps your latest source per language, so anything you'd "
                  "previously written in the target language comes back; a language you've never "
@@ -3722,7 +3930,10 @@ class CgCli(CliBase):
             force: bool = self.args.force
             resolved_dir = resolve_puzzle_dir(puzzle_dir, settings=self.resolve_default_settings())
             client = await self.get_client()
-            manager = CgPuzzleManager(resolved_dir, client, toolchain_dir=self.resolve_toolchain_dir())
+            manager = CgPuzzleManager(resolved_dir, client,
+            toolchain_dir=self.resolve_toolchain_dir(),
+            toolchain_languages=self.resolve_toolchain_languages(),
+            toolchain_image=self.resolve_toolchain_image())
             result = await manager.set_language(language, force=force)
             self.eprint(
                     f"{resolved_dir}: {result.previous_language!r} -> {result.language!r}")

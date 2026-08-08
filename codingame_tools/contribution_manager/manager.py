@@ -804,6 +804,8 @@ class CgContributionManager:
                 *,
                 toolchain_dir: Path | None = None,
                 mount_root: Path | None = None,
+                toolchain_languages: list[str] | None = None,
+                toolchain_image: str | None = None,
             ) -> None:
         # Always resolved to an absolute path: git_repo.py's subprocess calls set `cwd` to
         # `git_dir`/`work_tree` themselves (see CgGitRepo._run), so a relative `contribution_dir`
@@ -815,6 +817,8 @@ class CgContributionManager:
         self.contribution_dir = Path(contribution_dir).resolve()
         self.client = client
         self.mount_root = Path(mount_root).resolve() if mount_root is not None else None
+        self.toolchain_languages = toolchain_languages
+        self.toolchain_image = toolchain_image
         self.toolchain_dir = (
                 Path(toolchain_dir) if toolchain_dir is not None
                 else default_global_data_dir() / TOOLCHAIN_SUBDIR_NAME
@@ -2130,6 +2134,8 @@ class CgContributionManager:
                 meta_dir=self.meta_dir,
                 toolchain_dir=self.toolchain_dir,
                 mount_root=mount_root or self.mount_root or find_workspace_root(self.contribution_dir),
+                toolchain_languages=self.toolchain_languages,
+                toolchain_image=self.toolchain_image,
             )
 
     @property

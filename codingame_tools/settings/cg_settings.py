@@ -256,6 +256,31 @@ class CgSettings:
            active. See `current_contribution_dir` for why this doesn't consult `CgConfig`."""
         return resolve_settings_dir(self.raw_data.current_puzzle_dir, self.settings_file.parent)
 
+    @property
+    def toolchain_languages(self) -> list[str] | None:
+        """Which languages the container toolchain image should carry, or `None` for every language
+           cg can containerize. Resolution order: this file's own `toolchainLanguages`, then
+           `CgConfig.toolchain_languages`.
+
+           A list rather than a set, and order-insensitive in effect: the composer sorts fragments
+           into dependency order deterministically, so two spellings of the same set produce the
+           same Dockerfile and therefore the same image tag."""
+        if self.raw_data.toolchain_languages is not None:
+            return self.raw_data.toolchain_languages
+        return self.config.toolchain_languages
+
+    @property
+    def toolchain_image(self) -> str | None:
+        """A prebuilt toolchain image tag to use instead of composing and building one locally, or
+           `None` to build. Resolution order: this file's own `toolchainImage`, then
+           `CgConfig.toolchain_image`.
+
+           Set this to a published image and cg skips the Dockerfile entirely--a pull rather than a
+           multi-gigabyte local build, which is the point of publishing one."""
+        if self.raw_data.toolchain_image is not None:
+            return self.raw_data.toolchain_image
+        return self.config.toolchain_image
+
     def save(self) -> None:
         """Write `raw_data` back to `settings_file`."""
         write_settings(self.raw_data, self.settings_file)
