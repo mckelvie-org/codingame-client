@@ -2,6 +2,63 @@
 
 ## {{UNRELEASED}}
 
+- **One container image now carries every language, composed from dependency-ordered fragments.**
+  Previously each language had its own image (`cg-cpp:<hash>`, `FROM gcc:14`) and its own container,
+  so a workspace with two languages ran two containers, each bind-mounting the whole workspace. Now
+  there is one `cg-toolchain:<hash>` and one container per workspace.
+
+  The per-language design failed three ways. Two images can't both be `FROM`, so they could never
+  compose. Putting the compiler version in an image tag hid it: we were on **gcc 14** while
+  CodinGame runs **11.2.0**, which drifted two major releases without anything failing — C++20
+  constructs compiled locally and were rejected on submission, the exact failure a pinned toolchain
+  exists to prevent. And some languages need two conflicting toolchains at once: CodinGame runs Java
+  on JDK 21.0.4 but Clojure, Groovy and Scala on JVM 1.8, keeping four JDKs installed side by side.
+
+  So a fragment installs its toolchain under its own prefix and ships an activation script at
+  `/opt/cg/env.d/<slug>.sh`; nothing goes on the global `PATH`. A *subsystem* fragment installs a
+  toolchain (`gcc11`, `node20`, `jdk21`); a *language* fragment usually installs nothing and only
+  declares a dependency plus flags, which is what lets C and C++, or JavaScript and TypeScript,
+  share one install. Verified on the built image: `java`, `dotnet`, `node`, `npm` and `tsc` are
+  absent from `PATH` entirely. This is the same shape CodinGame uses, arrived at independently.
+
+  Fragments sort topologically with slug tiebreaks, so ordering is deterministic and a subset's
+  Dockerfile is a literal *prefix* of a superset's — `C++` is 25 body lines, `C++`+`Python3` is 40
+  with the same first 25 — which is what makes their images share layers. See
+  [doc/design/toolchain-images.md](doc/design/toolchain-images.md).
+
+- **C++ now compiles at `-O0` and links `-lm -lpthread -ldl -lcrypt`, matching CodinGame.** The
+  build you *test* with used `-O2` (debug builds were already `-O0`), and the asymmetry ran the
+  dangerous way: a solution fast enough locally could exceed the time limit on submission, having
+  just told you it passed. There is deliberately no setting to change it — puzzles are designed to
+  be solvable in every supported language, so limits are set by the slowest and C++ has orders of
+  magnitude of headroom. It also means the build you time and the build you step through are the
+  same one.
+
+  This and the versions in every fragment were **measured** by running probe solutions on CodinGame
+  rather than taken from their published table, which turned out to be wrong about every library
+  version and silent on the optimization level. Their documented NumPy 1.20.2 is not merely stale
+  but impossible: it publishes no wheels for Python 3.11. See
+  [doc/design/codingame-runtime.md](doc/design/codingame-runtime.md).
+
+- **New: `cg docker toolchain list`, `show` and `build`.** `list` shows which languages can go into
+  an image and the subsystems beneath them; `show` prints the composed Dockerfile and its image tag
+  without building or writing anything; `build` builds ahead of time.
+
+  With no options `build` produces exactly the image a first run would build, under the same
+  content-addressed tag, so the run finds it already there — it goes through the same code path
+  rather than a parallel one that could disagree.
+
+  `--platform` cross-builds via buildx. More than one platform requires `--push`: a multi-platform
+  image is a manifest list, which `--load` cannot put in the local daemon. That's checked before
+  Docker is invoked, because buildx's own failure for it is obscure and the fix isn't guessable.
+
+- **New settings: `toolchainLanguages` and `toolchainImage`.** The default image carries all eight
+  supported languages at about 1.9 GB — far less than the sum of its parts, since the large
+  toolchains share one Debian base, which is why the default is everything rather than a curated
+  subset. `toolchainLanguages: ["C++"]` narrows it to roughly 400 MB; `toolchainImage` skips
+  building entirely in favour of a prebuilt tag. Both follow the usual global-config → project-config
+  → `settings.json` merge.
+
 - **`launch.json` never needs regenerating again.** The generated VS Code configuration used to be
   per working directory, so it went stale constantly: a `pickString` of every test case on disk
   (wrong the moment tests changed), an absolute `--puzzle-dir`, a container named after the
@@ -74,10 +131,13 @@
   with gdb's own redirection. The program's `stderr` is merged into its `stdout` for the same
   reason the rest of this changed: the adapter reads only the debugger's stdout, so an unmerged
   `stderr` is dropped -- `cerr` diagnostics, precisely what you use while debugging, went missing
-  while `cout` arrived. Merging also restores ordering between the two. This is the arrangement VS Code's Dev Containers support uses, which
-  also has no gdbserver. Gone with it: the background task and its readiness matcher, the
-  `postDebugTask`, the detached-server plumbing, and the two-terminal split. `cg debug start` is now
-  a plain prepare-and-exit `preLaunchTask` that builds and stages the input.
+  while `cout` arrived. Merging also restores ordering between the two. This is the arrangement VS
+  Code's Dev Containers support uses, which also has no gdbserver.
+
+  Gone with it: the `postDebugTask`, the detached-server plumbing (`setsid`, and the
+  `/build/gdbserver.log` your program's output used to disappear into), and the separate terminal
+  the debuggee ran in. `cg debug start` is now a plain prepare-and-exit `preLaunchTask` that builds
+  and stages the input.
 
 - **C++ debug builds compile `data/solution.src`, not the `solution.<ext>` symlink**, and the launch
   configuration carries one `sourceFileMap` entry that shows you the symlink anyway.
@@ -97,36 +157,17 @@
   paths (the real file and the symlink pointing at it) hashed the same, left the old binary in place,
   and breakpoints silently failed to bind against its stale debug info.
 
-- **A debugged C++ program's output now appears in a terminal, live.** It previously went into
-  `/build/gdbserver.log` *inside the container*, where nothing surfaced it — so a debug session
-  looked like nothing had happened at all.
+- **Containerized languages mount the workspace at its own path.** `/home/me/work` on the host is
+  `/home/me/work` inside the container, so the paths the compiler records in the debug info are
+  already paths the host debugger can open — verified against real DWARF output. Previously the
+  working directory was mounted at `/src` and the launch configuration carried a `sourceFileMap` to
+  undo that, which only worked for the one directory it named. That mapping is gone; the one that
+  remains exists for an unrelated reason, described above.
 
-  The cause was self-inflicted. `cg debug start` was a `preLaunchTask`, which must exit before the
-  debug session begins, so `gdbserver` had to be detached with `setsid` — and once detached, its
-  stdio had nowhere to go but a file. Declaring the task `isBackground` instead inverts that: VS Code
-  starts it, waits for `gdbserver`'s own `Listening on port`, attaches the debugger, and leaves the
-  task running for the whole session. `gdbserver` now stays in the foreground, `cg debug start`
-  `exec`s it so it inherits that terminal, and the debuggee inherits it in turn. Program exits →
-  `gdbserver` exits → the task ends with its status.
-
-  Output is also unbuffered now: `gdbserver` runs under `stdbuf -o0 -e0`, which propagates via
-  `LD_PRELOAD` to the debuggee, so `std::cout` isn't block-buffered when stdout isn't a terminal.
-  Without it nothing appeared until the program exited, which is useless while stepping.
-
-  Note the Debug Console still won't show program output, and can't: `gdbserver` does not forward
-  the debuggee's stdout/stderr to `gdb` — verified directly, with `gdbserver`'s own stdout on a live
-  stream rather than a file. The task terminal is the program's console.
-
-- **Containerized languages mount the workspace at its own path, and `sourceFileMap` is gone.**
-  `/home/me/work` on the host is `/home/me/work` inside the container, so the paths the compiler
-  records in the debug info are already paths the host debugger can open — verified against real
-  DWARF output. Previously the working directory was mounted at `/src` and the launch configuration
-  carried a `sourceFileMap` to undo that, which only worked for the one directory it named.
-
-  A consequence worth knowing: containers are now per (workspace × language) rather than per
-  (working directory × language), which is what lets a static configuration name one. A workspace
-  pays for one image and one container instead of one per puzzle. Containers from the old naming are
-  orphaned rather than swept — `cg docker clean` removes them.
+  A consequence worth knowing: containers are now per *workspace* rather than per (working directory
+  × language), which is what lets a static configuration name one. A workspace pays for one
+  container instead of one per puzzle per language. Containers from the old naming are orphaned
+  rather than swept — `cg docker clean` removes them.
 
   Assumes host paths are valid Linux paths, which holds on macOS and Linux.
 

@@ -18,13 +18,18 @@
    is confirmed to support today has its own real module under `languages/`, even one that only
    implements `extension` (see `languages/java.py`, `languages/cpp.py`, etc.).
 
-   **Known gap, deliberately out of scope**: VS Code debugger integration
-   (`codingame_tools.test_runner.debug_stdin`'s `runpy`-based in-process execution, and this
-   repo's own hand-written `.vscode/launch.json`) remains Python-specific. Unlike local execution
-   (`CgLanguage.run`/`run_streaming`, a subprocess--trivially generic), a debugger launch is a
-   fundamentally different mechanism per language (a non-Python language would need its own
-   debugger wiring entirely, not just a different command), so it isn't folded into this
-   abstraction.
+   **Debugging is per-language, by necessity.** A debugger launch is a fundamentally different
+   mechanism per language, not just a different command: Python runs in-process under debugpy
+   (`codingame_tools.test_runner.debug_stdin`), while C++ runs gdb inside a container and is driven
+   over a pipe by the cpptools adapter (`languages/cpp.py`). So `CgLanguage.start_debug_session`
+   and `CgLanguage.vscode_provisioning` are per-language rather than shared, and a language gains
+   debugging by implementing them--see `codingame_tools.language.vscode` for the generated
+   launch-configuration contract that keeps them from colliding.
+
+   **Containerized languages share one image.** Anything needing a toolchain cg can't assume is
+   installed runs in a container built from `codingame_tools.language.toolchain`'s composable
+   fragments--one image for every language, so a workspace runs one container rather than one per
+   language. See `_docker.py`.
 """
 
 from __future__ import annotations

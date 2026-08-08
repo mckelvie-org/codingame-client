@@ -82,9 +82,11 @@ positional arguments:
                         (data/solution.src) is ever editable, so there's no git repo involved--see
                         codingame_tools.puzzle_manager.manager's module docstring. Currently only
                         classic PUZZLE_INOUT puzzles are supported.
-    docker              Manage the Docker containers and images cg builds for compiled languages
-                        (currently C++). Nothing here holds anything you authored--see `cg docker
-                        clean`.
+    docker              Manage the Docker containers and images cg builds for languages that run
+                        in a container. One image carries every language cg can containerize (see
+                        `cg docker toolchain list`); C++ is currently the one with a container-
+                        backed build, run and debug path. Nothing here holds anything you authored
+                        --see `cg docker clean`.
     config              Configuration commands.
     settings            Settings commands (app-managed persistent state in settings.json, as
                         opposed to the user-edited config.yaml--see `cg config`).

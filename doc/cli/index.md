@@ -8,7 +8,7 @@ almost certainly want one of the two workflow guides.
   merge when the server moves under you.
 - **[Debugging](debugging.md)** — VS Code integration, breakpoints in your solution, containerised
   toolchains.
-- **[Command reference](reference/index.md)** — 148 commands, generated from the parser.
+- **[Command reference](reference/index.md)** — 162 commands, generated from the parser.
 
 ## First run
 
@@ -28,7 +28,7 @@ experiment.
 | [`cg puzzle`](reference/puzzle.md) | Solve an existing CodinGame puzzle locally. |
 | [`cg contribution`](reference/contribution.md) | Author and maintain your own contributions. |
 | [`cg config`](reference/config.md), [`cg settings`](reference/settings.md) | Configuration you edit, and state the app remembers. |
-| [`cg docker`](reference/docker.md) | Manage the containers and images used for compiled languages. |
+| [`cg docker`](reference/docker.md) | Manage the container toolchain image and the containers built from it. |
 | [`cg api`](reference/api/index.md) | Thin wrappers over CodinGame's own service endpoints, one subcommand per method. |
 | [`cg api-helper`](reference/api-helper.md) | The same endpoints with retries and polling layered on. |
 | [`cg raw-api`](reference/raw-api.md) | Send a raw JSON request to any endpoint. |

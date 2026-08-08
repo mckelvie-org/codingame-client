@@ -3742,8 +3742,10 @@ class CgCli(CliBase):
                             f"and build a container image. Default {DEFAULT_BUILD_TIMEOUT_SECONDS}.")
         return handler
 
-    @cli_command("Manage the Docker containers and images cg builds for compiled languages "
-                 "(currently C++). Nothing here holds anything you authored--see `cg docker clean`.")
+    @cli_command("Manage the Docker containers and images cg builds for languages that run in a "
+                 "container. One image carries every language cg can containerize (see `cg docker "
+                 "toolchain list`); C++ is currently the one with a container-backed build, run and "
+                 "debug path. Nothing here holds anything you authored--see `cg docker clean`.")
     async def cmd_docker(self, cmd: CliCommand[Self]) -> OptCmdFunc:
         return None
 

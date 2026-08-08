@@ -146,19 +146,44 @@ cg debug start --file puzzle/solution.cpp
 
 ### First run is slow
 
-Building the image the first time takes minutes. Afterwards it's cached and effectively instant.
+One image carries **every** language `cg` can containerize — about 1.9 GB, which is far less than
+the sum of its parts because the large toolchains (JDK, .NET, Node) share one Debian base. Building
+it the first time takes minutes; afterwards it's cached and effectively instant.
+
 To get it over with before you start:
 
 ```bash
-cg puzzle build
+cg docker toolchain build
 ```
+
+That produces exactly the image a first run would build, under the same content-addressed tag, so
+the run finds it already there. See [what CodinGame actually runs](../design/codingame-runtime.md)
+for how the pinned versions were chosen, and [composable toolchain
+images](../design/toolchain-images.md) for why it's one image rather than one per language.
+
+### Trimming it
+
+If you only ever use one or two languages, name them:
+
+```bash
+cg docker toolchain list                    # what's available
+cg docker toolchain show --languages C++    # what it would build, and the tag
+cg docker toolchain build --languages C++   # ~400 MB instead of ~1.9 GB
+```
+
+To make that the default, set `toolchainLanguages` in your settings; to skip building altogether and
+pull a prebuilt image, set `toolchainImage`. Both also work per project.
 
 ### Tweaking the toolchain
 
 The image is defined by a Dockerfile in a shared per-user location, split in two: a `cg`-owned base
-that's regenerated when the tool updates, and a file of your own that's appended and never touched.
-Put extra packages in the second one. Because it's shared, tweaking a language once applies to every
-puzzle and contribution using it.
+that's regenerated when the tool updates, and a `custom.dockerfile` of your own that's appended and
+never touched. Put extra packages in the second one. Because it's shared, tweaking it once applies
+to every puzzle and contribution.
+
+Anything you add there changes the image tag, so the image rebuilds by itself — there's nothing to
+remember to invalidate. `cg docker toolchain show --composed` prints exactly what would be built,
+your additions included.
 
 ### Cleaning up
 

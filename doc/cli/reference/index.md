@@ -31,7 +31,7 @@ Every `cg` command, generated from the parser so it cannot drift from the tool. 
 | [`cg api vote`](api/vote.md) | 2 |
 | [`cg config`](config.md) | 4 |
 | [`cg contribution`](contribution.md) | 31 |
-| [`cg docker`](docker.md) | 2 |
+| [`cg docker`](docker.md) | 6 |
 | [`cg puzzle`](puzzle.md) | 20 |
 | [`cg raw-api`](raw-api.md) | 2 |
 | [`cg settings`](settings.md) | 10 |
